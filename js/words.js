@@ -166,7 +166,26 @@
       desc: '原子を押し縮めてくっつける「核融合」は、太陽が輝くしくみ。小さな太陽を生み、落とす。', hint: '押し縮めて、くっつけて、輝かせて、広げる（4語）' },
     { id: 'erase',     seq: ['reinforcement', 'compression', 'vacuum', 'regression'], kanji: '消滅領域', kana: 'イレイズ・スフィア', elem: 'vacuum', cost: 85,
       desc: '強めた力で空間を押し縮めて真空にし、無へと還す。少し離れた場所に透明な球体を生み、その内部にあるものを、的も地形も地面も跡形なく消し去る。', hint: '強めて、押し縮め、空っぽにして、無へ還す（4語）' },
+    // ---- 第24版で追加。pvp: 対戦で相手プレイヤーに当たったときのダメージの倍率 ----
+    { id: 'railgun',   seq: ['magnetism', 'acceleration', 'discharge'], kanji: '電磁加速砲', kana: 'レールガン', elem: 'magnet', cost: 60, pvp: 0.55,
+      desc: '電気を流したレールの間では、磁界の力（ローレンツ力）で弾がどこまでも速くなる。磁場のリングで力をためて、壁も的もすべてつらぬく超高速の弾を一直線に撃ち出す。', hint: '大砲が、いつか火薬を使わなくなる日（3語）' },
+    { id: 'quake',     seq: ['vibration', 'resonance'], kanji: '大地震', kana: 'アースクエイク', elem: 'earth', cost: 65, pvp: 0.6,
+      desc: '揺れの周期が建物や地面の周期とそろうと、揺れはどんどん大きくなる（共振）。自分のまわり 25m の大地を3秒間揺らし、地面にいる的をまとめて打ちのめし、壁や岩も崩す。宙に浮いている的と、跳んでいる人には当たらない。', hint: '大地が、ひとつの歌を口ずさむ（2語）' },
+    { id: 'yggdrasil', seq: ['luminescence', 'synthesis'], kanji: '世界樹', kana: 'ユグドラシル', elem: 'light', cost: 70, pvp: 0.6,
+      desc: '植物は、光を受けて水と二酸化炭素から養分をつくる（光合成）。狙った場所に高さ 20m の光る大樹を生やす。大樹は 20 秒のあいだ、まわり 12m の的をつるで打ち、近くにいる自分の HP（練習場では MP）を少しずつ回復する。', hint: '葉は、日だまりの中で食事をつくる（2語）' },
+    { id: 'titan',     seq: ['bonding', 'synthesis', 'reinforcement'], kanji: '巨神像', kana: 'タイタン', elem: 'earth', cost: 80, pvp: 0.6,
+      desc: 'つなぎ合わせ、新しく生み出し、鍛え上げる。見上げるほど大きな鎧の巨神を 25 秒呼び出す。巨神は両腕で大地をたたき、まわりの敵をまとめてなぎ倒す。ふつうの召喚獣とは別に、1体だけ呼べる。', hint: '神々より先に、世界を治めた者たち（3語）' },
+    { id: 'phoenix',   seq: ['combustion', 'regeneration'], kanji: '不死鳥', kana: 'フェニックス', elem: 'fire', cost: 60, pvp: 0.8,
+      desc: '山火事のあとの灰の中から、森は何度でもよみがえる。炎の鳥が前へ飛び立ち、大きく旋回して戻ってくる。通り道の的を焼き払い、戻ってきたときに自分の HP（練習場では MP）を回復する。', hint: '灰の中から、何度でも（2語）' },
+    { id: 'dilation',  seq: ['acceleration', 'gravity', 'regression'], kanji: '時間遅延', kana: 'タイム・ディレーション', elem: 'time', cost: 65,
+      desc: '速く動くものや、強い重力のそばでは、時間がゆっくり進む（相対性理論）。狙った場所に半径 10m の時の球を 8 秒張る。球の中では、自分以外の的・召喚獣・弾が 1/5 の速さになり、相手は動きも魔法の待ち時間も遅くなる。', hint: '旅から帰った双子の、片方だけが若い（3語）' },
+    { id: 'meissner',  seq: ['solidification', 'shielding', 'magnetism'], kanji: '完全反磁性', kana: 'マイスナー・フィールド', elem: 'ice', cost: 55,
+      desc: 'とても冷やした超伝導体は、磁界を完全に押し出して、磁石の上に浮かぶ（マイスナー効果）。15 秒のあいだ自分が少し浮かび、地面からの攻撃を受けなくなる。まわり 3m に入った相手の弾ははね返し、近づいた敵を押し返す。光線は半分だけ防ぐ。', hint: '浮かぶ列車の、もうひとつのしくみ（3語）' },
+    { id: 'philosopher', seq: ['reduction', 'synthesis', 'crystallization'], kanji: '賢者の石', kana: 'フィロソファーズ・ストーン', elem: 'metal', cost: 75, pvp: 0.5,
+      desc: '昔の錬金術師たちは、ただの金属を金に変える石を探し続けた。その研究から化学が生まれた。狙った場所に赤い石を生み、まわり 9m を黄金の波で包む。弱い的は黄金に変わって砕け（得点 2 倍）、強い的には大きなダメージを与えて重くする。', hint: '錬金術師が、一生をかけて探したもの（3語）' },
   ];
+  MG.SECRET_PVP = {};
+  MG.SECRETS.forEach((s) => { if (s.pvp) MG.SECRET_PVP[s.id] = s.pvp; });
 
   // ---- 障壁の形（第22版）: 1番目の属性で「壁・大盾・球」が決まり、3・4番目の効果でさらに変わる ----
   const WARD_WALL_EL = { earth: 1, metal: 1, ice: 1, crystal: 1 };   // 実体のある属性は、目の前に壁を立てる
@@ -192,10 +211,12 @@
     beast:  { label: '獣', kanji: '獣', kana: 'ビースト', desc: 'すばやく走り、飛びかかってかみつく', hp: 90, dmgMul: 1.1, atkCd: 0.8, speed: 8.5, range: 2.3 },
     wisp:   { label: '使い魔', kanji: '従', kana: 'ファミリア', desc: '小さな光の玉。そばを飛びながら小さな弾を撃つ', hp: 30, dmgMul: 0.5, atkCd: 0.9, speed: 9, range: 18 },
   };
+  // 巨神（第24版）: 隠し魔法「巨神像」だけで呼べる。ふつうの召喚獣とは別に1体まで
+  MG.SUMMONS.titan = { label: '巨神', kanji: '神', kana: 'タイタン', desc: '見上げるほど大きな鎧の巨神。両腕で大地をたたき、まわりの敵をまとめてなぎ倒す', hp: 600, dmgMul: 1, atkCd: 2.0, speed: 3.0, range: 4.5, slam: 60, slamR: 5 };
   MG.summonType = (elemId) => (SUMMON_GOLEM[elemId] ? 'golem' : SUMMON_BEAST[elemId] ? 'beast' : 'spirit');
 
   MG.DESTROY_FORMS = { lob: 1, rain: 1, orb: 1, vortex: 1, pillar: 1, meteor: 1 };
-  MG.DESTROY_SECRETS = ['supernova', 'horizon', 'fusion', 'cumulo', 'erase'];
+  MG.DESTROY_SECRETS = ['supernova', 'horizon', 'fusion', 'cumulo', 'erase', 'railgun', 'quake'];
 
   function hash(str) {
     let h = 2166136261;
@@ -317,7 +338,7 @@
       area: F.area || 5, dur: F.dur || 0, tick: F.tick || 0.4, spreadDeg: F.spreadDeg || 0, homing: F.homing || 0,
       burn: 0, corrode: 0, refund: 0, split: 0, freeze: 0, pierce: 0, echo: 0, crit: 0, pull: 0, bounce: 0,
       pulses: 0, knock: 0, chainHit: 0, rewind: 0, guard: 0, drain: 0, blink: 0, leap: 0, smash: 0, haste: 0, familiar: 0, costMul: 1, mods: [],
-      support: F.support ? formId : null,
+      support: F.support && !sec ? formId : null, // 隠し魔法は、2番目のことばが守りの形でも support にしない
     };
     s.dmg *= E.dmg; s.speed *= E.spd; s.costMul *= E.cost;
     for (const k in E.fx) {

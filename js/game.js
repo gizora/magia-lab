@@ -559,9 +559,10 @@
     if (t.body) { PH.remove(t.body); t.body = null; }
     disposeTarget(t);
   }
-  function updateTargets(dt) {
+  function updateTargets(dt0) {
     for (let i = targets.length - 1; i >= 0; i--) {
       const t = targets[i];
+      const dt = dilations.length && t.alive && !t.isPlayer && !t.puppet ? dt0 * timeK(t.center, targetOwner(t)) : dt0;
       if (t.isPlayer) { updatePlayerTarget(t, dt); continue; }
       if (t.isSummon) { if (updateSummon(t, dt)) { const j = targets.indexOf(t); removeTargetObj(t); if (j >= 0) targets.splice(j, 1); } continue; }
       if (!t.alive && t.pivot) {
@@ -633,9 +634,11 @@
         if (t.flash > 0) { m.emissive.setRGB(1, 1, 1); m.emissiveIntensity = 0.9; }
         else if (t.freezeT > 0) { m.emissive.setRGB(0.3, 0.75, 1); m.emissiveIntensity = 0.55; }
         else if (t.burnT > 0) { m.emissive.setRGB(1, 0.35, 0.05); m.emissiveIntensity = 0.35 + Math.random() * 0.25; }
+        else if (t.goldT > 0) { m.emissive.setRGB(1, 0.7, 0.1); m.emissiveIntensity = 0.55; }
         else if (t.vulnT > 0) { m.emissive.setRGB(0.4, 1, 0.2); m.emissiveIntensity = 0.3; }
         else { m.emissive.copy(m.userData.baseEmissive); m.emissiveIntensity = m.userData.baseInt; }
       }
+      if (t.goldT > 0) t.goldT -= dt;
     }
   }
 
@@ -723,9 +726,12 @@
 
   // 対戦の相手に自分の魔法が当たった: ダメージと状態異常を計算して、相手に送る
   function hitPlayer(t, dmg, spec, o) {
+    if (t.isSelf && spec && spec.reflected && !spec.remote && M.on && M.alive) return hitSelfReflected(dmg, spec);
     if (!spec || spec.remote || t.isSelf || !M.on || !t.alive || t.netProt) return 0;
     if (t.netWard && t.ward) { const hd = o.dir ? o.dir.clone().negate() : camera.position.clone().sub(t.center); wardRipple(t, hd); }
     let d = dmg * (spec.mult || 1);
+    if (spec.secret && MG.SECRET_PVP[spec.secret]) d *= MG.SECRET_PVP[spec.secret]; // 強い隠し魔法は、相手プレイヤーへのダメージを下げる
+    if (spec.form === 'beam' && !spec.secret && meissnerOf(targetOwner(t))) d *= 0.5;  // 完全反磁性は光線を半分防ぐ
     let crit = false;
     if (spec.crit && !o.noCrit && Math.random() < spec.crit) { d *= 2.5; crit = true; }
     d = Math.max(1, Math.round(d));
@@ -754,6 +760,15 @@
     return d;
   }
 
+  // 相手の完全反磁性ではね返された自分の弾が、自分に当たった（自分の画面で決まる）
+  function hitSelfReflected(dmg, spec) {
+    let d = dmg * (spec.mult || 1);
+    if (spec.secret && MG.SECRET_PVP[spec.secret]) d *= MG.SECRET_PVP[spec.secret];
+    d = Math.max(1, Math.round(d));
+    popup(ahead(2.4, 0.3), '反射 ' + d, 'pvp');
+    G.applyHit(spec.reflectBy || null, { d, e: spec.element, n: '反射' });
+    return d;
+  }
   function killTarget(t, opt) {
     opt = opt || {};
     if (!t.alive || t.isPlayer) return;
@@ -763,11 +778,12 @@
     st.combo = st.comboT > 0 ? st.combo + 1 : 1;
     st.comboT = 3;
     const mul = 1 + Math.min(st.combo - 1, 10) * 0.1;
-    const pts = Math.round(t.pts * mul);
+    const pts = Math.round(t.pts * mul * (t.golden ? 2 : 1));
     st.score += pts;
     const c = t.center.clone();
-    popup(c.clone().add(new V3(0, 1.2, 0)), '+' + pts + (st.combo > 1 ? ' ×' + mul.toFixed(1) : ''), 'score');
-    const cols = { dummy: ['#c8925a', '#ffd88a'], slider: ['#4fa8ff', '#ffd88a'], floater: ['#c08bff', '#ffffff'], golem: ['#9a9cb4', '#ff9a40'] }[t.type];
+    popup(c.clone().add(new V3(0, 1.2, 0)), '+' + pts + (st.combo > 1 ? ' ×' + mul.toFixed(1) : '') + (t.golden ? ' 黄金×2' : ''), 'score');
+    const cols = t.golden ? ['#ffd24a', '#fff3b8'] : { dummy: ['#c8925a', '#ffd88a'], slider: ['#4fa8ff', '#ffd88a'], floater: ['#c08bff', '#ffffff'], golem: ['#9a9cb4', '#ff9a40'] }[t.type];
+    if (t.golden) t.mats.forEach((m) => { if (m.color) m.color.set('#ffcf4a'); m.emissive.set('#ff9a10'); m.emissiveIntensity = 0.7; m.metalness = 0.9; m.roughness = 0.25; });
     if (opt.quiet) {
       t.eraseTo = opt.to ? opt.to.clone() : null;
       FX.emit(c, { count: 30, c1: '#dff6ff', c2: '#8fb8ff', speed: 1.5, life: 0.5, size: 0.4, drag: 2 });
@@ -990,7 +1006,7 @@
     const R = spec.radius * (scale || 1);
     if (spec.destroy) W.blast(new V3(p.x, W.heightAt(p.x, p.z) + 0.5, p.z), R * 1.1, spec.dmg, { craterR: 1.1 * (scale || 1) });
     for (const t of targets) {
-      if (!t.alive || hitSet.has(t)) continue;
+      if (!t.alive || hitSet.has(t) || (t.isPlayer && meissnerOf(targetOwner(t)))) continue;
       const dx = t.center.x - p.x, dz = t.center.z - p.z;
       if (Math.hypot(dx, dz) < R + t.r * 0.5 && t.center.y < 3.6 * s + t.r) {
         hitSet.add(t);
@@ -1031,6 +1047,27 @@
     return p;
   }
 
+  // 相手の完全反磁性に入った弾: 撃った人のほうへはね返す（撃った人の画面では、撃った人に当たる）
+  function reflectProj(p) {
+    const own = okey(ownerKey(p.spec));
+    for (const m of meissners) {
+      if (!m.alive || m.owner === own) continue;
+      const mp = meissnerPos(m); if (!mp || p.pos.distanceTo(mp) > m.R) continue;
+      const shooter = p.spec.casterT;
+      const back = shooter && shooter.alive ? shooter.center.clone().sub(p.pos) : p.vel.clone().negate();
+      if (back.lengthSq() < 1e-4) back.set(0, 1, 0);
+      p.vel.copy(back.normalize().multiplyScalar(Math.max(30, p.vel.length())));
+      p.reflected = true; p.homing = 0; p.gravity = 0;
+      p.spec = Object.assign({}, p.spec, { reflected: true, reflectBy: m.owner === 'me' ? (M.myId || null) : m.owner, casterT: m.who || null });
+      p.hit = new Set(m.who ? [m.who] : []);
+      FX.flash(p.pos, '#9fe4ff', 3, 10, 0.2);
+      FX.ring(p.pos.clone(), '#bff0ff', 0.2, 1.6, 0.25, { vertical: true, lookAt: camera.position.clone() });
+      FX.emit(p.pos, { count: 16, c1: '#dff8ff', c2: '#7fd8ff', speed: 5, life: 0.3, size: 0.25, drag: 4 });
+      AU.blocked(ap(p.pos));
+      return true;
+    }
+    return false;
+  }
   function removeProj(i) {
     const p = projs[i];
     scene.remove(p.glow); scene.remove(p.core);
@@ -1089,9 +1126,11 @@
     if (spec.pull > 0 && !(p && EXPLOSIVE[p.kind])) pullAt(pos, 9, spec.pull);
   }
 
-  function updateProjs(dt) {
+  function updateProjs(dt0) {
     for (let i = projs.length - 1; i >= 0; i--) {
       const p = projs[i];
+      const dt = dilations.length ? dt0 * timeK(p.pos, okey(ownerKey(p.spec))) : dt0;
+      if (meissners.length && !p.reflected && p.kind !== 'meteor') reflectProj(p);
       p.age += dt; p.life -= dt;
       if (p.homing > 0) {
         const sp = p.vel.length();
@@ -1456,7 +1495,7 @@
   //  召喚獣の攻撃のダメージも「撃った人（召喚した人）の画面」で決まる。相手の召喚獣に当てたダメージは、その持ち主に送る
   // ======================================================================
   const SUMMON_MAX = 3;
-  const SUMMON_TYPES = ['golem', 'spirit', 'beast', 'wisp'];
+  const SUMMON_TYPES = ['golem', 'spirit', 'beast', 'wisp', 'titan'];
   let summonSerial = 0;
   const friendly = (t, spec) => !!(t && t.isSummon && t.ownerKey === ownerKey(spec)); // 自分の召喚獣（自分の魔法は当たらない）
   function makeSummonModel(type, c1, c2, mats) {
@@ -1503,6 +1542,70 @@
       parts.glow = FX.glowSprite(c1, 3.2); g.add(parts.glow);
       const orbit = new THREE.Group(); g.add(orbit); parts.orbit = orbit;
       for (let k = 0; k < 3; k++) { const s = new THREE.Mesh(new THREE.OctahedronGeometry(0.15, 0), core); const a = (k / 3) * Math.PI * 2; s.position.set(Math.cos(a) * 0.85, Math.sin(a * 2) * 0.15, Math.sin(a) * 0.85); orbit.add(s); }
+    } else if (type === 'titan') {
+      // 巨神（高さ約 8m）: 黒い鎧に金のふち、属性の色に光る目・胸の核・腕の紋、背中の光輪、後ろへ反った角
+      const armor = std({ color: new THREE.Color('#14151d').lerp(C1, 0.05), roughness: 0.5, metalness: 0.3, flatShading: true, emissive: new THREE.Color('#06060c'), emissiveIntensity: 1 });
+      const gold = std({ color: 0xe8a422, roughness: 0.35, metalness: 0.4, flatShading: true, emissive: 0x8a5200, emissiveIntensity: 0.6 });
+      const glow = std({ color: C2, emissive: C1, emissiveIntensity: 1.9, flatShading: true });
+      box(2.2, 0.7, 1.4, armor, 0, 3.1, 0);           // 腰
+      box(2.4, 0.16, 1.5, gold, 0, 3.47, 0);          // 帯
+      box(2.0, 1.0, 1.3, armor, 0, 3.95, 0);          // 腹
+      box(3.3, 1.7, 1.8, armor, 0, 5.15, 0);          // 胸
+      box(3.45, 0.16, 1.9, gold, 0, 4.35, 0);         // 胸の下のふち
+      [-1, 1].forEach((sd) => { const pec = box(1.55, 0.95, 0.3, armor, sd * 0.78, 5.35, 0.86); pec.rotation.z = sd * 0.22; pec.rotation.y = -sd * 0.12; }); // 胸板（逆三角に見えるように）
+      box(1.5, 1.0, 0.22, gold, 0, 5.2, 0.98);        // 胸当て
+      [-1, 1].forEach((sd) => box(0.1, 1.2, 0.04, glow, sd * 1.25, 5.1, 1.02));
+      const core = new THREE.Mesh(new THREE.OctahedronGeometry(0.42, 0), glow); core.position.set(0, 5.25, 1.16); g.add(core); parts.core = core;
+      // 肩鎧（金のふちと角）
+      [-1, 1].forEach((sd) => {
+        const sp = pivot(sd * 2.05, 5.75, 0);
+        const pad = new THREE.Mesh(new THREE.SphereGeometry(0.95, 8, 6, 0, Math.PI * 2, 0, Math.PI / 2), armor); pad.scale.set(1.2, 0.85, 1.05); sp.add(pad);
+        const rim = new THREE.Mesh(new THREE.TorusGeometry(0.95, 0.08, 6, 18), gold); rim.rotation.x = Math.PI / 2; rim.scale.set(1.2, 1.05, 1); sp.add(rim);
+        const spike = new THREE.Mesh(new THREE.ConeGeometry(0.17, 0.95, 5), gold); spike.position.set(sd * 0.4, 0.8, 0); spike.rotation.z = -sd * 0.55; sp.add(spike);
+      });
+      // 兜: 光る目のすき間、鼻当て、とさか、後ろへ反った2本の角
+      const head = pivot(0, 6.15, 0.1); parts.head = head;
+      box(0.95, 0.95, 1.0, armor, 0, 0.5, 0, head);
+      box(1.05, 0.14, 1.08, gold, 0, 0.84, 0, head);
+      box(0.78, 0.1, 0.06, glow, 0, 0.52, 0.51, head);
+      box(0.12, 0.42, 0.06, gold, 0, 0.24, 0.53, head);
+      box(0.12, 0.42, 0.95, gold, 0, 1.08, -0.05, head);
+      [-1, 1].forEach((sd) => { const h = new THREE.Mesh(new THREE.ConeGeometry(0.13, 1.35, 6), gold); h.position.set(sd * 0.52, 1.1, -0.15); h.rotation.z = -sd * 0.5; h.rotation.x = -0.55; head.add(h); });
+      // 背中の赤いマント（歩くとゆれる）
+      const capeGeo = new THREE.PlaneGeometry(3.0, 5.0, 1, 8); capeGeo.translate(0, -2.5, 0);
+      const cp = capeGeo.attributes.position; for (let i = 0; i < cp.count; i++) { const y = cp.getY(i); cp.setX(i, cp.getX(i) * (1 + -y * 0.08)); cp.setZ(i, -Math.pow(-y / 5, 1.6) * 0.9); }
+      capeGeo.computeVertexNormals();
+      const cape = new THREE.Mesh(capeGeo, std({ color: 0x7a0f1e, roughness: 0.8, emissive: 0x2a0408, emissiveIntensity: 1, side: THREE.DoubleSide }));
+      cape.position.set(0, 5.95, -1.0); g.add(cape); parts.cape = cape;
+      box(3.2, 0.2, 0.3, gold, 0, 5.95, -0.95); // マントの留め金
+      // 背中の光輪と紋様
+      const halo = new THREE.Mesh(new THREE.TorusGeometry(1.4, 0.07, 8, 48), glow); halo.position.set(0, 6.75, -0.8); g.add(halo); parts.halo = halo;
+      const rune = new THREE.Mesh(new THREE.PlaneGeometry(2.7, 2.7), new THREE.MeshBasicMaterial({ map: FX.circleTex, color: c1, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+      rune.position.set(0, 6.75, -0.82); g.add(rune); parts.rune = rune;
+      // 腕（上腕・光る紋・籠手・大きな拳）
+      parts.arms = [-1, 1].map((sd) => {
+        const p = pivot(sd * 2.2, 5.5, 0);
+        box(0.78, 1.5, 0.82, armor, 0, -0.8, 0, p);
+        box(0.86, 0.14, 0.9, glow, 0, -1.48, 0, p);
+        box(1.0, 1.35, 1.0, armor, 0, -2.25, 0.05, p);
+        box(1.06, 0.18, 1.06, gold, 0, -1.66, 0.05, p);
+        box(1.12, 0.9, 1.12, gold, 0, -3.28, 0.08, p);
+        return p;
+      });
+      // 脚（太もも・金の膝当て・すね・足）
+      parts.legs = [-0.68, 0.68].map((x) => {
+        const p = pivot(x, 2.92, 0);
+        box(0.98, 1.5, 1.02, armor, 0, -0.75, 0, p);
+        box(0.72, 0.5, 0.4, gold, 0, -1.5, 0.52, p);
+        box(0.88, 1.4, 0.96, armor, 0, -2.2, 0, p);
+        box(0.08, 1.0, 0.03, glow, 0, -2.15, 0.5, p);
+        box(1.02, 0.36, 1.5, armor, 0, -2.74, 0.2, p);
+        return p;
+      });
+      // 体のまわりを回る、光る紋のかけら
+      const orbit = new THREE.Group(); orbit.position.y = 4.6; g.add(orbit); parts.orbit = orbit;
+      for (let k = 0; k < 5; k++) { const sh = new THREE.Mesh(new THREE.OctahedronGeometry(0.24, 0), glow); const a = (k / 5) * Math.PI * 2; sh.position.set(Math.cos(a) * 3.3, Math.sin(a * 2) * 0.5, Math.sin(a) * 3.3); sh.scale.y = 1.7; orbit.add(sh); }
+      parts.glow = FX.glowSprite(c1, 3.4); parts.glow.position.copy(core.position); g.add(parts.glow);
     } else {
       // 使い魔: 小さな光の玉
       const core = std({ color: C2, emissive: C1, emissiveIntensity: 1.8 });
@@ -1510,31 +1613,33 @@
       parts.glow = FX.glowSprite(c1, 1.5); g.add(parts.glow);
     }
     // 足もとの召喚紋（属性の色の魔法陣。自分や相手の召喚獣だとひと目でわかるように）
-    if (type === 'golem' || type === 'beast') {
-      const ring = new THREE.Mesh(new THREE.PlaneGeometry(type === 'golem' ? 3 : 2.2, type === 'golem' ? 3 : 2.2), new THREE.MeshBasicMaterial({ map: FX.circleTex, color: c1, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false }));
+    if (type === 'golem' || type === 'beast' || type === 'titan') {
+      const rs = type === 'titan' ? 7.5 : type === 'golem' ? 3 : 2.2;
+      const ring = new THREE.Mesh(new THREE.PlaneGeometry(rs, rs), new THREE.MeshBasicMaterial({ map: FX.circleTex, color: c1, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false }));
       ring.rotation.x = -Math.PI / 2; ring.position.y = 0.05; g.add(ring); parts.ring = ring;
     }
     return { g, parts };
   }
-  const SUM_CY = { golem: 1.6, beast: 0.85, spirit: 0, wisp: 0 };
-  const SUM_R = { golem: 1.15, beast: 0.75, spirit: 0.65, wisp: 0.35 };
-  const SUM_BAR = { golem: 3.5, beast: 1.75, spirit: 1.1, wisp: 0.6 };
+  const SUM_CY = { golem: 1.6, beast: 0.85, spirit: 0, wisp: 0, titan: 4.2 };
+  const SUM_R = { golem: 1.15, beast: 0.75, spirit: 0.65, wisp: 0.35, titan: 2.4 };
+  const SUM_BAR = { golem: 3.5, beast: 1.75, spirit: 1.1, wisp: 0.6, titan: 9.0 };
   // o: { type, spec, owner, puppet, sid, pos, yaw, scale, hp, life, spd }
   function makeSummon(o) {
     const S = MG.SUMMONS[o.type], [c1, c2] = colorsOf(o.spec), sc = o.scale || 1;
     const mats = [];
     const { g: model, parts } = makeSummonModel(o.type, c1, c2, mats);
     model.scale.setScalar(sc * (o.type === 'golem' ? 0.88 : 1));
+    if (o.type === 'titan') model.position.y = 0.05;
     const g = new THREE.Group(); g.add(model);
     const bc = document.createElement('canvas'); bc.width = 128; bc.height = 16;
     const btex = new THREE.CanvasTexture(bc);
     const bar = new THREE.Sprite(new THREE.SpriteMaterial({ map: btex, depthTest: false, transparent: true }));
-    bar.scale.set(o.type === 'wisp' ? 0.8 : 1.5, 0.16, 1); bar.renderOrder = 20; bar.position.y = SUM_BAR[o.type] * sc; g.add(bar);
+    bar.scale.set(o.type === 'wisp' ? 0.8 : o.type === 'titan' ? 3 : 1.5, o.type === 'titan' ? 0.26 : 0.16, 1); bar.renderOrder = 20; bar.position.y = SUM_BAR[o.type] * sc; g.add(bar);
     const T = { cy: SUM_CY[o.type] * sc, r: SUM_R[o.type] * sc };
     const t = {
       type: 'summon', isSummon: true, kind: o.type, S, T, spec: o.spec, ownerKey: o.owner, puppet: !!o.puppet, sid: o.sid,
       group: g, face: model, parts, mats, hp: o.hp, maxHp: o.hp, r: T.r, pts: 0, home: o.pos.clone(), pos: o.pos.clone(), center: new V3(),
-      floatY: 0, phase: rand(0, 10), moveDir: new V3(1, 0, 0), disp: new V3(), dispV: new V3(), mass: { golem: 0.3, beast: 0.8, spirit: 0.6, wisp: 0.5 }[o.type],
+      floatY: 0, phase: rand(0, 10), moveDir: new V3(1, 0, 0), disp: new V3(), dispV: new V3(), mass: { golem: 0.3, beast: 0.8, spirit: 0.6, wisp: 0.5, titan: 0.06 }[o.type],
       burnT: 0, burnDps: 0, burnAcc: 0, burnPop: 0, freezeT: 0, frozenHard: false, vulnT: 0, flash: 0, alive: true, dead: 0, spawnT: 0,
       bar, bc, btex, id: 's' + Math.random().toString(36).slice(2, 7), slot: -1,
       life: o.life || 15, yaw: o.yaw || 0, netPos: o.pos.clone(), netYaw: o.yaw || 0, netSeen: 0, atkT: 0.7, animT: 0, walk: 0, tgt: null, retarget: 0,
@@ -1566,12 +1671,14 @@
   // 自分の召喚獣を呼び出す（type: 'golem' | 'spirit' | 'beast' | 'wisp'）
   function spawnSummon(type, spec, at) {
     const S = MG.SUMMONS[type];
-    const sc = type === 'wisp' ? 1 : Math.max(0.75, Math.min(1.7, spec.size || 1));
-    // 数の上限: 召喚獣は3体、使い魔は1体（古いものから消える）
-    const mine = targets.filter((t) => t.isSummon && !t.puppet && t.alive && (type === 'wisp') === (t.kind === 'wisp')).sort((a, b) => a.born - b.born);
-    while (mine.length >= (type === 'wisp' ? 1 : SUMMON_MAX)) summonDie(mine.shift(), true);
+    const sc = type === 'wisp' || type === 'titan' ? 1 : Math.max(0.75, Math.min(1.7, spec.size || 1));
+    // 数の上限: 召喚獣は3体、使い魔と巨神は1体ずつ（古いものから消える）
+    const cat = (k) => (k === 'wisp' || k === 'titan' ? k : 'normal');
+    const mine = targets.filter((t) => t.isSummon && !t.puppet && t.alive && cat(t.kind) === cat(type)).sort((a, b) => a.born - b.born);
+    while (mine.length >= (cat(type) === 'normal' ? SUMMON_MAX : 1)) summonDie(mine.shift(), true);
     const spd = 1 + 0.35 * (spec.mods || []).filter((m) => m === 'speed').length;
-    const t = makeSummon({ type, spec, owner: 'me', sid: ++summonSerial, pos: at, yaw: player.yaw + Math.PI, scale: sc, hp: Math.round(S.hp * sc), life: type === 'wisp' ? 10 : Math.max(4, spec.dur || 15), spd });
+    const t = makeSummon({ type, spec, owner: 'me', sid: ++summonSerial, pos: at, yaw: player.yaw + Math.PI, scale: sc, hp: Math.round(S.hp * sc), life: type === 'wisp' ? 10 : type === 'titan' ? 25 : Math.max(4, spec.dur || 15), spd });
+    if (type === 'titan') t.slotSide = 5.5;
     if (AU.summon) AU.summon(type, spec.element, ap(at));
     return t;
   }
@@ -1598,7 +1705,25 @@
     const S = t.S, spec = t.spec, [c1, c2] = colorsOf(spec);
     t.animT = 0.45;
     const dn = e.center.clone().sub(t.center); dn.y = 0; if (dn.lengthSq() < 1e-4) dn.set(0, 0, 1); dn.normalize();
-    if (t.kind === 'golem' || t.kind === 'beast') {
+    if (t.kind === 'titan') {
+      t.animT = 0.9;
+      after(0.62, () => {
+        if (!t.alive) return;
+        const p = t.pos.clone().addScaledVector(dn, 3.4); p.y = W.heightAt(p.x, p.z);
+        FX.ring(new V3(p.x, p.y + 0.1, p.z), c1, 0.5, S.slamR * 1.3, 0.45);
+        FX.ring(new V3(p.x, p.y + 0.12, p.z), '#ffffff', 0.5, S.slamR * 0.9, 0.3);
+        FX.emit(new V3(p.x, p.y + 0.3, p.z), { count: 70, c1: '#8a6a4a', c2: c1, speed: 9, up: 6, gravity: 16, life: 1, size: 0.45, rainbow: spec.rainbow });
+        EF.impact('earth', p, 3); EF.impact(spec.element, p, 2);
+        st.shake = Math.max(st.shake, 0.45 * near(p));
+        AU.impact('earth', 3.5, ap(p)); H.feel('earth', 0.6 * near(p), 0.3, 0.7 * near(p));
+        if (visualOnly) return;
+        W.blast(new V3(p.x, p.y + 0.5, p.z), 3, 90, { crater: false });
+        for (const o of targets) {
+          if (!o.alive || o === t || o.isSelf || friendly(o, spec) || (o.isPlayer && o.netProt) || (spec.casterT && o === spec.casterT)) continue;
+          if (Math.hypot(o.center.x - p.x, o.center.z - p.z) < S.slamR + o.r * 0.5 && o.center.y - p.y < 7) hitTarget(o, S.slam, spec, { dir: o.center.clone().sub(p) });
+        }
+      });
+    } else if (t.kind === 'golem' || t.kind === 'beast') {
       if (t.kind === 'beast') t.lunge = 0.16;
       after(t.kind === 'golem' ? 0.24 : 0.12, () => {
         if (!t.alive) return;
@@ -1624,16 +1749,16 @@
     t.alive = false; t.dead = 0; t.bar.visible = false;
     const [c1, c2] = colorsOf(t.spec), c = t.center.clone();
     FX.emit(c, { count: t.kind === 'golem' ? 70 : 36, c1, c2, speed: 5, up: 2, life: 0.7, size: 0.4, drag: 2, rainbow: t.spec.rainbow });
-    if (t.kind === 'golem') { FX.emit(c, { count: 30, c1: '#7a7468', c2: '#c8c0b0', speed: 6, up: 4, gravity: 14, life: 1, size: 0.35 }); AU.crumble(ap(c)); }
+    if (t.kind === 'golem' || t.kind === 'titan') { FX.emit(c, { count: t.kind === 'titan' ? 90 : 30, c1: '#7a7468', c2: t.kind === 'titan' ? '#d9a84a' : '#c8c0b0', speed: t.kind === 'titan' ? 10 : 6, up: 4, gravity: 14, life: 1.2, size: 0.45 }); AU.crumble(ap(c)); }
     FX.flash(c, c1, 3, 10, 0.25);
     if (!expired && !t.puppet) popup(c.clone().add(new V3(0, 1, 0)), MG.SUMMONS[t.kind].label + 'が倒された', 'ward');
     if (!t.puppet && M.on && G.onFx) G.onFx({ k: 'sumDie', id: t.sid });
   }
   // 召喚獣の動きの見た目（歩く・浮かぶ・殴る・飛びかかる）
   function animateSummon(t, dt, speed) {
-    const P = t.parts, k = t.animT > 0 ? t.animT / 0.45 : 0;
+    const P = t.parts, k = t.animT > 0 ? t.animT / (t.kind === 'titan' ? 0.9 : 0.45) : 0;
     t.animT = Math.max(0, t.animT - dt);
-    t.walk += dt * Math.min(10, speed) * (t.kind === 'beast' ? 1.6 : 1.1);
+    t.walk += dt * Math.min(10, speed) * (t.kind === 'beast' ? 1.6 : t.kind === 'titan' ? 0.55 : 1.1);
     const sw = speed > 0.3 ? Math.sin(t.walk) : 0;
     t.face.rotation.y = t.yaw;
     if (t.kind === 'golem') {
@@ -1643,6 +1768,16 @@
       t.face.position.y = Math.abs(sw) * 0.06;
       P.core.rotation.y += dt * 2;
       P.ring.rotation.z += dt * 0.8;
+    } else if (t.kind === 'titan') {
+      P.legs[0].rotation.x = sw * 0.35; P.legs[1].rotation.x = -sw * 0.35;
+      // 両腕を振り上げて（0.5 秒）、一気にたたきつける（0.4 秒）
+      const lift = k > 0 ? (k > 0.45 ? (1 - k) / 0.55 : k / 0.45) : 0;
+      P.arms[0].rotation.x = -sw * 0.3 - lift * 2.7; P.arms[1].rotation.x = sw * 0.3 - lift * 2.7;
+      P.head.rotation.x = -lift * 0.25;
+      t.face.position.y = Math.abs(sw) * 0.1;
+      P.cape.rotation.x = -0.08 - Math.abs(sw) * 0.12 - lift * 0.25 + Math.sin(st.time * 1.7 + t.phase) * 0.04;
+      P.core.rotation.y += dt * 1.5; P.halo.rotation.z += dt * 0.6; P.rune.rotation.z -= dt * 0.4; P.orbit.rotation.y += dt * 0.9; P.ring.rotation.z += dt * 0.5;
+      P.glow.scale.setScalar(3.4 + Math.sin(st.time * 3 + t.phase) * 0.3 + lift * 1.5);
     } else if (t.kind === 'beast') {
       P.legs.forEach((l, i) => (l.rotation.x = (i === 0 || i === 3 ? sw : -sw) * 0.7));
       P.head.rotation.x = k > 0 ? -Math.sin((1 - k) * Math.PI) * 0.6 : Math.sin(st.time * 2 + t.phase) * 0.05;
@@ -1748,7 +1883,9 @@
       t.atkT -= dt * slow;
       if (e && e.alive && t.atkT <= 0) {
         const reach = t.kind === 'spirit' || t.kind === 'wisp' ? S.range : S.range * t.scale + e.r;
-        if (e.center.distanceTo(t.center) <= reach) { summonAttack(t, e, false); t.atkT = S.atkCd / t.spd; }
+        // 巨神は体の中心が高いので、横の距離で測る
+        const ed = t.kind === 'titan' ? Math.hypot(e.center.x - t.center.x, e.center.z - t.center.z) : e.center.distanceTo(t.center);
+        if (ed <= reach) { summonAttack(t, e, false); t.atkT = S.atkCd / t.spd; }
       }
     }
     animateSummon(t, dt, speed);
@@ -2187,6 +2324,163 @@
     el.style.transition = 'none'; el.style.opacity = String(strength || 0.8);
     requestAnimationFrame(() => { el.style.transition = 'opacity 0.9s ease-out'; el.style.opacity = '0'; });
   }
+  // ---- 第24版の隠し魔法で使う、しばらく残る場（時間遅延の球・完全反磁性）----
+  // どちらも、放った人の画面でも相手の画面でも同じように置く（相手の画面では spec.remote の人のもの）
+  const dilations = []; // { owner, c, R, alive }
+  const meissners = []; // { owner, who（その人の的。練習場の自分は null）, R, alive }
+  const okey = (v) => (v == null ? null : String(v));
+  // そのものの持ち主（自分 'me'・相手の ID・練習用の的は null）
+  const targetOwner = (t) => (t.isSummon ? okey(t.ownerKey) : t.isSelf ? 'me' : t.isPlayer ? okey(t.pid) : null);
+  // 時間遅延の球の中では、球を張った人以外の時間が 1/5 になる
+  function timeK(p, owner) {
+    if (!dilations.length) return 1;
+    for (const d of dilations) if (d.alive && d.owner !== owner && p.distanceTo(d.c) < d.R) return 0.2;
+    return 1;
+  }
+  function meissnerOf(owner) { return meissners.find((m) => m.alive && m.owner === owner) || null; }
+  function meissnerPos(m) {
+    if (m.owner === 'me') return new V3(player.pos.x, player.pos.y + 1, player.pos.z);
+    return m.who && m.who.alive ? m.who.center.clone() : null;
+  }
+  // 地面に立っているか（大地震が当たる。浮遊水晶・精霊・使い魔・跳んでいる人・反磁性で浮いている人には当たらない）
+  function grounded(t) {
+    if (t.type === 'floater' || (t.isSummon && (t.kind === 'spirit' || t.kind === 'wisp'))) return false;
+    if (t.isPlayer) {
+      if (meissnerOf(targetOwner(t))) return false;
+      const p = t.isSelf ? player.pos : t.pos;
+      return p.y - W.floorAt(p.x, p.z, p.y + 0.5) < 0.35;
+    }
+    return true;
+  }
+  // 隠し魔法の当たり方をそろえる（並べたことばの効果は乗せない）
+  const cleanSpec = (spec, o) => Object.assign({}, spec, { burn: 0, freeze: 0, corrode: 0, knock: 0, rewind: 0, pulses: 0, pull: 0, chainHit: 0, split: 0, crit: 0, drain: 0 }, o || {});
+  // 木や鳥など、いくつもの部品でできた物を片づける（光の玉の材質は色ごとに共有しているので消さない）
+  function disposeObj(o) {
+    scene.remove(o);
+    o.traverse((m) => { if (m.isMesh) { if (m.geometry) m.geometry.dispose(); if (m.material) m.material.dispose(); } });
+  }
+  // 大地震のひび割れ模様
+  let crackTexC = null;
+  function crackTex() {
+    if (crackTexC) return crackTexC;
+    const c = document.createElement('canvas'); c.width = c.height = 1024;
+    const g = c.getContext('2d');
+    g.lineCap = 'round'; g.lineJoin = 'round';
+    const branch = (x, y, a, len, w, depth) => {
+      const pts = [[x, y]];
+      let px = x, py = y;
+      const n = 6 + depth * 2;
+      for (let i = 0; i < n; i++) { a += rand(-0.45, 0.45); px += Math.cos(a) * len / n; py += Math.sin(a) * len / n; pts.push([px, py]); }
+      const line = (lw, col) => { g.lineWidth = lw; g.strokeStyle = col; g.beginPath(); pts.forEach(([qx, qy], i) => (i ? g.lineTo(qx, qy) : g.moveTo(qx, qy))); g.stroke(); };
+      line(w, `rgba(28,16,8,${0.9 - depth * 0.15})`);
+      line(Math.max(1, w * 0.35), `rgba(255,${120 + depth * 25},40,${0.9 - depth * 0.15})`);
+      if (depth < 3) for (let k = 0; k < 2; k++) if (Math.random() < 0.75) branch(px, py, a + rand(-0.9, 0.9), len * 0.55, w * 0.6, depth + 1);
+    };
+    for (let i = 0; i < 11; i++) branch(512, 512, (i / 11) * Math.PI * 2 + rand(-0.2, 0.2), rand(300, 470), 5, 0);
+    crackTexC = new THREE.CanvasTexture(c); crackTexC.anisotropy = 4;
+    return crackTexC;
+  }
+  // 縁が光る半透明の球（時間遅延）
+  function rimSphereMat(color) {
+    return new THREE.ShaderMaterial({
+      transparent: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+      uniforms: { uT: { value: 0 }, uA: { value: 0 }, uC: { value: new THREE.Color(color) } },
+      vertexShader: 'varying vec3 vN; varying vec3 vV; varying vec3 vP; void main(){ vec4 wp = modelMatrix * vec4(position, 1.0); vP = position; vN = normalize(mat3(modelMatrix) * normal); vV = normalize(cameraPosition - wp.xyz); gl_Position = projectionMatrix * viewMatrix * wp; }',
+      fragmentShader: `uniform float uT; uniform float uA; uniform vec3 uC; varying vec3 vN; varying vec3 vV; varying vec3 vP;
+        void main(){
+          float f = pow(1.0 - abs(dot(normalize(vN), normalize(vV))), 2.2);
+          float rings = smoothstep(0.92, 1.0, sin(vP.y * 18.0 - uT * 1.2) * 0.5 + 0.5) * 0.35;
+          gl_FragColor = vec4(mix(uC, vec3(1.0), f * 0.5), (0.03 + f * 0.55 + rings * 0.25) * uA);
+        }`,
+    });
+  }
+  // 世界樹（高さ 20m）。幹・根・枝・光る葉のかたまり・幹を流れる光の筋
+  function makeYggdrasil() {
+    const g = new THREE.Group();
+    const bark = new THREE.MeshStandardMaterial({ color: 0x5e3c26, roughness: 0.9, flatShading: true, emissive: 0x2a170a, emissiveIntensity: 0.6 });
+    const vein = new THREE.MeshBasicMaterial({ color: 0xc8ff8a, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false });
+    const leaf = new THREE.MeshStandardMaterial({ color: 0x2f9a3a, emissive: 0x38c24a, emissiveIntensity: 0.45, roughness: 0.6, flatShading: true });
+    const leaf2 = new THREE.MeshStandardMaterial({ color: 0xd8b040, emissive: 0xffb830, emissiveIntensity: 0.5, roughness: 0.5, flatShading: true });
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.85, 2.0, 13, 9, 5), bark); trunk.position.y = 6.5; g.add(trunk);
+    // 少しねじれた幹（頂点を回す）
+    const pa = trunk.geometry.attributes.position;
+    for (let i = 0; i < pa.count; i++) { const y = pa.getY(i), a = (y + 6.5) * 0.06, x = pa.getX(i), z = pa.getZ(i); pa.setX(i, x * Math.cos(a) - z * Math.sin(a)); pa.setZ(i, x * Math.sin(a) + z * Math.cos(a)); }
+    trunk.geometry.computeVertexNormals();
+    for (let k = 0; k < 7; k++) {
+      const a = (k / 7) * Math.PI * 2 + rand(-0.2, 0.2);
+      const p = new THREE.Group(); p.rotation.y = a; g.add(p);
+      const root = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.75, 4.6, 6), bark); root.position.set(2.0, 0.55, 0); root.rotation.z = 1.25; p.add(root);
+      const rv = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.07, 0.07), vein); rv.position.set(2.1, 0.62, 0.32); rv.rotation.z = -0.32; p.add(rv);
+    }
+    for (let k = 0; k < 8; k++) {
+      const a = (k / 8) * Math.PI * 2 + rand(-0.3, 0.3);
+      const p = new THREE.Group(); p.position.y = 9.5 + (k % 3) * 1.1; p.rotation.y = a; g.add(p);
+      const tilt = new THREE.Group(); tilt.rotation.z = -rand(0.75, 1.05); p.add(tilt);
+      const br = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.48, 6.2, 6), bark); br.position.y = 3.1; tilt.add(br);
+    }
+    // 光る葉のかたまり（下の輪・上の輪・てっぺん）
+    const blobs = [];
+    const addBlob = (x, y, z, r, m) => { const b = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 1), m); b.position.set(x, y, z); b.rotation.set(rand(0, 6), rand(0, 6), 0); g.add(b); blobs.push(b); };
+    for (let k = 0; k < 7; k++) { const a = (k / 7) * Math.PI * 2; addBlob(Math.cos(a) * 5.6, 14.2 + rand(-0.4, 0.4), Math.sin(a) * 5.6, rand(2.6, 3.3), k % 3 ? leaf : leaf2); }
+    for (let k = 0; k < 5; k++) { const a = (k / 5) * Math.PI * 2 + 0.5; addBlob(Math.cos(a) * 3.2, 17, Math.sin(a) * 3.2, rand(2.5, 3), k % 2 ? leaf : leaf2); }
+    addBlob(0, 18.6, 0, 2.8, leaf);
+    // 幹を流れる光の筋
+    for (let k = 0; k < 5; k++) { const a = (k / 5) * Math.PI * 2; const v = new THREE.Mesh(new THREE.BoxGeometry(0.08, 12, 0.08), vein); v.position.set(Math.cos(a) * 1.35, 6.2, Math.sin(a) * 1.35); v.rotation.z = Math.cos(a) * 0.08; v.rotation.x = -Math.sin(a) * 0.08; g.add(v); }
+    const crown = FX.glowSprite('#b8ff7a', 18); crown.position.y = 16; g.add(crown);
+    const base = FX.glowSprite('#fff3b8', 7); base.position.y = 1.5; g.add(base);
+    // 足もとの輪（つるが届く範囲 12m）
+    const ring = new THREE.Mesh(new THREE.PlaneGeometry(24, 24), new THREE.MeshBasicMaterial({ map: FX.circleTex, color: 0x9dff6a, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false }));
+    ring.rotation.x = -Math.PI / 2; ring.position.y = 0.06; g.add(ring);
+    return { g, blobs, ring };
+  }
+  // 不死鳥（+Z が前）。翼は羽ばたき用の軸に付ける
+  function makePhoenix() {
+    const g = new THREE.Group();
+    const add = (m, mat) => new THREE.Mesh(m, mat);
+    const body = new THREE.MeshBasicMaterial({ color: 0xff6a18 });
+    const hot = new THREE.MeshBasicMaterial({ color: 0xffd24a });
+    const b = add(new THREE.SphereGeometry(0.5, 14, 10), body); b.scale.set(0.75, 0.7, 1.7); g.add(b);
+    const h = add(new THREE.SphereGeometry(0.36, 12, 8), hot); h.position.set(0, 0.25, 1.05); g.add(h);
+    const beak = add(new THREE.ConeGeometry(0.11, 0.45, 6), hot); beak.rotation.x = Math.PI / 2; beak.position.set(0, 0.2, 1.5); g.add(beak);
+    const crest = add(new THREE.ConeGeometry(0.08, 0.7, 5), body); crest.position.set(0, 0.7, 0.85); crest.rotation.x = -0.7; g.add(crest);
+    // 翼: 外へ広がる羽の形（2枚重ねて、内側を明るく）
+    const shape = new THREE.Shape();
+    [[0, 0.5], [1.4, 0.75], [3.0, 0.5], [4.4, -0.1], [3.6, -0.45], [3.9, -0.8], [2.8, -0.85], [3.0, -1.2], [1.8, -1.05], [0.6, -0.7], [0, -0.4]].forEach(([x, y], i) => (i ? shape.lineTo(x, y) : shape.moveTo(x, y)));
+    const wingGeo = new THREE.ShapeGeometry(shape);
+    const wingMat = new THREE.MeshBasicMaterial({ color: 0xff4a10, transparent: true, opacity: 0.92, side: THREE.DoubleSide, depthWrite: false });
+    const wingMat2 = new THREE.MeshBasicMaterial({ color: 0xffc040, transparent: true, opacity: 0.6, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false });
+    const wings = [-1, 1].map((sd) => {
+      const p = new THREE.Group(); p.position.set(sd * 0.3, 0.1, 0.1); g.add(p);
+      [[wingMat, 1], [wingMat2, 0.7]].forEach(([m, k]) => { const w = add(wingGeo, m); w.rotation.x = Math.PI / 2; w.scale.set(sd * k, k, k); w.position.y = k < 1 ? 0.02 : 0; p.add(w); });
+      return p;
+    });
+    // 長い尾羽
+    const tails = [];
+    for (let k = -2; k <= 2; k++) {
+      const t = add(new THREE.ConeGeometry(0.14, 2.6 - Math.abs(k) * 0.35, 5), k % 2 ? body : wingMat);
+      t.rotation.x = -Math.PI / 2 + 0.12; t.position.set(k * 0.18, -0.05 - Math.abs(k) * 0.04, -1.9 + Math.abs(k) * 0.15); t.rotation.z = k * 0.18; g.add(t); tails.push(t);
+    }
+    const glow = FX.glowSprite('#ff5a10', 4.5); g.add(glow);
+    const core = FX.glowSprite('#ffd070', 1.4); core.position.z = 0.4; g.add(core);
+    g.scale.setScalar(1.6);
+    return { g, wings, tails };
+  }
+  const bez = (a, b, c, d, u) => {
+    const v = 1 - u;
+    return a.clone().multiplyScalar(v * v * v).addScaledVector(b, 3 * v * v * u).addScaledVector(c, 3 * v * u * u).addScaledVector(d, u * u * u);
+  };
+  // 自分の HP（練習場では MP）を回復する（世界樹・不死鳥）
+  function healSelf(hp, mp, at) {
+    if (M.on) {
+      if (!M.alive) return;
+      const h = Math.min(hp, M.maxHp - M.hp);
+      if (h > 0) { M.hp += h; SUP.healed += h; popup(at || ahead(2.4, -0.4), '+' + Math.round(h), 'heal'); }
+    } else {
+      const h = Math.min(mp, st.mpMax - st.mp);
+      if (h > 0) { st.mp += h; popup(at || ahead(2.4, -0.4), 'MP +' + Math.round(h), 'heal'); }
+    }
+  }
+
   // objs: 途中で片づける（対戦の開始・終了やチャレンジの開始）ときに、場面から消す物体
   function special(update, objs) {
     (objs || []).forEach((o) => { if (o) o.userData.special = true; });
@@ -2199,6 +2493,7 @@
       for (const o of f.objs) { if (!o) continue; scene.remove(o); if (o.isMesh && o.geometry) o.geometry.dispose(); if (o.material && !o.isSprite) o.material.dispose(); }
     }
     fields.length = 0; meteorCircles = 0;
+    dilations.length = 0; meissners.length = 0;
   }
   let meteorCircles = 0; // 上空に出ている流星の魔法陣の数（動作確認用）
 
@@ -2514,6 +2809,393 @@
         [sun, corona, ball].forEach((o) => o.position.copy(pos));
         return true;
       }, [sun, corona, ball]);
+    },
+    // ======================== 第24版 ========================
+    // 電磁加速砲: 磁場のリングで 0.6 秒ためて、壁も的もすべてつらぬく閃光を一直線に撃つ
+    railgun(spec, aim, tip) {
+      const t0 = tip.clone();
+      const dir = aim.point.clone().sub(t0); if (dir.lengthSq() < 1e-4) dir.copy(aim.dir); dir.normalize();
+      const C1 = '#ff4a5a', C2 = '#4a8bff';
+      const rings = [0, 1, 2].map((i) => {
+        const m = new THREE.Mesh(new THREE.TorusGeometry(0.32 + i * 0.1, 0.03, 6, 36), new THREE.MeshBasicMaterial({ color: i % 2 ? C2 : C1, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
+        m.position.copy(t0).addScaledVector(dir, 0.5 + i * 0.5);
+        m.quaternion.setFromUnitVectors(new V3(0, 0, 1), dir);
+        scene.add(m); return m;
+      });
+      const S = cleanSpec(spec);
+      const rem = !!CTX; // 相手の魔法の再現か（あとで動く処理の中では CTX は使えないので、ここで覚えておく）
+      AU.charge(0.6);
+      let t = 0, fired = false;
+      const fire = () => {
+        let len = 100;
+        if (dir.y < -0.001) len = Math.min(len, Math.max(2, -t0.y / dir.y));
+        const end = t0.clone().addScaledVector(dir, len);
+        // 壁・岩・木箱・石柱・魔法の壁: すべてつらぬいて壊す
+        W.propsOnSegment(t0, end, ownerKey(spec)).forEach((w) => {
+          const p = t0.clone().addScaledVector(dir, w.t);
+          if (w.barrier) { if (w.prop.game) damageBarrier(w.prop.game, 400, p, spec); }
+          else W.blast(p, 1.6, 400, { crater: false });
+          FX.emit(p, { count: 26, c1: '#ffffff', c2: C2, speed: 8, life: 0.4, size: 0.35, drag: 4 });
+        });
+        // 線の近くにいる的すべて
+        for (const tg of targets) {
+          if (!tg.alive || tg === spec.casterT) continue;
+          const v = tg.center.clone().sub(t0), along = v.dot(dir);
+          if (along < 0 || along > len + tg.r) continue;
+          if (v.addScaledVector(dir, -along).length() < tg.r + 0.9) hitTarget(tg, 160, S, { dir: dir.clone() });
+        }
+        beamVisual(t0, end, C1, '#ffffff', 0.95, 0.7);
+        beamVisual(t0, end, C2, '#ffffff', 0.4, 0.95, true);
+        for (let k = 3, i = 0; k < len; k += 6, i++) { const p = t0.clone().addScaledVector(dir, k); after(k / 400, () => FX.ring(p, i % 2 ? C2 : C1, 0.3, 1.9, 0.35, { vertical: true, lookAt: p.clone().add(dir) })); }
+        explode(end, 3, 40, Object.assign({}, S, { destroy: true }), null, { silent: true });
+        FX.flash(t0, C1, 6, 22, 0.3); FX.flash(end, '#ffffff', 8, 30, 0.4);
+        AU.thunder(ap(t0)); AU.impact('lightning', 4, ap(end));
+        H.feel('lightning', 0.9 * near(t0), 0.3, 0.9 * near(t0));
+        if (!rem) { whiteFlash('#ffd6dc', 0.3); st.shake = Math.max(st.shake, 0.6); player.kv.addScaledVector(new V3(dir.x, 0, dir.z), -7); }
+        else st.shake = Math.max(st.shake, 0.25 * near(t0));
+      };
+      special((dt) => {
+        t += dt;
+        rings.forEach((m, i) => {
+          m.material.opacity = fired ? Math.max(0, 1 - (t - 0.6) / 0.3) : Math.min(0.95, t / 0.35);
+          m.rotation.z += dt * (9 + i * 5) * (i % 2 ? -1 : 1);
+          m.scale.setScalar(fired ? 1 + (t - 0.6) * 5 : 1 - 0.18 * Math.sin(t * 34 + i));
+        });
+        if (!fired) {
+          const c = t0.clone().addScaledVector(dir, 0.9);
+          FX.emit(c, { count: 3, c1: '#ffffff', c2: Math.random() < 0.5 ? C1 : C2, speed: -3, jitter: 0.9, life: 0.18, size: 0.14, drag: 0 });
+          if (t >= 0.6) { fired = true; fire(); }
+        }
+        if (t >= 0.95) { rings.forEach((m) => { scene.remove(m); m.geometry.dispose(); m.material.dispose(); }); return false; }
+        return true;
+      }, rings);
+    },
+    // 大地震: 自分のまわり 25m の大地を3秒揺らし、地面にいる的を 0.5 秒ごとに打つ（合計 120）
+    quake(spec) {
+      const base = casterPos();
+      const c = new V3(base.x, W.heightAt(base.x, base.z), base.z);
+      const R = 25, S = cleanSpec(spec);
+      const crack = new THREE.Mesh(new THREE.PlaneGeometry(R * 2.1, R * 2.1), new THREE.MeshBasicMaterial({ map: crackTex(), transparent: true, opacity: 0, depthWrite: false }));
+      crack.rotation.x = -Math.PI / 2; crack.rotation.z = rand(0, 6); crack.position.set(c.x, c.y + 0.07, c.z);
+      scene.add(crack);
+      AU.rumble(3.4); AU.impact('earth', 4, ap(c));
+      EF.impact('earth', c, 6);
+      let t = 0, tick = 0, n = 0;
+      special((dt) => {
+        t += dt;
+        crack.material.opacity = Math.min(1, t / 0.25) * (t > 3 ? Math.max(0, 1 - (t - 3) / 0.6) : 1);
+        if (t < 3) {
+          // 揺れ: 震源に近いほど強い（相手の大地震でも揺れる）
+          const dl = Math.hypot(player.pos.x - c.x, player.pos.z - c.z);
+          if (dl < R + 12) st.shake = Math.max(st.shake, 0.32 * Math.max(0.2, 1 - dl / (R + 12)));
+          for (let i = 0; i < 7; i++) {
+            const a = rand(0, Math.PI * 2), r = Math.sqrt(Math.random()) * R;
+            const x = c.x + Math.cos(a) * r, z = c.z + Math.sin(a) * r;
+            FX.emit(new V3(x, W.heightAt(x, z) + 0.15, z), { count: 1, c1: '#8a6a4a', c2: '#d0b090', speed: 1.5, up: 3, gravity: 9, life: 0.8, size: rand(0.25, 0.6), drag: 0.6 });
+          }
+        }
+        tick -= dt;
+        if (tick <= 0 && n < 6) {
+          tick = 0.5; n++;
+          FX.ring(new V3(c.x, c.y + 0.1, c.z), '#d08a45', 1, R, 0.5);
+          FX.ring(new V3(c.x, c.y + 0.12, c.z), '#ffd08a', 1, R * 0.6, 0.4);
+          if (n === 1 || n === 4) W.blast(new V3(c.x, c.y + 0.5, c.z), R, 110, { crater: false });
+          for (const tg of targets) {
+            if (!tg.alive || tg === spec.casterT) continue;
+            if (Math.hypot(tg.center.x - c.x, tg.center.z - c.z) > R + tg.r || !grounded(tg)) continue;
+            hitTarget(tg, 20, S, { noCrit: true, dir: new V3(0, 1, 0) });
+            if (!tg.isPlayer) tg.dispV.y += 2.2 * tg.mass;
+          }
+          AU.impact('earth', 2.5, ap(c));
+        }
+        if (t >= 3.6) { scene.remove(crack); crack.geometry.dispose(); crack.material.dispose(); return false; }
+        return true;
+      }, [crack]);
+    },
+    // 世界樹: 狙った場所に高さ 20m の大樹。20 秒のあいだ、まわり 12m の的をつるで打ち、近くにいる自分を回復する
+    yggdrasil(spec, aim) {
+      const p = groundPointOf(aim, 40); p.y = W.heightAt(p.x, p.z);
+      const tree = makeYggdrasil();
+      tree.g.position.copy(p); tree.g.scale.setScalar(0.01); scene.add(tree.g);
+      const S = cleanSpec(spec);
+      const DUR = 20, VR = 12, HR = 10;
+      FX.ring(new V3(p.x, p.y + 0.08, p.z), '#9dff6a', 0.5, VR, 0.8);
+      FX.emit(new V3(p.x, p.y + 0.5, p.z), { count: 80, c1: '#9dff6a', c2: '#fff3b8', speed: 4, up: 6, life: 1.2, size: 0.5, drag: 1 });
+      if (AU.summon) AU.summon('spirit', 'light', ap(p));
+      AU.rumble(1.2);
+      let t = 0, tick = 1.2, healT = 1;
+      special((dt) => {
+        t += dt;
+        const grow = Math.min(1, t / 1.4), e = 1 - Math.pow(1 - grow, 3);
+        const fade = t > DUR ? Math.max(0, 1 - (t - DUR) / 1) : 1;
+        tree.g.scale.setScalar(Math.max(0.01, e * fade));
+        tree.g.rotation.y += dt * 0.03;
+        tree.blobs.forEach((b, i) => { b.rotation.y += dt * (0.1 + (i % 3) * 0.05); });
+        tree.ring.rotation.z -= dt * 0.15;
+        if (grow < 1 && Math.random() < 0.8) FX.emit(new V3(p.x + rand(-2, 2), p.y + 0.3, p.z + rand(-2, 2)), { count: 2, c1: '#8a6a4a', c2: '#9dff6a', speed: 3, up: 4, gravity: 10, life: 0.8, size: 0.35 });
+        // 光の葉が舞い落ちる
+        if (t < DUR && Math.random() < 0.9) {
+          const a = rand(0, Math.PI * 2), r = rand(1, 7);
+          FX.emit(new V3(p.x + Math.cos(a) * r, p.y + rand(12, 18) * e, p.z + Math.sin(a) * r), { count: 1, c1: '#c8ff8a', c2: '#fff3b8', speed: 0.3, up: -1.6, life: 2.4, size: rand(0.2, 0.4), drag: 0.3 });
+        }
+        if (t < DUR && grow >= 1) {
+          tick -= dt;
+          if (tick <= 0) {
+            tick = 1;
+            const foes = targets.filter((x) => x.alive && x !== spec.casterT && !friendly(x, spec) && !(x.isPlayer && x.netProt) && Math.hypot(x.center.x - p.x, x.center.z - p.z) < VR + x.r)
+              .sort((a, b) => a.center.distanceToSquared(p) - b.center.distanceToSquared(p)).slice(0, 4);
+            foes.forEach((x) => {
+              const from = new V3(p.x + rand(-1.2, 1.2), p.y + rand(0.4, 2), p.z + rand(-1.2, 1.2));
+              lightning(from, x.center.clone(), '#7dff6a', '#ffe680', { life: 0.35, size: 0.35 });
+              hitTarget(x, 15, S, { noCrit: true, dir: x.center.clone().sub(p) });
+            });
+          }
+          // 回復: 自分の木の近く（10m）にいるとき
+          healT -= dt;
+          if (healT <= 0) {
+            healT = 1;
+            if (!spec.remote && Math.hypot(player.pos.x - p.x, player.pos.z - p.z) < HR) {
+              healSelf(6, 8);
+              FX.emit(new V3(player.pos.x, player.pos.y + 0.3, player.pos.z), { count: 10, c1: '#9dffb0', c2: '#fff3b8', speed: 0.6, up: 2.5, jitter: 0.7, life: 0.8, size: 0.2, drag: 0.6 });
+            }
+          }
+        }
+        if (t >= DUR + 1) { disposeObj(tree.g); return false; }
+        return true;
+      }, [tree.g]);
+    },
+    // 巨神像: 目の前に大きな召喚陣を描き、天から光の柱を落として巨神を呼ぶ
+    titan(spec, aim) {
+      const c = casterPos();
+      const f = aim.dir.clone(); f.y = 0; if (f.lengthSq() < 1e-4) f.set(0, 0, -1); f.normalize();
+      const p = new V3(c.x + f.x * 5, 0, c.z + f.z * 5);
+      const b = W.bound(), r = Math.hypot(p.x, p.z); if (r > b - 3) { p.x *= (b - 3) / r; p.z *= (b - 3) / r; }
+      p.y = W.floorAt(p.x, p.z, c.y + 1);
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(11, 11), new THREE.MeshBasicMaterial({ map: FX.circleTex, color: 0xffcf6a, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
+      m.rotation.x = -Math.PI / 2; m.position.set(p.x, p.y + 0.07, p.z); scene.add(m);
+      const rem = !!CTX;
+      AU.charge(0.6);
+      let t = 0, spawned = false;
+      special((dt) => {
+        t += dt;
+        m.material.opacity = Math.min(0.95, t / 0.4) * (t > 1.6 ? Math.max(0, 1 - (t - 1.6) / 0.6) : 1);
+        m.rotation.z += dt * 1.4; m.scale.setScalar(0.5 + Math.min(1, t / 0.5) * 0.5);
+        if (!spawned) FX.emit(new V3(p.x + rand(-4, 4), p.y + 0.2, p.z + rand(-4, 4)), { count: 2, c1: '#ffcf6a', c2: '#ffffff', speed: 0.4, up: 5, life: 0.7, size: 0.35, drag: 0.5 });
+        if (!spawned && t >= 0.6) {
+          spawned = true;
+          beamVisual(new V3(p.x, p.y + 45, p.z), new V3(p.x, p.y, p.z), '#ffcf6a', '#ffffff', 2.6, 0.9);
+          FX.flash(new V3(p.x, p.y + 3, p.z), '#ffcf6a', 8, 40, 0.5);
+          FX.ring(new V3(p.x, p.y + 0.1, p.z), '#ffcf6a', 0.5, 9, 0.6);
+          FX.emit(new V3(p.x, p.y + 0.5, p.z), { count: 70, c1: '#8a6a4a', c2: '#ffcf6a', speed: 8, up: 5, gravity: 14, life: 1, size: 0.45 });
+          st.shake = Math.max(st.shake, 0.35 * near(p));
+          if (AU.summon) AU.summon('golem', spec.element, ap(p));
+          if (!rem && st.running) spawnSummon('titan', spec, p); // 相手の巨神は、相手から届く状態で出す
+        }
+        if (t >= 2.2) { scene.remove(m); m.geometry.dispose(); m.material.dispose(); return false; }
+        return true;
+      }, [m]);
+      if (!CTX) popup(ahead(2.5, 0.1), '巨神を召喚', 'ward');
+    },
+    // 不死鳥: 前へ飛び立ち、大きく旋回して戻ってくる。通り道の的を焼き、戻ったら回復
+    phoenix(spec, aim) {
+      const c0 = casterPos().clone();
+      const f = aim.dir.clone(); f.y = 0; if (f.lengthSq() < 1e-4) f.set(0, 0, -1); f.normalize();
+      const side = new V3(-f.z, 0, f.x);
+      const start = new V3(c0.x, c0.y + 2.2, c0.z).addScaledVector(f, 1.5);
+      // 狙った方向へまっすぐ 36m 飛び（1.3 秒）、大きく旋回して戻ってくる（1.9 秒）
+      const F = start.clone().addScaledVector(f, 36);
+      const Q1 = F.clone().addScaledVector(f, 14).addScaledVector(side, 13); Q1.y += 1.5;
+      const Q2 = start.clone().addScaledVector(f, 10).addScaledVector(side, 18); Q2.y += 1.5;
+      const bird = makePhoenix(); bird.g.position.copy(start); scene.add(bird.g);
+      const S = cleanSpec(spec, { burn: 2 });
+      const hit = new Set(spec.casterT ? [spec.casterT] : []);
+      const caster = CTX ? CTX.casterT : null, rem = !!CTX;
+      const back = () => (rem ? (caster && caster.alive ? caster.center.clone() : c0.clone().setY(c0.y + 1)) : new V3(player.pos.x, player.pos.y + 1.2, player.pos.z));
+      const T1 = 1.3, DUR = 3.2;
+      const at = (tt) => {
+        if (tt <= T1) { const u = tt / T1; return start.clone().lerp(F, u * (2 - u) * 0.15 + u * 0.85); }
+        return bez(F, Q1, Q2, back(), Math.min(1, (tt - T1) / (DUR - T1)));
+      };
+      AU.cast('fire'); AU.playSample('fire_wind', { vol: 0.6, rate: 0.8, dur: 1.6 });
+      let t = 0;
+      special((dt) => {
+        t += dt;
+        const u = Math.min(1, t / DUR), P3 = back();
+        const pos = at(t), nxt = at(Math.min(DUR, t + 0.06));
+        bird.g.position.copy(pos);
+        if (nxt.distanceToSquared(pos) > 1e-4) bird.g.lookAt(nxt);
+        const flap = 0.45 + Math.sin(t * 11) * 0.6; // V 字に持ち上げて羽ばたく（後ろから見ても翼の形がわかる）
+        bird.wings.forEach((w, i) => { w.rotation.z = (i ? 1 : -1) * flap; });
+        bird.tails.forEach((tl, i) => { tl.rotation.y = Math.sin(t * 9 + i) * 0.15; });
+        FX.emit(pos, { count: 3, c1: '#ff4a10', c2: '#ffb030', speed: 1.2, up: 0.5, jitter: 0.8, life: 0.5, size: 0.45, drag: 1.5 });
+        if (Math.random() < 0.5) FX.emit(pos, { count: 1, c1: '#fff0b0', c2: '#ff7a1a', speed: 2, up: 1.5, life: 0.9, size: 0.25, gravity: 3 });
+        for (const tg of targets) {
+          if (!tg.alive || hit.has(tg) || friendly(tg, spec)) continue;
+          if (Math.hypot(tg.center.x - pos.x, tg.center.z - pos.z) < 2.4 + tg.r && Math.abs(tg.center.y - pos.y) < 3.5) {
+            hit.add(tg);
+            hitTarget(tg, 50, S, { dir: nxt.clone().sub(pos) });
+            FX.emit(tg.center, { count: 30, c1: '#ff6a1a', c2: '#ffd24a', speed: 6, up: 2, life: 0.5, size: 0.5, drag: 3 });
+            AU.impact('fire', 2, ap(tg.center));
+          }
+        }
+        if (u >= 1) {
+          disposeObj(bird.g);
+          FX.ring(new V3(P3.x, P3.y - 1.1, P3.z), '#ff9a3a', 0.4, 4, 0.5);
+          FX.emit(P3, { count: 60, c1: '#ff6a1a', c2: '#fff0b0', speed: 3, up: 3, jitter: 0.8, life: 0.9, size: 0.4, drag: 1.2 });
+          FX.flash(P3, '#ffb040', 4, 12, 0.35);
+          if (!spec.remote) { healSelf(60, 40, ahead(2.5, -0.2)); whiteFlash('#ffb060', 0.2); }
+          return false;
+        }
+        return true;
+      }, [bird.g]);
+    },
+    // 時間遅延: 狙った場所に半径 10m の時の球を 8 秒張る（中では、張った人以外の時間が 1/5）
+    dilation(spec, aim) {
+      const c = groundPointOf(aim, 40); c.y = W.heightAt(c.x, c.z) + 1.2;
+      const R = 10, DUR = 8;
+      const d = { owner: okey(ownerKey(spec)), c: c.clone(), R, alive: true };
+      dilations.push(d);
+      const mat = rimSphereMat('#a8a2ff');
+      const sphere = new THREE.Mesh(new THREE.SphereGeometry(1, 48, 28), mat); sphere.position.copy(c); sphere.scale.setScalar(0.01); sphere.renderOrder = 8;
+      const face = new THREE.Mesh(new THREE.PlaneGeometry(R * 2, R * 2), new THREE.MeshBasicMaterial({ map: FX.circleTex, color: 0x7af0e0, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
+      face.rotation.x = -Math.PI / 2; face.position.set(c.x, c.y - 1.12, c.z);
+      // 時計の針（長針と短針）
+      const hands = new THREE.Group(); hands.position.set(c.x, c.y - 1.1, c.z);
+      const handMat = new THREE.MeshBasicMaterial({ color: 0xdff8ff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false });
+      const hl = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.04, R * 0.85), handMat); hl.position.z = R * 0.42; const hlP = new THREE.Group(); hlP.add(hl); hands.add(hlP);
+      const hs = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.04, R * 0.5), handMat); hs.position.z = R * 0.25; const hsP = new THREE.Group(); hsP.add(hs); hands.add(hsP);
+      const rings = [0, 1, 2].map((i) => {
+        const m = new THREE.Mesh(new THREE.TorusGeometry(R * 0.985, 0.05, 6, 80), new THREE.MeshBasicMaterial({ color: i === 1 ? 0x7af0e0 : 0xa8a2ff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
+        m.position.copy(c); m.rotation.set(i * 1.05, i * 0.7, 0); return m;
+      });
+      [sphere, face, hands, ...rings].forEach((o) => scene.add(o));
+      AU.cast('time'); AU.playSample('chant_b', { vol: 0.55, rate: 0.55, dur: 2.2 }); AU.playSample('converge', { vol: 0.4, rate: 0.6 });
+      let t = 0;
+      special((dt) => {
+        t += dt;
+        const k = t < 0.5 ? t / 0.5 : t > DUR ? Math.max(0, 1 - (t - DUR) / 0.5) : 1;
+        sphere.scale.setScalar(Math.max(0.01, R * (t < 0.5 ? 1 - Math.pow(1 - k, 3) : 1)));
+        mat.uniforms.uT.value = t; mat.uniforms.uA.value = k;
+        face.material.opacity = k * 0.45; handMat.opacity = k * 0.7; face.rotation.z -= dt * 0.05;
+        hlP.rotation.y -= dt * 0.9; hsP.rotation.y -= dt * 0.08;
+        rings.forEach((m, i) => { m.material.opacity = k * 0.6; m.rotation.y += dt * 0.12 * (i % 2 ? -1 : 1); m.rotation.x += dt * 0.05; });
+        // ゆっくり漂う光の粒
+        if (t < DUR && Math.random() < 0.8) {
+          const v = new V3(rand(-1, 1), rand(-0.5, 1), rand(-1, 1)).normalize().multiplyScalar(rand(1, R * 0.95));
+          FX.emit(c.clone().add(v), { count: 1, c1: '#a8a2ff', c2: '#7af0e0', speed: 0.15, life: 1.8, size: rand(0.15, 0.35), drag: 0.2 });
+        }
+        d.alive = t < DUR;
+        if (t >= DUR + 0.5) {
+          d.alive = false; const i = dilations.indexOf(d); if (i >= 0) dilations.splice(i, 1);
+          [sphere, face, ...rings].forEach((o) => { scene.remove(o); o.geometry.dispose(); o.material.dispose(); });
+          disposeObj(hands);
+          return false;
+        }
+        return true;
+      }, [sphere, face, hands, ...rings]);
+    },
+    // 完全反磁性: 15 秒のあいだ少し浮かび、まわり 3m に入った相手の弾をはね返し、近づいた敵を押し返す
+    meissner(spec) {
+      const owner = okey(ownerKey(spec)), isMe = owner === 'me';
+      const who = CTX ? CTX.casterT : selfT;
+      meissners.forEach((x) => { if (x.owner === owner) x.alive = false; }); // かけ直したら、前のものは消える
+      const m = { owner, who, R: 3, alive: true };
+      meissners.push(m);
+      const S = cleanSpec(spec, { knock: 1.2 });
+      const g = new THREE.Group(); scene.add(g);
+      const ring = new THREE.Mesh(new THREE.PlaneGeometry(6.4, 6.4), new THREE.MeshBasicMaterial({ map: FX.circleTex, color: 0x9fe4ff, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false }));
+      ring.rotation.x = -Math.PI / 2; ring.position.y = -1.5; g.add(ring);
+      const iceMat = new THREE.MeshStandardMaterial({ color: 0xdff8ff, emissive: 0x7fd8ff, emissiveIntensity: 0.9, flatShading: true, roughness: 0.2, metalness: 0.1, transparent: true, opacity: 0.9 });
+      const orbit = new THREE.Group(); g.add(orbit);
+      for (let k = 0; k < 6; k++) { const s = new THREE.Mesh(new THREE.OctahedronGeometry(isMe ? 0.09 : 0.16, 0), iceMat); const a = (k / 6) * Math.PI * 2; s.position.set(Math.cos(a) * (isMe ? 1.0 : 1.35), isMe ? -1.0 : 0, Math.sin(a) * (isMe ? 1.0 : 1.35)); s.scale.y = 1.6; orbit.add(s); }
+      let shell = null;
+      const lines = [];
+      if (!isMe) {
+        shell = makeWardMesh(1.7, 0xbff0ff); g.add(shell);
+        [0xff4a5a, 0x4a8bff].forEach((col, i) => { const l = new THREE.Mesh(new THREE.TorusGeometry(m.R, 0.035, 6, 60), new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false })); l.rotation.y = i * Math.PI / 2; g.add(l); lines.push(l); });
+      }
+      AU.cast('ice'); if (AU.barrier) AU.barrier('ice', 'sphere', null);
+      if (isMe) popup(ahead(2.5, 0.1), '完全反磁性 15秒', 'ward');
+      let t = 0, tick = 0.3;
+      special((dt) => {
+        t += dt;
+        const pos = meissnerPos(m);
+        if (!m.alive || t >= 15 || !pos) { m.alive = false; const i = meissners.indexOf(m); if (i >= 0) meissners.splice(i, 1); disposeObj(g); return false; }
+        g.position.copy(pos);
+        const blink = t > 13 ? 0.5 + 0.5 * Math.sin(t * 20) : 1;
+        orbit.rotation.y += dt * 2.2; ring.rotation.z += dt * 1.5; ring.material.opacity = 0.55 * blink;
+        if (shell) { shell.material.uniforms.uTime.value = t; shell.material.uniforms.uAlpha.value = 0.75 * blink; }
+        lines.forEach((l, i) => { l.rotation.x += dt * (1.2 + i * 0.4); l.material.opacity = 0.5 * blink; });
+        if (Math.random() < 0.5) FX.emit(pos.clone().add(new V3(rand(-1, 1), -1.2, rand(-1, 1))), { count: 1, c1: '#dff8ff', c2: '#7fd8ff', speed: 0.3, up: 0.8, life: 0.8, size: 0.15, drag: 1 });
+        // 近づいた敵を押し返す（練習場の的・召喚獣・相手）
+        tick -= dt;
+        if (tick <= 0) {
+          tick = 0.5;
+          for (const tg of targets) {
+            if (!tg.alive || tg === who || targetOwner(tg) === owner || friendly(tg, spec) || (tg.isPlayer && tg.netProt)) continue;
+            const v = tg.center.clone().sub(pos); v.y = 0; const dd = v.length();
+            if (dd < m.R + tg.r) {
+              if (dd > 1e-3) v.multiplyScalar(1 / dd); else v.set(1, 0, 0);
+              hitTarget(tg, 8, S, { dir: v, noCrit: true });
+              beamVisual(pos.clone().addScaledVector(v, 1.2), tg.center.clone(), '#7fd8ff', '#ffffff', 0.06, 0.18, true);
+            }
+          }
+        }
+        return true;
+      }, [g]);
+    },
+    // 賢者の石: 狙った場所に赤い石を生み、まわり 9m を黄金に変える
+    philosopher(spec, aim) {
+      const c = groundPointOf(aim, 40); c.y = W.heightAt(c.x, c.z);
+      const R = 9;
+      const circle = new THREE.Mesh(new THREE.PlaneGeometry(R * 2.2, R * 2.2), new THREE.MeshBasicMaterial({ map: FX.circleTex, color: 0xffcf4a, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
+      circle.rotation.x = -Math.PI / 2; circle.position.set(c.x, c.y + 0.07, c.z);
+      const stone = new THREE.Mesh(new THREE.OctahedronGeometry(0.6, 0), new THREE.MeshStandardMaterial({ color: 0xc8102a, emissive: 0xff2a3a, emissiveIntensity: 1.2, flatShading: true, roughness: 0.15, metalness: 0.5 }));
+      stone.scale.y = 1.4; stone.position.set(c.x, c.y + 2.4, c.z);
+      const glow = FX.glowSprite('#ff3a4a', 4); glow.position.copy(stone.position);
+      [circle, stone, glow].forEach((o) => scene.add(o));
+      const rem = !!CTX;
+      AU.secret(); AU.charge(1);
+      let t = 0, done = false;
+      const transmute = () => {
+        FX.ring(new V3(c.x, c.y + 0.1, c.z), '#ffd24a', 0.5, R * 1.1, 0.6);
+        FX.ring(new V3(c.x, c.y + 1.5, c.z), '#fff3b8', 0.5, R, 0.5, { vertical: true, lookAt: camera.position.clone() });
+        FX.emit(new V3(c.x, c.y + 2, c.z), { count: 220, c1: '#ffd24a', c2: '#fff3b8', speed: 11, up: 5, gravity: 12, drag: 0.6, life: 1.4, size: 0.3 });
+        FX.flash(new V3(c.x, c.y + 2, c.z), '#ffd24a', 10, 40, 0.6);
+        if (!rem) whiteFlash('#ffe9a0', 0.3);
+        AU.impact('metal', 4, ap(c)); AU.playSample('cast_holy', { vol: 0.6, rate: 0.8, dur: 2 });
+        const S = cleanSpec(spec, { freeze: 1.2 });
+        for (const tg of aliveTargets()) {
+          if (tg === spec.casterT || friendly(tg, spec)) continue;
+          if (Math.hypot(tg.center.x - c.x, tg.center.z - c.z) > R + tg.r * 0.5) continue;
+          if (tg.isPlayer || (tg.isSummon && tg.puppet)) { hitTarget(tg, 120, S, { noCrit: true }); continue; }
+          if (spec.remote) continue;
+          tg.goldT = 4;
+          if (tg.hp <= 150 && !tg.isSummon) {
+            // 弱い的は黄金に変わって砕ける（得点 2 倍）
+            if (spec.rec) spec.rec.add(Math.max(0, tg.hp));
+            tg.golden = true;
+            popup(tg.center.clone().add(new V3(0, 1, 0)), '黄金化', 'pierce');
+            tg.hp = 0; drawBar(tg);
+            killTarget(tg);
+          } else hitTarget(tg, 120, S, { noCrit: true });
+        }
+      };
+      special((dt) => {
+        t += dt;
+        circle.material.opacity = Math.min(0.9, t / 0.5 * 0.9) * (t > 1.4 ? Math.max(0, 1 - (t - 1.4) / 0.6) : 1);
+        circle.rotation.z += dt * (done ? 0.6 : 2.4);
+        stone.rotation.y += dt * 3; stone.position.y = c.y + 2.4 + Math.sin(t * 4) * 0.12;
+        const sk = done ? Math.max(0.01, 1 - (t - 1) / 0.3) : 0.3 + Math.min(1, t) * 0.7;
+        stone.scale.set(sk, sk * 1.4, sk); glow.scale.setScalar(4 * sk + (done ? 0 : Math.sin(t * 20) * 0.3));
+        if (!done) {
+          const a = rand(0, Math.PI * 2), r = rand(3, R);
+          FX.emit(new V3(c.x + Math.cos(a) * r, c.y + 0.3, c.z + Math.sin(a) * r), { count: 1, c1: '#ffd24a', c2: '#fff3b8', speed: 0.5, up: 2, life: 0.7, size: 0.25, drag: 0.5 });
+          if (t >= 1) { done = true; transmute(); }
+        }
+        if (t >= 2) { [circle, stone].forEach((o) => { scene.remove(o); o.geometry.dispose(); o.material.dispose(); }); scene.remove(glow); return false; }
+        return true;
+      }, [circle, stone, glow]);
     },
   };
 
@@ -2910,6 +3592,7 @@
     if (l > 1) { fx /= l; fz /= l; }
     let speed = (k.ShiftLeft || k.ShiftRight ? 11 : 7);
     if (M.on && M.slowT > 0) speed *= M.slowHard ? 0.3 : 0.55; // 凍結・氷で動きが遅くなる
+    if (dilations.length && timeK(player.pos, 'me') < 1) speed *= 0.3;    // 相手の時間遅延の球の中
     if (!dead) speed *= moveBoost();                             // 纏い・迅速・飛翔で速くなる
     const sin = Math.sin(player.yaw), cos = Math.cos(player.yaw);
     player.pos.x += (fx * cos + fz * sin) * speed * dt;
@@ -2921,7 +3604,7 @@
     if (r > bound) { player.pos.x *= bound / r; player.pos.z *= bound / r; }
     W.pushOut(player.pos, 0.45);
     // 足もとの面: 地面のほか、岩・木箱・壁・石柱・魔法の壁の上にも立てる
-    const floor = W.floorAt(player.pos.x, player.pos.z, player.pos.y);
+    const floor = W.floorAt(player.pos.x, player.pos.z, player.pos.y) + (meissnerOf('me') ? 0.55 : 0); // 完全反磁性: 少し浮く
     player.floor = floor;
     if (SUP.flyT > 0 && !dead) {
       // 飛翔: Space で上昇、C で下降、どちらも押さなければその高さにとどまる
@@ -2979,12 +3662,13 @@
   function updateAimMarker() {
     const spec = st.slots[st.slot];
     const areaForms = { rain: 1, mist: 1, vortex: 1, lob: 1, meteor: 1 };
-    if (!spec || !(areaForms[spec.form] || spec.secret === 'cumulo' || spec.secret === 'horizon') || st.paused) { aimMarker.visible = false; return; }
+    const SECRET_AREA = { cumulo: 10, horizon: 10, yggdrasil: 12, dilation: 10, philosopher: 9 };
+    if (!spec || !(spec.secret ? SECRET_AREA[spec.secret] : areaForms[spec.form]) || st.paused) { aimMarker.visible = false; return; }
     const aim = getAim(70);
     const p = spec.form === 'lob' && aim.target ? aim.target.pos.clone() : groundPointOf(aim, spec.form === 'lob' ? 50 : 45);
     aimMarker.visible = true;
     aimMarker.position.set(p.x, W.heightAt(p.x, p.z) + 0.07, p.z);
-    const r = spec.form === 'rain' || spec.form === 'meteor' ? spec.area : spec.secret ? 10 : spec.radius;
+    const r = spec.secret ? SECRET_AREA[spec.secret] : spec.form === 'rain' || spec.form === 'meteor' ? spec.area : spec.radius;
     aimMarker.scale.setScalar(r);
     aimMarker.material.color.set(colorsOf(spec)[0]);
     aimMarker.rotation.z += 0.01;
@@ -2994,7 +3678,10 @@
     st.time += dt;
     for (let i = timers.length - 1; i >= 0; i--) if (timers[i].t <= st.time) { const fn = timers[i].fn; timers.splice(i, 1); fn(); }
     st.mp = Math.min(st.mpMax, st.mp + st.mpRegen * dt);
-    for (let i = 0; i < st.cds.length; i++) st.cds[i] = Math.max(0, st.cds[i] - dt);
+    const inDil = dilations.length > 0 && M.on && timeK(player.pos, 'me') < 1; // 相手の時間遅延の中では、魔法の待ち時間も遅れる
+    if (inDil && !st.inDil) popup(ahead(2.4, 0.4), '時間が遅れている', 'pvp');
+    st.inDil = inDil;
+    for (let i = 0; i < st.cds.length; i++) st.cds[i] = Math.max(0, st.cds[i] - dt * (inDil ? 0.3 : 1));
     for (const k in st.charges) { const c = st.charges[k]; if (c.n < (c.max || MG.SLOT_CHARGES)) { c.t += dt; if (c.t >= MG.RECHARGE_SEC) { c.n++; c.t = 0; } } else c.t = 0; }
     st.gcd = Math.max(0, st.gcd - dt);
     if (st.comboT > 0) { st.comboT -= dt; if (st.comboT <= 0) st.combo = 0; }
@@ -3397,6 +4084,11 @@
     hasCtx: () => CTX !== null,
     sup: SUP,
     meteorCircles: () => meteorCircles,
+    dilations: () => dilations.filter((d) => d.alive).map((d) => ({ owner: d.owner, x: d.c.x, z: d.c.z, R: d.R })),
+    meissners: () => meissners.filter((m) => m.alive).map((m) => ({ owner: m.owner })),
+    timeK: (x, y, z, owner) => timeK(new V3(x, y, z), owner === undefined ? null : owner),
+    projList: () => projs.map((p) => ({ x: p.pos.x, y: p.pos.y, z: p.pos.z, vx: p.vel.x, vy: p.vel.y, vz: p.vel.z, reflected: !!p.reflected, owner: okey(ownerKey(p.spec)) })),
+    floatH: () => Math.round((player.pos.y - W.floorAt(player.pos.x, player.pos.z, player.pos.y)) * 100) / 100,
     leftovers: () => scene.children.filter((o) => o.userData.special).length, // 演出の物体が場面に残っている数
     startChallenge: (sec) => G.startChallenge(sec),
     rocks: () => projs.filter((p) => p.kind === 'meteor').length,
