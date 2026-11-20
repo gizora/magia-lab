@@ -339,3 +339,16 @@ node outputs/20261118-223500-mgc/tests/run-match.js checks/20261118-223500-mgc-v
 ```
 node ../Office/tools/check-app.js outputs/20261118-223500-mgc/index.html checks/20261118-223500-mgc-v21 outputs/20261118-223500-mgc/tests/scenario.json
 ```
+
+公開サイトそのものを確かめるときは、環境変数 `MAGIA_URL` に公開 URL を入れて同じスクリプトを動かします（サーバーは起動しません）。
+
+```
+MAGIA_URL=https://gizora.github.io/magia-lab/ node outputs/20261118-223500-mgc/tests/run-localhost.js checks/20261118-223500-mgc-v21-site
+MAGIA_URL=https://gizora.github.io/magia-lab/ node outputs/20261118-223500-mgc/tests/run-match.js checks/20261118-223500-mgc-v21-site-match
+```
+
+## 公開サイトの更新
+
+このフォルダーは GitHub のリポジトリ `gizora/magia-lab`（公開）とつながっていて、`main` ブランチがそのまま GitHub Pages で公開されます。`tests/` は `.gitignore` で除いています。
+- 更新するときは、このフォルダーで `git add -A`・`git commit`・`git push` を行います。1分ほどで公開サイトに反映されます。
+- このリポジトリのコミットには、GitHub の非公開用アドレス（noreply）を使う設定にしています（`git config user.email`）。個人のメールアドレスは公開されません。
