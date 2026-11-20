@@ -309,7 +309,8 @@ tests/visual.json        魔法ごとの見た目を撮るシナリオ
 - **PeerJS 1.5.4**（MIT）: 合言葉でつなぐときの顔合わせに使う WebRTC のライブラリ。つなぎ役には、PeerJS の無料公開サーバー（0.peerjs.com）を使います。`vendor/peerjs/`
 - **効果音の素材**（第22版）: `ゲーム素材/` の mp3 12 個を、切り出して音量をそろえ、`js/sfx-data.js` に入れて使っています。
   - Pixabay（Pixabay Content License）: Dragon Studio「Epic Spell Impact」「Frost Spell Impact」「Holy Spell Cast」、yodguard「Fire Magic 3」「Fire Magic 5」
-  - 日本語名の 7 つ（収束・氷魔法・炎の風1・着火1・電撃魔法2・魔法詠唱1・魔法詠唱2）: 入手元を確認中
+  - 効果音：Springin’ Sound Stock（https://www.springin.org/sound-stock/ 、無料・商用可・クレジットは任意）: 収束・氷魔法・炎の風1・着火1・電撃魔法2・魔法詠唱1・魔法詠唱2
+  - どちらの規約も、素材そのものの再配布は禁止です。そのため元の mp3（`ゲーム素材/`）は公開リポジトリに入れず、加工した音だけを `js/sfx-data.js` の中に入れています（Springin’ Sound Stock の「素材ファイルは目立ちにくい配置に」というお願いにも合わせています）。
 - **Effekseer 公式サンプルエフェクト**（CC0）: NextSoft・Pierre・AndrewFM の作品。`effects/`（クレジットは effects/CREDITS.md とメニュー下部）
 
 - **three.js r149**（MIT ライセンス）: 3D 描画。`vendor/` に同梱しているので、オフラインでも動きます。
