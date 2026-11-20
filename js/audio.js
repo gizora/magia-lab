@@ -1,4 +1,4 @@
-// 効果音と環境音。音声ファイルは使わず、Web Audio API でその場で合成する
+// 効果音と環境音。Web Audio API でその場で合成した音に、第22版から音の素材（js/sfx-data.js）を重ねる
 // 迫力を出すために: 残響（ホールのような響き）・ひずみ・重低音・ゆらぎ（炎のちらつき）を重ねる
 // 着弾・命中の音は属性ごとに作り分け、鳴った場所に合わせて左右と音量を変える
 (function () {
@@ -8,6 +8,10 @@
   let ctx = null, master = null, sfxBus = null, ambBus = null, revIn = null;
   let white = null, brown = null;
   let enabled = true;
+  let synthK = 1;            // 合成した音の大きさ（素材の音を重ねるときは小さくする）
+  const samples = {};        // 素材の音（解読済みの AudioBuffer）
+  let sampleVoices = 0;      // 今鳴っている素材の音の数（鳴らしすぎないように）
+  const MAX_VOICES = 16;
   const lastPlay = {};
   const shapers = {};
 
@@ -57,11 +61,54 @@
       const w = white.getChannelData(0), b = brown.getChannelData(0);
       let last = 0;
       for (let i = 0; i < len; i++) { const r = Math.random() * 2 - 1; w[i] = r; last = (last + 0.02 * r) / 1.02; b[i] = last * 3.5; }
+      decodeSamples();
     }
     if (ctx.state === 'suspended') { const p = ctx.resume(); if (p && p.catch) p.catch(() => {}); }
   }
 
   function ready() { return ctx && enabled && ctx.state === 'running'; }
+
+  // ---- 音の素材（第22版） ----
+  // js/sfx-data.js の mp3（base64）を解読しておく。解読が終わるまでは、合成した音だけが鳴る
+  function decodeSamples() {
+    const data = MG.SFX_DATA || {};
+    Object.keys(data).forEach((key) => {
+      try {
+        const bin = atob(data[key]); const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        const done = (buf) => { if (buf) samples[key] = buf; };
+        const pr = ctx.decodeAudioData(bytes.buffer, done, () => {});
+        if (pr && pr.then) pr.then(done).catch(() => {});
+      } catch (e) { /* この素材は使わない */ }
+    });
+  }
+  // 素材を鳴らす。o: { rate（速さ＝音の高さ）, offset（何秒目から）, dur（何秒分）, vol, delay, dest（出口）, rev（残響へ送る量）, fadeIn, lp（こもらせる）}
+  function sample(key, o) {
+    const buf = samples[key];
+    if (!buf || sampleVoices >= MAX_VOICES) return false;
+    o = o || {};
+    const rate = o.rate || 1, off = Math.min(buf.duration - 0.05, o.offset || 0);
+    const len = Math.min(o.dur || buf.duration, buf.duration - off), real = len / rate;
+    const t0 = now() + (o.delay || 0), vol = Math.max(0.0002, o.vol == null ? 0.8 : o.vol);
+    const src = ctx.createBufferSource(); src.buffer = buf; src.playbackRate.value = rate;
+    const g = ctx.createGain();
+    const fi = Math.min(o.fadeIn || 0, real * 0.5), fo = Math.min(0.3, real * 0.3);
+    g.gain.setValueAtTime(fi ? 0.0002 : vol, t0);
+    if (fi) g.gain.exponentialRampToValueAtTime(vol, t0 + fi);
+    g.gain.setValueAtTime(vol, Math.max(t0 + fi, t0 + real - fo));
+    g.gain.exponentialRampToValueAtTime(0.0002, t0 + real);
+    let node = src;
+    if (o.lp) { const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = o.lp; node.connect(f); node = f; }
+    node.connect(g); g.connect(o.dest || sfxBus);
+    if (o.rev) { const w = ctx.createGain(); w.gain.value = o.rev; g.connect(w); w.connect(revIn); }
+    src.start(t0, off, len + 0.02);
+    sampleVoices++;
+    src.onended = () => { sampleVoices = Math.max(0, sampleVoices - 1); try { g.disconnect(); } catch (e) { /* */ } };
+    return true;
+  }
+  const has = (key) => !!samples[key];
+  // 合成した音を、k 倍の大きさで鳴らす（素材の音と重ねるとき）
+  function soft(k, fn) { const keep = synthK; synthK = k; try { fn(); } finally { synthK = keep; } }
   function throttle(key, ms) {
     const t = performance.now();
     if (lastPlay[key] && t - lastPlay[key] < ms) return false;
@@ -120,7 +167,7 @@
   }
 
   function tone(o) {
-    const dur = o.dur || 0.3, vol = o.vol == null ? 0.2 : o.vol;
+    const dur = o.dur || 0.3, vol = (o.vol == null ? 0.2 : o.vol) * synthK;
     const t0 = now() + (o.delay || 0);
     const osc = ctx.createOscillator();
     osc.type = o.type || 'sine';
@@ -139,7 +186,7 @@
   }
 
   function noise(o) {
-    const dur = o.dur || 0.3, vol = o.vol == null ? 0.2 : o.vol;
+    const dur = o.dur || 0.3, vol = (o.vol == null ? 0.2 : o.vol) * synthK;
     const t0 = now() + (o.delay || 0);
     const src = ctx.createBufferSource();
     src.buffer = o.brown ? brown : white;
@@ -344,21 +391,98 @@
     sound(d) { tone({ f0: 660, dur: 0.4, vol: 0.09, dest: d }); },
   };
 
+  // ---- 属性ごとの素材の音（第22版）。ない属性は、合成した音だけ ----
+  // 発動（自分の手元）
+  const SCAST = {
+    fire() { sample('ignite', { vol: 0.75 }); sample('fire_wind', { offset: 0.75, dur: 1.2, vol: 0.55, rate: 1.1 }); },
+    ice() { sample('ice', { offset: 0.45, dur: 1.4, vol: 0.7, rev: 0.25 }); },
+    lightning() { sample('thunder', { offset: 0.05, dur: 0.9, vol: 0.7 }); },
+    plasma() { sample('thunder', { offset: 0.05, dur: 0.9, vol: 0.6, rate: 0.75 }); },
+    light() { sample('cast_holy', { offset: 0.25, dur: 1.5, vol: 0.6, rate: 1.1, rev: 0.3 }); },
+    prism() { sample('cast_holy', { offset: 0.25, dur: 1.3, vol: 0.5, rate: 1.35, rev: 0.3 }); },
+    arcane() { sample('chant_a', { offset: 0.2, dur: 1.2, vol: 0.55, rate: 1.15, rev: 0.3 }); },
+    ether() { sample('chant_b', { offset: 0.1, dur: 1.5, vol: 0.55, rate: 0.9, rev: 0.4 }); },
+    time() { sample('chant_b', { offset: 0.1, dur: 1.1, vol: 0.45, rate: 1.25, rev: 0.3 }); },
+    crystal() { sample('ice', { offset: 0.45, dur: 1.1, vol: 0.6, rate: 1.35, rev: 0.3 }); },
+    steam() { sample('fire_wind', { offset: 0.6, dur: 1.0, vol: 0.45, rate: 1.4 }); },
+    wind() { sample('fire_wind', { offset: 0.5, dur: 1.0, vol: 0.4, rate: 1.6, lp: 5000 }); },
+    void() { sample('converge', { dur: 1.2, vol: 0.5, rate: 0.7, rev: 0.3 }); },
+    vacuum() { sample('converge', { dur: 0.9, vol: 0.45, rate: 1.2 }); },
+  };
+  // 着弾（s = 大きさ、d = 鳴った場所の出口）
+  let fireAlt = 0;
+  const SIMPACT = {
+    fire(s, d) { sample((fireAlt++ % 2) ? 'fire_a' : 'fire_b', { vol: 0.85 * s, rate: 0.9 + Math.random() * 0.2, dest: d }); },
+    ice(s, d) { sample('impact_frost', { offset: 1.15, dur: 2.4, vol: 0.8 * s, dest: d }); },
+    crystal(s, d) { sample('impact_frost', { offset: 1.15, dur: 1.8, vol: 0.7 * s, rate: 1.35, dest: d }); },
+    lightning(s, d) { sample('thunder', { dur: 1.8, vol: 0.8 * s, dest: d }); },
+    plasma(s, d) { sample('thunder', { dur: 1.6, vol: 0.7 * s, rate: 0.7, dest: d }); },
+    light(s, d) { sample('cast_holy', { offset: 0.35, dur: 1.2, vol: 0.55 * s, rate: 1.5, dest: d }); },
+    earth(s, d) { sample('impact_epic', { dur: 1.6, vol: 0.6 * s, rate: 0.9, dest: d }); },
+    metal(s, d) { sample('impact_epic', { dur: 1.4, vol: 0.5 * s, rate: 1.15, dest: d }); },
+    force(s, d) { sample('impact_epic', { dur: 1.7, vol: 0.65 * s, rate: 0.8, dest: d }); },
+    void(s, d) { sample('impact_epic', { dur: 2.0, vol: 0.6 * s, rate: 0.65, dest: d }); },
+    arcane(s, d) { sample('impact_epic', { dur: 1.2, vol: 0.4 * s, rate: 1.25, dest: d }); },
+  };
+
   const API = {
     unlock,
     get enabled() { return enabled; },
     get state() { return ctx ? ctx.state : 'none'; },
     elements: () => Object.keys(IMPACT),
-    info: () => ({ reverb: !!revIn, brownNoise: !!brown, state: ctx ? ctx.state : 'none' }),
+    info: () => ({ reverb: !!revIn, brownNoise: !!brown, state: ctx ? ctx.state : 'none', samples: Object.keys(samples).length, sampleKeys: Object.keys(samples), voices: sampleVoices }),
+    sampleCount: () => Object.keys(samples).length,
+    playSample: (key, o) => (ready() ? sample(key, o) : false),
     setEnabled(v) {
       enabled = !!v;
       if (master) master.gain.setTargetAtTime(enabled ? 0.9 : 0, ctx.currentTime, 0.05);
     },
-    cast(elem) { if (!ready() || !throttle('cast', 40)) return; (CAST[elem] || CAST.arcane)(); },
+    // 素材の音がある属性は、素材を鳴らし、合成した音は小さくして重ねる（素材がまだ読めていなければ、合成した音だけ）
+    cast(elem) {
+      if (!ready() || !throttle('cast', 40)) return;
+      const f = SCAST[elem], withS = !!f && Object.keys(samples).length > 0;
+      if (withS) f();
+      soft(withS ? 0.45 : 1, () => (CAST[elem] || CAST.arcane)());
+    },
     impact(elem, big, ap) {
       if (!ready() || !throttle('impact', 45)) return;
       const s = Math.min(1.6, 0.45 + (big || 1) * 0.15);
-      (IMPACT[elem] || IMPACT.arcane)(s, bus(ap, 0.3 + s * 0.15));
+      const d = bus(ap, 0.3 + s * 0.15), f = SIMPACT[elem], withS = !!f && Object.keys(samples).length > 0;
+      if (withS) f(s, d);
+      soft(withS ? 0.5 : 1, () => (IMPACT[elem] || IMPACT.arcane)(s, d));
+    },
+    // 召喚: 詠唱の声と、召喚獣ごとの音（ゴーレムは着地のドスン、精霊は光、獣はうなり声、使い魔は鈴）
+    summon(type, elem, ap) {
+      if (!ready()) return;
+      const d = bus(ap, 0.5);
+      sample('chant_b', { vol: 0.6, rate: type === 'wisp' ? 1.5 : 0.95, dur: type === 'wisp' ? 1.0 : 2.2, dest: d });
+      if (type === 'golem') {
+        sample('impact_epic', { delay: 0.35, vol: 0.7, rate: 0.7, dur: 2.0, dest: d });
+        soft(1, () => { thump(d, 1.2, 80, 22, 1.2); debris(d, 0.8, 14, 200, 1200, 0.9); });
+      } else if (type === 'spirit') {
+        sample('cast_holy', { offset: 0.2, delay: 0.2, vol: 0.5, rate: 1.2, dur: 1.8, dest: d });
+        [988, 1319, 1760].forEach((f, i) => tone({ f0: f, dur: 0.9, vol: 0.05, delay: 0.3 + i * 0.07, dest: d }));
+      } else if (type === 'beast') {
+        sample('fire_wind', { offset: 0.6, delay: 0.25, vol: 0.4, rate: 1.5, dur: 1.0, dest: d });
+        tone({ type: 'sawtooth', f0: 95, f1: 70, delay: 0.35, dur: 0.9, vol: 0.18, vib: 28, vibDepth: 14, lp: 700, dist: 4, dest: d });
+        noise({ brown: true, type: 'bandpass', f0: 350, q: 1.5, delay: 0.35, dur: 0.8, vol: 0.35, am: { freq: 30, depth: 0.6 }, dest: d });
+      } else {
+        [1568, 2093, 2637].forEach((f, i) => tone({ f0: f, dur: 0.6, vol: 0.04, delay: 0.1 + i * 0.05, dest: d }));
+      }
+    },
+    // 障壁: 物の壁は地面からせり上がる音、光の壁・ドーム・大盾は光の音
+    barrier(elem, shape, ap) {
+      if (!ready() || !throttle('barrier', 60)) return;
+      const d = bus(ap, 0.4);
+      const solid = shape === 'wall' && (elem === 'earth' || elem === 'metal' || elem === 'ice' || elem === 'crystal');
+      if (solid) {
+        if (elem === 'ice' || elem === 'crystal') sample('ice', { offset: 0.5, dur: 1.2, vol: 0.6, rate: elem === 'crystal' ? 1.3 : 1, dest: d });
+        else sample('impact_epic', { vol: 0.45, rate: elem === 'metal' ? 1.3 : 1.1, dur: 1.3, dest: d });
+        noise({ brown: true, type: 'lowpass', f0: 500, f1: 120, dur: 0.6, vol: 0.5, attack: 0.08, dest: d });
+      } else {
+        sample('cast_holy', { offset: 0.2, dur: shape === 'dome' ? 2.2 : 1.0, vol: 0.5, rate: shape === 'dome' ? 0.9 : 1.5, dest: d });
+        tone({ type: 'triangle', f0: 220, f1: 330, dur: 0.6, vol: 0.06, attack: 0.1, dest: d });
+      }
     },
     hit(elem, ap) {
       if (!ready() || !throttle('hit', 30)) return;
@@ -386,14 +510,16 @@
       [1047, 1319, 1568].forEach((f, i) => tone({ f0: f, dur: 0.35, vol: 0.08, delay: 0.05 + i * 0.06, rev: 0.4 }));
     },
     zap(ap) { if (!ready() || !throttle('zap', 50)) return; noise({ type: 'bandpass', f0: rnd(2000, 5000), q: 4, dur: 0.08, vol: 0.35, dist: 8, dest: bus(ap, 0.25) }); },
-    thunder(ap) { if (!ready() || !throttle('thunder', 120)) return; IMPACT.lightning(1.3, bus(ap, 0.6)); },
+    thunder(ap) { if (!ready() || !throttle('thunder', 120)) return; const d = bus(ap, 0.6); sample('thunder', { vol: 0.8, rate: 0.85 + Math.random() * 0.2, dest: d }); soft(has('thunder') ? 0.6 : 1, () => IMPACT.lightning(1.3, d)); },
     whoosh() { if (!ready() || !throttle('whoosh', 60)) return; noise({ type: 'bandpass', f0: 500, f1: 2200, q: 1.2, dur: 0.3, vol: 0.22, attack: 0.05 }); },
     rumble(dd) { if (!ready()) return; noise({ brown: true, type: 'lowpass', f0: 300, f1: 60, dur: dd || 1.5, vol: 0.6, attack: 0.3, am: { freq: 4, depth: 0.4 } }); tone({ f0: 45, f1: 30, dur: dd || 1.5, vol: 0.4, attack: 0.3 }); },
-    charge(dd) { if (!ready()) return; tone({ type: 'sawtooth', f0: 70, f1: 900, dur: dd || 1, vol: 0.12, lp: 2500, attack: 0.25, rev: 0.5 }); noise({ type: 'bandpass', f0: 200, f1: 5000, q: 2, dur: dd || 1, vol: 0.18, attack: 0.4, rev: 0.5 }); },
+    charge(dd) { if (!ready()) return; sample('converge', { vol: 0.5, rate: Math.max(0.6, Math.min(1.4, 2.3 / ((dd || 1) * 1.6))), rev: 0.5 }); tone({ type: 'sawtooth', f0: 70, f1: 900, dur: dd || 1, vol: 0.12, lp: 2500, attack: 0.25, rev: 0.5 }); noise({ type: 'bandpass', f0: 200, f1: 5000, q: 2, dur: dd || 1, vol: 0.18, attack: 0.4, rev: 0.5 }); },
     // 隠し魔法の大爆発（映画のような重ね方）
     bigBoom() {
       if (!ready()) return;
       const d = bus(null, 0.7);
+      sample('impact_epic', { vol: 1.0, rate: 0.72, dest: d });
+      sample('impact_epic', { vol: 0.5, rate: 1.0, delay: 0.04, dest: d });
       thump(d, 1.6, 110, 18, 2.0);
       noise({ brown: true, type: 'lowpass', f0: 3200, f1: 45, sweep: 2.2, dur: 3.2, vol: 1.0, dist: 8, dest: d });
       noise({ type: 'bandpass', f0: 1200, f1: 200, q: 0.5, dur: 1.2, vol: 0.5, dest: d });
@@ -401,24 +527,46 @@
       debris(d, 1.2, 30, 300, 2500, 2.5);
       crackles(d, 1, 25, 3);
     },
-    // 消滅領域: 球が生まれて、空気が吸いこまれ、耳鳴りのような静けさが広がる
+    // 消滅領域（第22版で壮大に）: 球が生まれると、空間が吸いこまれ（収束）、低い合唱と和音が少しずつ高まって、球が閉じる瞬間に向かう
     eraseStart() {
       if (!ready()) return;
-      const d = bus(null, 0.8);
-      noise({ brown: true, type: 'lowpass', f0: 100, f1: 3000, sweep: 0.6, dur: 0.7, vol: 0.6, attack: 0.5, dest: d });
-      tone({ f0: 40, f1: 55, dur: 1.8, vol: 0.4, attack: 0.4, dest: d });
-      tone({ f0: 2637, f1: 2793, dur: 1.6, vol: 0.035, attack: 0.5, vib: 5, vibDepth: 12, dest: d });
-      tone({ f0: 3951, dur: 1.4, vol: 0.02, attack: 0.6, dest: d });
-      API.duck(1.9);
+      const d = bus(null, 1.0);
+      API.duck(3.6);
+      // 素材: 収束（少し低く）と、深く落とした詠唱の声を2つ重ねる
+      sample('converge', { vol: 0.95, rate: 0.82, dest: d, rev: 0.6 });
+      sample('chant_a', { vol: 0.75, rate: 0.6, fadeIn: 0.35, dest: d, rev: 0.8 });
+      sample('chant_b', { vol: 0.5, rate: 0.5, delay: 0.35, fadeIn: 0.5, dest: d, rev: 0.8 });
+      // 空気が一気に吸いこまれる
+      noise({ brown: true, type: 'lowpass', f0: 100, f1: 3000, sweep: 0.6, dur: 0.8, vol: 0.6, attack: 0.5, dest: d });
+      noise({ type: 'bandpass', f0: 6000, f1: 400, sweep: 0.9, q: 1.2, dur: 0.9, vol: 0.3, attack: 0.05, dest: d });
+      // 地の底からせり上がる低音（球が閉じる 1.9 秒後に向かって大きくなる）
+      tone({ f0: 28, f1: 58, glide: 1.9, dur: 2.0, vol: 0.6, attack: 1.2, dest: d });
+      tone({ type: 'sawtooth', f0: 41, f1: 82, glide: 1.9, dur: 2.0, vol: 0.12, attack: 1.4, lp: 300, dest: d });
+      // 遠くの合唱のような和音（D・A・D・F・A・E）が、ゆっくり満ちていく
+      [146.8, 220, 293.7, 349.2, 440, 659.3].forEach((f, i) => {
+        tone({ type: 'sawtooth', f0: f, dur: 2.1, vol: 0.035, attack: 1.1 + i * 0.05, lp: 1400, vib: 5 + i * 0.3, vibDepth: 4, dest: d });
+        tone({ type: 'sawtooth', f0: f * 1.004, dur: 2.1, vol: 0.03, attack: 1.2 + i * 0.05, lp: 1100, dest: d });
+      });
+      // 逆回しのシンバルのような、高まっていくシャーという音
+      noise({ type: 'highpass', f0: 2500, f1: 7000, sweep: 1.9, dur: 1.95, vol: 0.32, attack: 1.8, dest: d });
+      // 耳鳴りのような高い音
+      tone({ f0: 2637, f1: 2793, dur: 1.9, vol: 0.03, attack: 0.5, vib: 5, vibDepth: 12, dest: d });
+      tone({ f0: 3951, dur: 1.7, vol: 0.018, attack: 0.6, dest: d });
     },
-    // 消滅領域: 球が閉じて、すべてが消える（澄んだ音と、ふっと抜ける低音）
+    // 消滅領域: 球が閉じて、すべてが消える（重い衝撃を2つの高さで重ね、地鳴りと、澄んだ鐘の余韻が長く残る）
     eraseEnd() {
       if (!ready()) return;
-      const d = bus(null, 0.9);
-      noise({ type: 'highpass', f0: 3000, dur: 0.08, vol: 0.5, dest: d });
-      [1568, 2349, 3136, 4699].forEach((f, i) => tone({ f0: f, dur: 2.2 - i * 0.3, vol: 0.06, delay: 0.02, dest: d }));
-      tone({ f0: 60, f1: 22, dur: 1.2, vol: 0.7, dest: d });
-      noise({ brown: true, type: 'lowpass', f0: 600, f1: 60, dur: 1.4, vol: 0.4, attack: 0.1, dest: d });
+      const d = bus(null, 1.0);
+      API.duck(4.5);
+      sample('impact_epic', { vol: 1.0, rate: 0.62, dest: d, rev: 0.9 });
+      sample('impact_epic', { vol: 0.65, rate: 0.95, delay: 0.02, dest: d });
+      sample('cast_holy', { offset: 0.3, vol: 0.4, rate: 0.75, delay: 0.5, fadeIn: 0.6, dest: d, rev: 1 });
+      noise({ type: 'highpass', f0: 3000, dur: 0.1, vol: 0.6, dest: d });
+      thump(d, 1.6, 70, 16, 2.4);
+      noise({ brown: true, type: 'lowpass', f0: 2400, f1: 40, sweep: 2.4, dur: 3.2, vol: 0.85, dist: 6, dest: d });
+      noise({ brown: true, type: 'lowpass', f0: 300, f1: 50, delay: 0.3, dur: 3.4, vol: 0.5, attack: 0.4, am: { freq: 2.5, depth: 0.5, type: 'triangle' }, dest: d });
+      [1568, 2349, 3136, 4699, 6272].forEach((f, i) => tone({ f0: f, dur: 3.6 - i * 0.4, vol: 0.055, delay: 0.05 + i * 0.03, dest: d }));
+      [196, 293.7, 392].forEach((f, i) => tone({ type: 'triangle', f0: f, dur: 3.2, vol: 0.05, attack: 0.3, delay: 0.25 + i * 0.08, dest: d }));
     },
     // まわりの音（BGM）を一時的に遠のかせる
     duck(sec) {

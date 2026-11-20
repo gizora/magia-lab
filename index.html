@@ -50,7 +50,7 @@
       <button type="button" id="btn-full" class="hud-btn" aria-pressed="false"><span id="btn-full-label">全画面</span></button>
       <button type="button" id="btn-craft" class="hud-btn"><span>魔法工房</span><kbd>E</kbd></button>
       <button type="button" id="btn-book" class="hud-btn"><span>図鑑</span><kbd>G</kbd></button>
-      <button type="button" id="btn-menu" class="hud-btn"><span>メニュー</span><kbd>Esc</kbd></button>
+      <button type="button" id="btn-menu" class="hud-btn"><span>メニュー</span><kbd>Tab</kbd></button>
     </div>
   </div>
 
@@ -180,6 +180,20 @@
         <div class="book-list" id="book-list" role="tabpanel" aria-labelledby="tab-r2"></div>
       </div>
       <div class="book-detail" id="book-detail" aria-live="polite"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== 一時停止（Esc でマウスの固定が外れたとき） ===== -->
+<section id="pause" class="overlay panel-overlay" role="dialog" aria-modal="true" aria-labelledby="pause-h" hidden>
+  <div class="panel menu">
+    <header class="panel-head">
+      <h2 id="pause-h">一時停止中</h2>
+    </header>
+    <div class="menu-body">
+      <p class="menu-note">Esc キーでマウスの固定を外しました。画面をクリックすると戻ります。</p>
+      <button type="button" class="btn-primary" data-close data-autofocus>戻る</button>
+      <button type="button" id="pause-menu" class="btn-secondary">メニューを開く（Tab）</button>
     </div>
   </div>
 </section>
@@ -455,6 +469,7 @@
 
 <script src="vendor/three.min.js"></script>
 <script src="js/words.js"></script>
+<script src="js/sfx-data.js"></script>
 <script src="js/audio.js"></script>
 <script src="js/fx.js"></script>
 <script src="vendor/effekseer/effekseer.min.js"></script>

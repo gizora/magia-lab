@@ -345,6 +345,7 @@
   // ======================================================================
   G.onLocalCast = (c) => N.send({ t: 'cast', c });
   G.onPlayerHit = (pid, h) => N.send({ t: 'hit', h }, { to: pid });
+  G.onSummonHit = (pid, h) => N.send({ t: 'shit', h }, { to: pid }); // 相手の召喚獣に当てたダメージを、その持ち主に送る
   G.onLocalDeath = (from, spell) => {
     const m = { t: 'kill', k: from || '', v: N.myId, s: spell };
     N.send(m);
@@ -371,6 +372,7 @@
     else if (m.t === 'fx') G.remoteFx(from, m.f);
     else if (m.t === 'cast') { if (G.remoteCast(from, m.c)) VS.remoteCasts++; }
     else if (m.t === 'hit') { if (m.to === N.myId) G.applyHit(from, m.h); }
+    else if (m.t === 'shit') { if (m.to === N.myId) G.applySummonHit(from, m.h); }
     else if (m.t === 'kill') { if (String(m.v) === from) onKill(m); }
     else if (m.t === 'end') { if (from === 'p0') finish(m); }
   };

@@ -38,10 +38,11 @@
   const FLY_MAX_H = 32;   // 飛翔で上がれる高さ（地面から）
   const FLY_SPEED = 1.3;  // 飛翔中の横の速さ（倍）
   const HASTE_MUL = 1.35; // 迅速の足の速さ（倍）
+  const JUMP_V = 8.6;     // ジャンプの勢い（約 1.85m 跳べる。木箱・2段の壁・小さめの岩に跳び乗れる）
   const ZAPPY = { lightning: 1, plasma: 1, magnet: 1 }; // 纏いで小さな稲妻が走る属性
   let lastHitFrom = null; // 今受けているダメージを撃った人（障壁の波紋を、その方向から広げるため）
   function resetSup() {
-    SUP.shield = 0; SUP.shieldMax = 0; SUP.shieldT = 0; SUP.shieldSpec = null; SUP.guardT = 0; SUP.regen = 0; SUP.regenT = 0;
+    SUP.shield = 0; SUP.shieldMax = 0; SUP.shieldT = 0; SUP.shieldSpec = null; SUP.shieldShape = null; SUP.guardT = 0; SUP.regen = 0; SUP.regenT = 0;
     SUP.flyT = 0; SUP.flyMax = 0; SUP.flySpec = null; SUP.glide = false; SUP.auraT = 0; SUP.auraMax = 0; SUP.auraSpec = null; SUP.hasteT = 0;
   }
   const M = (G.match = { on: false, myId: null, hp: PLAYER_HP, maxHp: PLAYER_HP, alive: true, deadT: 0, prot: 0, slowT: 0, slowHard: false, vulnT: 0, burnT: 0, burnDps: 0, burnAcc: 0, burnFrom: null, burnSpell: '', lastFrom: null, respawnSec: RESPAWN_SEC, hurtT: 0 });
@@ -377,6 +378,8 @@
       // 障壁の魔法（六角形の網目の球）
       const wd = makeWardMesh(1.3, 0x4a8bff);
       wd.position.y = 1.1; wd.visible = false; g.add(wd); t.ward = wd; t.wardA = 0; t.wardHit = 0;
+      // 大盾（体の前の、つぶした六角形の網目の盾）
+      const fr = makeWardMesh(1, 0x4a8bff); fr.scale.set(1.05, 1.25, 0.3); fr.position.set(0, 1.1, -0.8); fr.visible = false; face.add(fr); t.front = fr;
       // 相手が組んでいる魔法陣（紋章を重ねている・唱えている魔法）
       const cg = new THREE.Group(); cg.position.set(0, 1.3, -1.1); cg.rotation.y = Math.PI; cg.visible = false; face.add(cg);
       const ringM = new THREE.Mesh(new THREE.PlaneGeometry(3, 3), new THREE.MeshBasicMaterial({ map: FX.circleTex, color: 0xffffff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
@@ -428,11 +431,13 @@
       const want = t.netWard && t.alive ? 1 : 0;
       t.wardA += (want - t.wardA) * Math.min(1, dt * (want ? 7 : 5));
       t.wardHit = Math.max(0, t.wardHit - dt * 1.6);
-      t.ward.visible = t.wardA > 0.01;
-      if (t.ward.visible) {
-        const U = t.ward.material.uniforms;
+      const shown = t.netWardFront && t.front ? t.front : t.ward;
+      t.ward.visible = shown === t.ward && t.wardA > 0.01;
+      if (t.front) t.front.visible = shown === t.front && t.wardA > 0.01;
+      if (shown.visible) {
+        const U = shown.material.uniforms;
         U.uAlpha.value = t.wardA; U.uTime.value = st.time; U.uHit.value = t.wardHit; U.uLow.value = t.netWardLow ? 1 : 0;
-        t.ward.scale.setScalar(0.7 + t.wardA * 0.3);
+        if (shown === t.ward) t.ward.scale.setScalar(0.7 + t.wardA * 0.3);
       }
     }
     if (t.circle) updateAvatarCircle(t, dt);
@@ -512,7 +517,7 @@
     g.fillStyle = r > 0.5 ? '#5dff9a' : r > 0.25 ? '#ffd24a' : '#ff5a5a';
     g.fillRect(2, 2, 124 * r, 12);
     t.btex.needsUpdate = true;
-    t.bar.visible = t.isPlayer ? t.alive && !t.isSelf : t.hp < t.maxHp && t.alive;
+    t.bar.visible = t.isPlayer ? t.alive && !t.isSelf : t.isSummon ? t.alive : t.hp < t.maxHp && t.alive;
   }
 
   function pickType() {
@@ -558,6 +563,7 @@
     for (let i = targets.length - 1; i >= 0; i--) {
       const t = targets[i];
       if (t.isPlayer) { updatePlayerTarget(t, dt); continue; }
+      if (t.isSummon) { if (updateSummon(t, dt)) { const j = targets.indexOf(t); removeTargetObj(t); if (j >= 0) targets.splice(j, 1); } continue; }
       if (!t.alive && t.pivot) {
         // 物理で吹き飛んだ的: しばらく転がってから小さくなって消える
         t.dead += dt;
@@ -673,6 +679,8 @@
     if (!t || !t.alive) return 0;
     o = o || {};
     if (spec && spec.casterT && t === spec.casterT) return 0; // 自分の魔法は自分に当たらない
+    if (t.isSummon && friendly(t, spec)) return 0;             // 自分の召喚獣にも当たらない
+    if (t.isSummon && t.puppet) return hitPuppet(t, dmg, spec, o); // 相手の召喚獣: ダメージを持ち主に送る
     if (t.isPlayer) return hitPlayer(t, dmg, spec, o);
     if (spec && spec.remote) return 0;                          // 相手の魔法は見た目だけ
     if (o.dir) t.lastDir = o.dir.clone();
@@ -749,6 +757,7 @@
   function killTarget(t, opt) {
     opt = opt || {};
     if (!t.alive || t.isPlayer) return;
+    if (t.isSummon) { summonDie(t, false); return; }
     t.alive = false; t.dead = 0; t.bar.visible = false;
     st.kills++;
     st.combo = st.comboT > 0 ? st.combo + 1 : 1;
@@ -785,10 +794,10 @@
   }
 
   function aliveTargets() { return targets.filter((t) => t.alive); }
-  function nearestTarget(p, maxD, exclude, filter) {
+  function nearestTarget(p, maxD, exclude, filter, spec) {
     let best = null, bd = maxD;
     for (const t of targets) {
-      if (!t.alive || (exclude && exclude.has(t)) || (filter && !filter(t))) continue;
+      if (!t.alive || (exclude && exclude.has(t)) || (filter && !filter(t)) || (spec && friendly(t, spec))) continue;
       const d = t.center.distanceTo(p);
       if (d < bd) { bd = d; best = t; }
     }
@@ -806,7 +815,7 @@
     const dir = _dir.clone();
     let best = null, bestT = range, ground = false;
     for (const t of targets) {
-      if (!t.alive || t.isSelf) continue;
+      if (!t.alive || t.isSelf || (t.isSummon && t.ownerKey === 'me')) continue;
       const oc = t.center.clone().sub(origin);
       const tca = oc.dot(dir); if (tca < 0) continue;
       const d2 = oc.lengthSq() - tca * tca, r = t.r * 1.15;
@@ -814,7 +823,7 @@
       const tt = tca - Math.sqrt(r * r - d2);
       if (tt < bestT) { bestT = tt; best = t; }
     }
-    const pt = W.raycast(origin, dir, bestT);
+    const pt = W.raycast(origin, dir, bestT, 'me'); // 相手の魔法の壁にも、狙いが止まる
     if (pt != null) { bestT = pt; best = null; }
     if (!best && pt == null && dir.y < -0.001) { const tg = -origin.y / dir.y; if (tg < bestT) { bestT = tg; ground = true; } }
     const point = origin.clone().addScaledVector(dir, bestT);
@@ -837,7 +846,7 @@
   function nearestToRay(aim, maxAngle, range) {
     let best = null, bestA = maxAngle;
     for (const t of targets) {
-      if (!t.alive || (CTX ? t === CTX.casterT : t.isSelf)) continue;
+      if (!t.alive || (CTX ? t === CTX.casterT : t.isSelf) || (t.isSummon && t.ownerKey === (CTX ? String(CTX.casterT.pid) : 'me'))) continue;
       const v = t.center.clone().sub(aim.origin); const d = v.length(); if (d > range) continue;
       const a = v.normalize().angleTo(aim.dir);
       if (a < bestA) { bestA = a; best = t; }
@@ -888,6 +897,7 @@
       if (dd > 0) hitTarget(t, dd, spec, { dir: t.center.clone().sub(pp) });
     }
     if (spec.pull > 0) pullAt(pp, radius * 2.5, spec.pull);
+    if (!o.noBarrier) W.barriersNear(pp, radius).forEach((wb) => { if (wb.game) damageBarrier(wb.game, dmg * 0.8, pp, spec); }); // 爆風は魔法の壁にも当たる
     if (spec.destroy) W.blast(pp, radius, dmg * 1.2);
     if (!o.noEfk) EF.impact(e, pp, radius);
   }
@@ -1041,7 +1051,7 @@
     extras(t, p.spec, p.dmg, p.pos.clone(), p);
     if (p.pierce > 0) { p.pierce--; return false; }
     if (p.bounce > 0) {
-      const next = nearestTarget(p.pos, 26, p.hit);
+      const next = nearestTarget(p.pos, 26, p.hit, null, p.spec);
       if (next) {
         p.bounce--;
         const sp = Math.max(25, p.vel.length());
@@ -1086,7 +1096,7 @@
       if (p.homing > 0) {
         const sp = p.vel.length();
         const fwd = p.vel.clone().normalize();
-        const tg = nearestTarget(p.pos, 50, p.hit, (t) => t.center.clone().sub(p.pos).normalize().dot(fwd) > 0.2);
+        const tg = nearestTarget(p.pos, 50, p.hit, (t) => t.center.clone().sub(p.pos).normalize().dot(fwd) > 0.2, p.spec);
         if (tg) {
           const want = tg.center.clone().sub(p.pos).normalize();
           fwd.lerp(want, Math.min(1, p.homing * dt * 2)).normalize();
@@ -1094,6 +1104,7 @@
         }
       }
       p.vel.y -= p.gravity * dt;
+      const prevPos = p.pos.clone();
       p.pos.addScaledVector(p.vel, dt);
       p.glow.position.copy(p.pos); p.core.position.copy(p.pos);
       if (p.kind === 'orb') { const s = p.size * (5 + Math.sin(p.age * 12) * 0.6); p.glow.scale.setScalar(s); }
@@ -1106,8 +1117,19 @@
       trailOf(p.spec, p.pos, p.size * (p.kind === 'orb' ? 2.4 : 2.2), p.kind === 'orb' ? 4 : 2);
 
       let remove = false;
-      for (const t of targets) {
-        if (!t.alive || p.hit.has(t)) continue;
+      // 相手の魔法の壁・ドーム（動いた分の線分で調べ、すり抜けないようにする）
+      const bh = W.barrierOnSegment(prevPos, p.pos, p.size * 0.5, ownerKey(p.spec));
+      if (bh) {
+        const dv = p.pos.clone().sub(prevPos); if (dv.lengthSq() > 1e-8) dv.normalize();
+        p.pos.copy(prevPos).addScaledVector(dv, Math.max(0, bh.t - 0.05));
+        if (EXPLOSIVE[p.kind]) explode(p.pos, p.explodeR, p.dmg, p.spec, null, { noBarrier: true });
+        else smallBurst(p.pos, p.spec, p.isShard ? 0.5 : 0.8);
+        if (bh.barrier.game) damageBarrier(bh.barrier.game, p.dmg, p.pos.clone(), p.spec);
+        AU.blocked(ap(p.pos));
+        remove = true;
+      }
+      if (!remove) for (const t of targets) {
+        if (!t.alive || p.hit.has(t) || friendly(t, p.spec)) continue;
         if (p.pos.distanceTo(t.center) < t.r + p.size) { if (projHit(p, t)) { remove = true; break; } }
       }
       if (!remove) {
@@ -1161,13 +1183,13 @@
       if (spec.split > 0 && spec.form === 'chain') extras(t, Object.assign({}, spec, { chainHit: 0, pull: 0 }), dmg, t.center.clone(), null);
       if (spec.pull > 0) pullAt(t.center.clone(), 7, spec.pull);
       if (k < jumps) {
-        const next = nearestTarget(t.center, jumpRange, hitSet);
+        const next = nearestTarget(t.center, jumpRange, hitSet, null, spec);
         if (next) after(0.08, () => step(k + 1, t.center.clone(), next));
       }
     };
     if (first) step(0, fromPos, first);
     else if (origin) {
-      const next = nearestTarget(origin.center, jumpRange, hitSet);
+      const next = nearestTarget(origin.center, jumpRange, hitSet, null, spec);
       if (next) after(0.06, () => step(1, origin.center.clone(), next));
     }
   }
@@ -1200,7 +1222,7 @@
   // 障壁がこわれた: まわりに属性の衝撃を放つ
   function breakShield() {
     const spec = SUP.shieldSpec;
-    SUP.shield = 0; SUP.shieldT = 0; SUP.shieldSpec = null;
+    SUP.shield = 0; SUP.shieldT = 0; SUP.shieldSpec = null; SUP.shieldShape = null;
     if (!spec) return;
     const p = new V3(player.pos.x, player.pos.y + 1, player.pos.z);
     SUP.breaks++;
@@ -1212,7 +1234,8 @@
   // 受けるダメージ: 守護で半分、障壁で吸い取る。戻り値は HP から引く分
   function absorb(d) {
     if (SUP.guardT > 0) d *= 0.5;
-    if (SUP.shield > 0 && d > 0) {
+    // 大盾は、撃った人が自分の前にいるときだけ吸い取る
+    if (SUP.shield > 0 && d > 0 && (SUP.shieldShape !== 'front' || fromFront())) {
       const a = Math.min(SUP.shield, d);
       SUP.shield -= a; d -= a; SUP.hitT = 0.3;
       if (M.on && G.onFx && lastHitFrom) G.onFx({ k: 'wardHit', from: lastHitFrom }); // ほかの人の画面でも、当たった所から波紋が広がる
@@ -1221,7 +1244,7 @@
     return d;
   }
   function updateSupport(dt) {
-    if (SUP.shieldT > 0) { SUP.shieldT -= dt; if (SUP.shieldT <= 0) { SUP.shield = 0; SUP.shieldT = 0; SUP.shieldSpec = null; } }
+    if (SUP.shieldT > 0) { SUP.shieldT -= dt; if (SUP.shieldT <= 0) { SUP.shield = 0; SUP.shieldT = 0; SUP.shieldSpec = null; SUP.shieldShape = null; } }
     if (SUP.guardT > 0) SUP.guardT = Math.max(0, SUP.guardT - dt);
     if (SUP.regenT > 0) { const k = Math.min(dt, SUP.regenT); SUP.regenT -= dt; if (M.on && M.alive) M.hp = Math.min(M.maxHp, M.hp + SUP.regen * k); }
     SUP.hitT = Math.max(0, SUP.hitT - dt);
@@ -1285,16 +1308,561 @@
   const wardLow = () => SUP.shield > 0 && (SUP.shield / Math.max(1, SUP.shieldMax) < 0.35 || SUP.shieldT < 1.2);
   G.wardLow = wardLow;
 
+  // ======================================================================
+  //  障壁の形（第22版）: 壁・城壁・ドームは、その場に残る「魔法の壁」（W.addBarrier で当たり判定に入る）。
+  //  大盾（体の前）と球（体のまわり）は、今までどおり SUP.shield で受けるダメージを吸い取る
+  // ======================================================================
+  const barrierList = [];   // 立っている魔法の壁・ドーム
+  const barrierSeq = {};    // 同じ魔法から立てた壁の数（相手の画面と同じ番号をつけるため）
+  let castSerial = 0;       // 自分が放った魔法の通し番号（相手の画面で、同じ壁を指すため）
+  let castN = 0;            // いま発動している魔法の通し番号（相手の魔法を再現しているときは、相手の番号）
+  const ownerKey = (spec) => (spec && spec.remote) || 'me'; // 魔法を放った人（自分は 'me'、相手はその ID）
+  const SOLID_EL = { earth: 1, metal: 1, ice: 1, crystal: 1 }; // 見た目が「物」の壁になる属性（それ以外は光の網目の壁）
+  let hexTexC = null;
+  function hexTexture() {
+    if (hexTexC) return hexTexC;
+    // とがった頂点が上下の六角形を並べた模様（横 2 つ・縦 4 段で、端がつながる）
+    hexTexC = FX.canvasTex(128, 222, (g, w, h) => {
+      g.clearRect(0, 0, w, h);
+      g.strokeStyle = '#ffffff'; g.lineWidth = 4;
+      const R = 37;
+      for (let j = -1; j <= 4; j++) for (let i = -1; i <= 2; i++) {
+        const cx = i * 64 + (j % 2 ? 32 : 0), cy = j * 55.5;
+        g.beginPath();
+        for (let k = 0; k < 6; k++) { const a = Math.PI / 6 + (k * Math.PI) / 3; const x = cx + R * Math.cos(a) * 0.86, y = cy + R * Math.sin(a) * 0.86; if (k) g.lineTo(x, y); else g.moveTo(x, y); }
+        g.closePath(); g.stroke();
+      }
+    });
+    hexTexC.wrapS = hexTexC.wrapT = THREE.RepeatWrapping;
+    return hexTexC;
+  }
+  // 壁の見た目: 岩・鋼・氷・晶は「物」の壁、ほかの属性は六角形の網目が光る壁
+  function makeWallMesh(w, h, t, spec) {
+    const [c1, c2] = colorsOf(spec), e = spec.element, base = new THREE.Color(c1);
+    const g = new THREE.Group(); const mats = [];
+    if (SOLID_EL[e]) {
+      const geo = new THREE.BoxGeometry(w, h, t, Math.max(2, Math.round(w * 1.6)), Math.max(2, Math.round(h * 1.6)), 1);
+      if (e === 'earth') { const pa = geo.attributes.position; for (let i = 0; i < pa.count; i++) { const x = pa.getX(i), y = pa.getY(i), z = pa.getZ(i); pa.setXYZ(i, x + rand(-0.05, 0.05), y + rand(-0.05, 0.05), z * (0.75 + Math.random() * 0.5)); } geo.computeVertexNormals(); }
+      const mat = e === 'earth' ? new THREE.MeshStandardMaterial({ color: new THREE.Color('#6e5238').lerp(base, 0.25), roughness: 0.95, flatShading: true, emissive: base, emissiveIntensity: 0.06 })
+        : e === 'metal' ? new THREE.MeshStandardMaterial({ color: 0xa8b2c2, metalness: 0.85, roughness: 0.32, emissive: base, emissiveIntensity: 0.06 })
+        : e === 'ice' ? new THREE.MeshStandardMaterial({ color: 0x8fd8ff, roughness: 0.05, metalness: 0.3, emissive: 0x2a8cff, emissiveIntensity: 0.45 })
+        : new THREE.MeshStandardMaterial({ color: base, roughness: 0.2, metalness: 0.2, emissive: base, emissiveIntensity: 0.45, flatShading: true });
+      mat.transparent = true; mat.opacity = e === 'ice' ? 0.72 : e === 'crystal' ? 0.85 : 1;
+      mats.push(mat); g.add(new THREE.Mesh(geo, mat));
+      // 氷と晶は、ふちが白く光る（透きとおった板に見えるように）
+      if (e === 'ice' || e === 'crystal') {
+        const edge = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(w, h, t)), new THREE.LineBasicMaterial({ color: e === 'ice' ? 0xe8fbff : c2, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
+        g.add(edge); mats.push(edge.material);
+        const frost = new THREE.Mesh(new THREE.PlaneGeometry(w * 0.96, h * 0.96), new THREE.MeshBasicMaterial({ map: hexTexture(), color: e === 'ice' ? 0xbff0ff : c1, transparent: true, opacity: 0.25, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+        frost.position.z = t * 0.52; g.add(frost); mats.push(frost.material);
+      }
+    } else {
+      const tex = hexTexture().clone(); tex.needsUpdate = true; tex.repeat.set(w / 1.4, h / 1.25);
+      const net = new THREE.MeshBasicMaterial({ map: tex, color: c1, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+      const fill = new THREE.MeshBasicMaterial({ color: c1, transparent: true, opacity: 0.14, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+      g.add(new THREE.Mesh(new THREE.BoxGeometry(w, h, t), fill));
+      [-1, 1].forEach((sd) => { const p = new THREE.Mesh(new THREE.PlaneGeometry(w, h), net); p.position.z = sd * t * 0.51; g.add(p); });
+      const edge = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(w, h, t)), new THREE.LineBasicMaterial({ color: c2, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false }));
+      g.add(edge);
+      mats.push(net, fill, edge.material);
+    }
+    mats.forEach((m) => { m.userData.op0 = m.opacity; m.userData.ei0 = m.emissiveIntensity || 0; });
+    g.userData.mats = mats;
+    return g;
+  }
+  // o: { shape: 'wall' | 'dome', x, z, yaw, w, h, t, R, spec, hp, dur, owner, id }
+  function spawnBarrier(o) {
+    const gy = W.heightAt(o.x, o.z);
+    const [c1, c2] = colorsOf(o.spec);
+    let mesh, half = null;
+    if (o.shape === 'wall') {
+      mesh = makeWallMesh(o.w, o.h, o.t, o.spec);
+      mesh.rotation.y = o.yaw; mesh.scale.y = 0.05; mesh.position.set(o.x, gy + o.h * 0.025, o.z);
+      half = [o.w / 2, o.h / 2, o.t / 2];
+      const solid = SOLID_EL[o.spec.element];
+      FX.emit(new V3(o.x, gy + 0.2, o.z), { count: 34, c1: solid ? '#8a7a68' : c1, c2: solid ? c1 : c2, speed: 4, up: 4, gravity: 10, life: 0.8, size: 0.35, jitter: o.w * 0.4 });
+    } else {
+      mesh = makeWardMesh(o.R, c1);
+      mesh.material.uniforms.uAlpha.value = 0;
+      mesh.position.set(o.x, gy, o.z); mesh.scale.setScalar(0.3);
+      FX.ring(new V3(o.x, gy + 0.08, o.z), c1, 0.5, o.R, 0.5);
+    }
+    const wb = W.addBarrier({ shape: o.shape, mesh, half, R: o.R, owner: o.owner });
+    const b = { wb, shape: o.shape, spec: o.spec, hp: o.hp, maxHp: o.hp, t: 0, dur: o.dur, id: o.id, owner: o.owner, hitT: 0, gy, h: o.h || 0 };
+    wb.game = b;
+    barrierList.push(b);
+    if (AU.barrier) AU.barrier(o.spec.element, o.shape, ap(mesh.position));
+    return b;
+  }
+  function removeBarrier(b) {
+    W.removeBarrier(b.wb); disposeTree(b.wb.mesh);
+    const i = barrierList.indexOf(b); if (i >= 0) barrierList.splice(i, 1);
+  }
+  // 魔法の壁にダメージ（立てた人の魔法は当たらない）。こわれると、属性の衝撃を放つ
+  function damageBarrier(b, d, from, spec) {
+    if (!b || b.dead || ownerKey(spec) === b.owner) return 0;
+    d = Math.max(1, Math.round(d * ((spec && spec.mult) || 1)));
+    b.hp -= d; b.hitT = 1;
+    if (b.shape === 'dome' && from) { const U = b.wb.mesh.material.uniforms; U.uHitDir.value.copy(from).sub(b.wb.mesh.position).normalize(); }
+    if (from) popup(from.clone().add(new V3(0, 0.5, 0)), String(d), 'ward');
+    if (b.hp <= 0) breakBarrier(b, true);
+    return d;
+  }
+  function breakBarrier(b, shock) {
+    if (b.dead) return; b.dead = true;
+    const c = b.wb.mesh.position.clone(); if (b.shape === 'dome') c.y += b.wb.R * 0.45;
+    const [c1] = colorsOf(b.spec);
+    shatterFx(c, c1, b.shape === 'dome' ? b.wb.R * 0.6 : 1.4);
+    if (b.shape === 'wall' && SOLID_EL[b.spec.element]) FX.emit(c, { count: 40, c1: '#7a7468', c2: c1, speed: 6, up: 4, gravity: 14, life: 1.1, size: 0.35, jitter: b.wb.half[0] * 0.8 });
+    if (shock) explode(c, Math.min(6, b.spec.radius || 4), (b.spec.dmg || 0) * 0.3, Object.assign({}, b.spec, b.owner === 'me' ? { casterT: selfT } : { remote: b.owner }), null, { noBarrier: true });
+    if (b.owner === 'me' && M.on && G.onFx) G.onFx({ k: 'barBreak', id: String(b.id).split(':').slice(1).join(':') });
+    removeBarrier(b);
+  }
+  function updateBarriers(dt) {
+    for (let i = barrierList.length - 1; i >= 0; i--) {
+      const b = barrierList[i], m = b.wb.mesh;
+      b.t += dt; b.hitT = Math.max(0, b.hitT - dt * 2.5);
+      const rise = Math.min(1, b.t / 0.28), ease = 1 - Math.pow(1 - rise, 3);
+      const fade = b.t > b.dur - 0.5 ? Math.max(0, (b.dur - b.t) / 0.5) : 1;
+      const low = b.hp / b.maxHp < 0.35 || b.dur - b.t < 1.2;
+      if (b.shape === 'wall') {
+        m.scale.y = Math.max(0.05, ease); m.position.y = b.gy + b.h * m.scale.y / 2;
+        const flick = low ? 0.55 + 0.45 * Math.abs(Math.sin(st.time * 18 + i)) : 1;
+        m.userData.mats.forEach((mat) => { mat.opacity = mat.userData.op0 * fade * flick; if (mat.emissive) mat.emissiveIntensity = mat.userData.ei0 + b.hitT * 0.9; });
+      } else {
+        const U = m.material.uniforms;
+        U.uTime.value = st.time; U.uAlpha.value = Math.min(1, rise * 1.3) * fade * 0.9; U.uHit.value = b.hitT; U.uLow.value = low ? 1 : 0;
+        m.scale.setScalar(0.3 + 0.7 * ease);
+      }
+      if (b.t >= b.dur) {
+        FX.emit(m.position.clone().add(new V3(0, b.shape === 'dome' ? b.wb.R * 0.4 : 0, 0)), { count: 24, c1: colorsOf(b.spec)[0], c2: '#ffffff', speed: 2, up: 1.5, life: 0.6, size: 0.3, drag: 2 });
+        removeBarrier(b);
+      }
+    }
+  }
+  function clearBarriers() { barrierList.slice().forEach((b) => removeBarrier(b)); W.clearBarriers(); for (const k in barrierSeq) delete barrierSeq[k]; }
+  // 大盾: 撃った人が自分の前（左右 75° 以内）にいるときだけ吸い取る
+  function fromFront() {
+    const src = lastHitFrom ? avatars.get(lastHitFrom) : null;
+    if (!src) return false;
+    const v = new V3(src.pos.x - player.pos.x, 0, src.pos.z - player.pos.z); if (v.lengthSq() < 1e-4) return true;
+    v.normalize();
+    return v.x * -Math.sin(player.yaw) + v.z * -Math.cos(player.yaw) > 0.26;
+  }
+
+  // ======================================================================
+  //  召喚獣（第22版）: 的と同じ一覧（targets）に入れ、弾・爆発・光線の当たり判定をそのまま使う。
+  //  自分の召喚獣は自分の画面で動かし、位置と HP を相手に送る。相手の召喚獣は、届いた位置に置くだけ（puppet）。
+  //  召喚獣の攻撃のダメージも「撃った人（召喚した人）の画面」で決まる。相手の召喚獣に当てたダメージは、その持ち主に送る
+  // ======================================================================
+  const SUMMON_MAX = 3;
+  const SUMMON_TYPES = ['golem', 'spirit', 'beast', 'wisp'];
+  let summonSerial = 0;
+  const friendly = (t, spec) => !!(t && t.isSummon && t.ownerKey === ownerKey(spec)); // 自分の召喚獣（自分の魔法は当たらない）
+  function makeSummonModel(type, c1, c2, mats) {
+    const g = new THREE.Group(), parts = {};
+    const std = (o) => { const m = new THREE.MeshStandardMaterial(o); m.userData.baseEmissive = new THREE.Color(o.emissive || 0); m.userData.baseInt = o.emissiveIntensity == null ? 1 : o.emissiveIntensity; mats.push(m); return m; };
+    const C1 = new THREE.Color(c1), C2 = new THREE.Color(c2);
+    const box = (w, h, d, mat, x, y, z, parent) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat); m.position.set(x || 0, y || 0, z || 0); (parent || g).add(m); return m; };
+    const pivot = (x, y, z, parent) => { const p = new THREE.Group(); p.position.set(x, y, z); (parent || g).add(p); return p; };
+    if (type === 'golem') {
+      // 岩の巨人: 太い腕と脚、胸に属性の色の核、光る目
+      const stone = std({ color: new THREE.Color('#403d48').lerp(C1, 0.22), roughness: 0.9, flatShading: true, emissive: C1, emissiveIntensity: 0.1 });
+      const glow = std({ color: C2, emissive: C1, emissiveIntensity: 1.3, flatShading: true });
+      box(1.7, 1.45, 1.1, stone, 0, 1.75, 0);
+      box(1.2, 0.5, 0.9, stone, 0, 1.0, 0);
+      const core = new THREE.Mesh(new THREE.OctahedronGeometry(0.26, 0), glow); core.position.set(0, 1.85, 0.6); g.add(core); parts.core = core;
+      const head = pivot(0, 2.5, 0.1); box(0.85, 0.7, 0.8, stone, 0, 0.35, 0, head);
+      [-0.2, 0.2].forEach((x) => box(0.17, 0.09, 0.05, glow, x, 0.4, 0.41, head));
+      [-1, 1].forEach((sd) => { const r = new THREE.Mesh(new THREE.IcosahedronGeometry(0.42, 0), stone); r.position.set(sd * 0.95, 2.45, 0); g.add(r); });
+      parts.legs = [-0.45, 0.45].map((x) => { const p = pivot(x, 0.95, 0); box(0.58, 0.95, 0.68, stone, 0, -0.47, 0, p); return p; });
+      parts.arms = [-1, 1].map((sd) => { const p = pivot(sd * 1.15, 2.3, 0); box(0.52, 1.35, 0.58, stone, 0, -0.65, 0, p); box(0.72, 0.6, 0.72, stone, 0, -1.45, 0.05, p); return p; });
+      parts.glow = FX.glowSprite(c1, 1.4); parts.glow.position.copy(core.position); g.add(parts.glow);
+      // 体に走る、属性の色の光る筋（練習場の石像と見分けやすいように）
+      [[-0.5, 1.75, 0.56, 0.07, 0.9], [0.5, 1.75, 0.56, 0.07, 0.9], [0, 1.25, 0.56, 0.9, 0.06], [0, 2.3, 0.56, 1.2, 0.06]].forEach(([x, y, z, w, h]) => box(w, h, 0.03, glow, x, y, z));
+      parts.arms.forEach((a) => box(0.6, 0.08, 0.62, glow, 0, -1.05, 0, a));
+    } else if (type === 'beast') {
+      // 四つ足の獣: 背中に属性の色のたてがみ、光る目
+      const fur = std({ color: new THREE.Color('#2a2630').lerp(C1, 0.45), roughness: 0.75, flatShading: true, emissive: C1, emissiveIntensity: 0.15 });
+      const glow = std({ color: C2, emissive: C1, emissiveIntensity: 1.4, flatShading: true });
+      box(0.66, 0.58, 1.45, fur, 0, 0.88, -0.05);
+      box(0.74, 0.7, 0.55, fur, 0, 0.98, 0.5);
+      const head = pivot(0, 1.12, 0.88); parts.head = head;
+      box(0.48, 0.44, 0.52, fur, 0, 0, 0.1, head); box(0.3, 0.24, 0.36, fur, 0, -0.07, 0.46, head);
+      [-0.13, 0.13].forEach((x) => box(0.08, 0.06, 0.04, glow, x, 0.07, 0.37, head));
+      [-1, 1].forEach((sd) => { const ear = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.28, 4), fur); ear.position.set(sd * 0.16, 0.3, 0); head.add(ear); });
+      for (let k = 0; k < 5; k++) { const sp = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.34, 4), glow); sp.position.set(0, 1.25, 0.45 - k * 0.3); sp.rotation.x = -0.5; g.add(sp); }
+      const tail = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.8, 5), glow); tail.position.set(0, 1.02, -0.95); tail.rotation.x = -2.1; g.add(tail); parts.tail = tail;
+      parts.legs = [[-0.24, 0.5], [0.24, 0.5], [-0.24, -0.55], [0.24, -0.55]].map(([x, z]) => { const p = pivot(x, 0.72, z); box(0.17, 0.74, 0.2, fur, 0, -0.36, 0, p); return p; });
+    } else if (type === 'spirit') {
+      // 精霊: 宙に浮かぶ光の核と、まわりを回るかけら。下に光の尾
+      const core = std({ color: C2, emissive: C1, emissiveIntensity: 1.6, flatShading: true });
+      const m = new THREE.Mesh(new THREE.IcosahedronGeometry(0.42, 0), core); g.add(m); parts.core = m;
+      const tail = new THREE.Mesh(new THREE.ConeGeometry(0.32, 1.1, 8, 1, true), new THREE.MeshBasicMaterial({ color: c1, transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending, depthWrite: false }));
+      tail.rotation.x = Math.PI; tail.position.y = -0.75; g.add(tail);
+      parts.glow = FX.glowSprite(c1, 3.2); g.add(parts.glow);
+      const orbit = new THREE.Group(); g.add(orbit); parts.orbit = orbit;
+      for (let k = 0; k < 3; k++) { const s = new THREE.Mesh(new THREE.OctahedronGeometry(0.15, 0), core); const a = (k / 3) * Math.PI * 2; s.position.set(Math.cos(a) * 0.85, Math.sin(a * 2) * 0.15, Math.sin(a) * 0.85); orbit.add(s); }
+    } else {
+      // 使い魔: 小さな光の玉
+      const core = std({ color: C2, emissive: C1, emissiveIntensity: 1.8 });
+      g.add(new THREE.Mesh(new THREE.SphereGeometry(0.15, 12, 8), core));
+      parts.glow = FX.glowSprite(c1, 1.5); g.add(parts.glow);
+    }
+    // 足もとの召喚紋（属性の色の魔法陣。自分や相手の召喚獣だとひと目でわかるように）
+    if (type === 'golem' || type === 'beast') {
+      const ring = new THREE.Mesh(new THREE.PlaneGeometry(type === 'golem' ? 3 : 2.2, type === 'golem' ? 3 : 2.2), new THREE.MeshBasicMaterial({ map: FX.circleTex, color: c1, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false }));
+      ring.rotation.x = -Math.PI / 2; ring.position.y = 0.05; g.add(ring); parts.ring = ring;
+    }
+    return { g, parts };
+  }
+  const SUM_CY = { golem: 1.6, beast: 0.85, spirit: 0, wisp: 0 };
+  const SUM_R = { golem: 1.15, beast: 0.75, spirit: 0.65, wisp: 0.35 };
+  const SUM_BAR = { golem: 3.5, beast: 1.75, spirit: 1.1, wisp: 0.6 };
+  // o: { type, spec, owner, puppet, sid, pos, yaw, scale, hp, life, spd }
+  function makeSummon(o) {
+    const S = MG.SUMMONS[o.type], [c1, c2] = colorsOf(o.spec), sc = o.scale || 1;
+    const mats = [];
+    const { g: model, parts } = makeSummonModel(o.type, c1, c2, mats);
+    model.scale.setScalar(sc * (o.type === 'golem' ? 0.88 : 1));
+    const g = new THREE.Group(); g.add(model);
+    const bc = document.createElement('canvas'); bc.width = 128; bc.height = 16;
+    const btex = new THREE.CanvasTexture(bc);
+    const bar = new THREE.Sprite(new THREE.SpriteMaterial({ map: btex, depthTest: false, transparent: true }));
+    bar.scale.set(o.type === 'wisp' ? 0.8 : 1.5, 0.16, 1); bar.renderOrder = 20; bar.position.y = SUM_BAR[o.type] * sc; g.add(bar);
+    const T = { cy: SUM_CY[o.type] * sc, r: SUM_R[o.type] * sc };
+    const t = {
+      type: 'summon', isSummon: true, kind: o.type, S, T, spec: o.spec, ownerKey: o.owner, puppet: !!o.puppet, sid: o.sid,
+      group: g, face: model, parts, mats, hp: o.hp, maxHp: o.hp, r: T.r, pts: 0, home: o.pos.clone(), pos: o.pos.clone(), center: new V3(),
+      floatY: 0, phase: rand(0, 10), moveDir: new V3(1, 0, 0), disp: new V3(), dispV: new V3(), mass: { golem: 0.3, beast: 0.8, spirit: 0.6, wisp: 0.5 }[o.type],
+      burnT: 0, burnDps: 0, burnAcc: 0, burnPop: 0, freezeT: 0, frozenHard: false, vulnT: 0, flash: 0, alive: true, dead: 0, spawnT: 0,
+      bar, bc, btex, id: 's' + Math.random().toString(36).slice(2, 7), slot: -1,
+      life: o.life || 15, yaw: o.yaw || 0, netPos: o.pos.clone(), netYaw: o.yaw || 0, netSeen: 0, atkT: 0.7, animT: 0, walk: 0, tgt: null, retarget: 0,
+      born: st.time, scale: sc, vy: 0, lunge: 0, spd: o.spd || 1, slotSide: 2.4,
+    };
+    g.position.copy(t.pos); g.scale.setScalar(0.01);
+    scene.add(g);
+    updateCenter(t); drawBar(t);
+    targets.push(t);
+    return t;
+  }
+  // 召喚の魔法陣（足もとに光の輪が回り、光の柱が立つ）
+  function summonCircleFx(p, spec) {
+    const [c1, c2] = colorsOf(spec);
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(4, 4), new THREE.MeshBasicMaterial({ map: FX.circleTex, color: c1, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
+    m.rotation.x = -Math.PI / 2; m.position.set(p.x, p.y + 0.06, p.z); scene.add(m);
+    FX.emitLine(new V3(p.x, p.y + 0.2, p.z), new V3(p.x, p.y + 6, p.z), { count: 40, c1, c2, speed: 0.4, up: 2, life: 0.8, size: 0.4, drag: 1, rainbow: spec.rainbow });
+    FX.flash(new V3(p.x, p.y + 1, p.z), c1, 4, 14, 0.4);
+    let t = 0;
+    special((dt) => {
+      t += dt;
+      m.material.opacity = (t < 0.3 ? t / 0.3 : Math.max(0, 1 - (t - 0.3) / 0.9)) * 0.9;
+      m.rotation.z += dt * 3; m.scale.setScalar(0.6 + Math.min(1, t / 0.3) * 0.5);
+      if (Math.random() < 0.6) FX.emit(new V3(p.x + rand(-1.4, 1.4), p.y + 0.1, p.z + rand(-1.4, 1.4)), { count: 1, c1, c2, speed: 0.3, up: 3, life: 0.6, size: 0.3, drag: 0.5 });
+      if (t >= 1.2) { scene.remove(m); m.geometry.dispose(); m.material.dispose(); return false; }
+      return true;
+    });
+  }
+  // 自分の召喚獣を呼び出す（type: 'golem' | 'spirit' | 'beast' | 'wisp'）
+  function spawnSummon(type, spec, at) {
+    const S = MG.SUMMONS[type];
+    const sc = type === 'wisp' ? 1 : Math.max(0.75, Math.min(1.7, spec.size || 1));
+    // 数の上限: 召喚獣は3体、使い魔は1体（古いものから消える）
+    const mine = targets.filter((t) => t.isSummon && !t.puppet && t.alive && (type === 'wisp') === (t.kind === 'wisp')).sort((a, b) => a.born - b.born);
+    while (mine.length >= (type === 'wisp' ? 1 : SUMMON_MAX)) summonDie(mine.shift(), true);
+    const spd = 1 + 0.35 * (spec.mods || []).filter((m) => m === 'speed').length;
+    const t = makeSummon({ type, spec, owner: 'me', sid: ++summonSerial, pos: at, yaw: player.yaw + Math.PI, scale: sc, hp: Math.round(S.hp * sc), life: type === 'wisp' ? 10 : Math.max(4, spec.dur || 15), spd });
+    if (AU.summon) AU.summon(type, spec.element, ap(at));
+    return t;
+  }
+  // 召喚獣の敵: いちばん近い、自分の側でない的・相手・相手の召喚獣
+  function summonEnemy(t) {
+    let best = null, bd = 32;
+    for (const o of targets) {
+      if (!o.alive || o === t || o.isSelf || friendly(o, t.spec) || (o.isPlayer && o.netProt)) continue;
+      if (t.spec.casterT && o === t.spec.casterT) continue;
+      const d = o.center.distanceTo(t.center);
+      if (d < bd) { bd = d; best = o; }
+    }
+    return best;
+  }
+  function boltSpecOf(t) {
+    if (t.boltSpec) return t.boltSpec;
+    const spec = t.spec, wisp = t.kind === 'wisp';
+    t.boltSpec = Object.assign({}, spec, { form: 'bolt', dmg: wisp ? 6 : spec.dmg * t.S.dmgMul, speed: wisp ? 42 : 36, size: wisp ? 0.18 : 0.3 * t.scale, radius: wisp ? 0.6 : 1.2, homing: 1.1,
+      pierce: 0, bounce: 0, split: 0, pull: 0, penetrate: 0, echo: 0, destroy: false, life: 1.4, pulses: Math.min(spec.pulses || 0, 1), rewind: 0, chainHit: wisp ? 0 : spec.chainHit });
+    return t.boltSpec;
+  }
+  // 召喚獣の攻撃（visualOnly: 相手の召喚獣の動きを見せるだけ）
+  function summonAttack(t, e, visualOnly) {
+    const S = t.S, spec = t.spec, [c1, c2] = colorsOf(spec);
+    t.animT = 0.45;
+    const dn = e.center.clone().sub(t.center); dn.y = 0; if (dn.lengthSq() < 1e-4) dn.set(0, 0, 1); dn.normalize();
+    if (t.kind === 'golem' || t.kind === 'beast') {
+      if (t.kind === 'beast') t.lunge = 0.16;
+      after(t.kind === 'golem' ? 0.24 : 0.12, () => {
+        if (!t.alive) return;
+        const p = e.alive ? e.center.clone() : t.center.clone().addScaledVector(dn, 2);
+        FX.emit(p, { count: t.kind === 'golem' ? 30 : 16, c1, c2, speed: t.kind === 'golem' ? 7 : 4, life: 0.35, size: 0.4, drag: 4, rainbow: spec.rainbow });
+        if (t.kind === 'golem') {
+          FX.ring(new V3(p.x, W.heightAt(p.x, p.z) + 0.08, p.z), c1, 0.3, 2.6, 0.3);
+          st.shake = Math.max(st.shake, 0.14 * near(p));
+          AU.impact(spec.element, 1.4, ap(p)); EF.impact(spec.element, p, 1.3);
+        } else AU.hit(spec.element, ap(p));
+        if (!visualOnly && e.alive && e.center.distanceTo(t.center) < (S.range * t.scale + e.r) * 1.4) hitTarget(e, spec.dmg * S.dmgMul, spec, { dir: dn });
+      });
+    } else {
+      const from = t.center.clone();
+      spawnProj(boltSpecOf(t), from, e.center.clone().sub(from), { kind: 'bolt', life: 1.4 });
+      FX.emit(from, { count: 10, c1, c2, speed: 3, life: 0.25, size: 0.25, drag: 4 });
+      if (t.kind === 'spirit') AU.cast(spec.element);
+    }
+    if (!visualOnly && !t.puppet && M.on && G.onFx) G.onFx({ k: 'sumAtk', id: t.sid, tp: arr(e.center) });
+  }
+  function summonDie(t, expired) {
+    if (!t.alive) return;
+    t.alive = false; t.dead = 0; t.bar.visible = false;
+    const [c1, c2] = colorsOf(t.spec), c = t.center.clone();
+    FX.emit(c, { count: t.kind === 'golem' ? 70 : 36, c1, c2, speed: 5, up: 2, life: 0.7, size: 0.4, drag: 2, rainbow: t.spec.rainbow });
+    if (t.kind === 'golem') { FX.emit(c, { count: 30, c1: '#7a7468', c2: '#c8c0b0', speed: 6, up: 4, gravity: 14, life: 1, size: 0.35 }); AU.crumble(ap(c)); }
+    FX.flash(c, c1, 3, 10, 0.25);
+    if (!expired && !t.puppet) popup(c.clone().add(new V3(0, 1, 0)), MG.SUMMONS[t.kind].label + 'が倒された', 'ward');
+    if (!t.puppet && M.on && G.onFx) G.onFx({ k: 'sumDie', id: t.sid });
+  }
+  // 召喚獣の動きの見た目（歩く・浮かぶ・殴る・飛びかかる）
+  function animateSummon(t, dt, speed) {
+    const P = t.parts, k = t.animT > 0 ? t.animT / 0.45 : 0;
+    t.animT = Math.max(0, t.animT - dt);
+    t.walk += dt * Math.min(10, speed) * (t.kind === 'beast' ? 1.6 : 1.1);
+    const sw = speed > 0.3 ? Math.sin(t.walk) : 0;
+    t.face.rotation.y = t.yaw;
+    if (t.kind === 'golem') {
+      P.legs[0].rotation.x = sw * 0.5; P.legs[1].rotation.x = -sw * 0.5;
+      const punch = k > 0 ? Math.sin((1 - k) * Math.PI) : 0;
+      P.arms[0].rotation.x = -sw * 0.4 - punch * 1.9; P.arms[1].rotation.x = sw * 0.4 - punch * 1.6;
+      t.face.position.y = Math.abs(sw) * 0.06;
+      P.core.rotation.y += dt * 2;
+      P.ring.rotation.z += dt * 0.8;
+    } else if (t.kind === 'beast') {
+      P.legs.forEach((l, i) => (l.rotation.x = (i === 0 || i === 3 ? sw : -sw) * 0.7));
+      P.head.rotation.x = k > 0 ? -Math.sin((1 - k) * Math.PI) * 0.6 : Math.sin(st.time * 2 + t.phase) * 0.05;
+      P.tail.rotation.z = Math.sin(st.time * 6 + t.phase) * 0.4;
+      t.face.position.y = Math.abs(sw) * 0.08 + (t.lunge > 0 ? 0.25 : 0);
+      P.ring.rotation.z += dt * 1.2; P.ring.position.y = 0.05 - t.face.position.y / t.scale;
+    } else if (t.kind === 'spirit') {
+      P.orbit.rotation.y += dt * (2 + (k > 0 ? 6 : 0));
+      P.core.rotation.x += dt * 1.3; P.core.rotation.y += dt * 1.9;
+      P.glow.scale.setScalar(3.2 + Math.sin(st.time * 5 + t.phase) * 0.3 + k * 1.5);
+    } else {
+      P.glow.scale.setScalar(1.5 + Math.sin(st.time * 7 + t.phase) * 0.2 + k * 0.8);
+    }
+  }
+  // 戻り値 true: 消え終わったので一覧から外す
+  function updateSummon(t, dt) {
+    if (!t.alive) {
+      t.dead += dt;
+      t.group.scale.setScalar(Math.max(0.001, 1 - t.dead / 0.45));
+      t.group.position.y += dt * (t.kind === 'golem' ? -1.2 : 1.2);
+      return t.dead > 0.45;
+    }
+    t.spawnT = Math.min(1, t.spawnT + dt * 2.5);
+    t.group.scale.setScalar(Math.max(0.01, t.spawnT < 1 ? 1 - Math.pow(1 - t.spawnT, 3) : 1));
+    if (t.flash > 0) t.flash -= dt;
+    const [c1, c2] = colorsOf(t.spec);
+    let speed = 0;
+    if (t.puppet) {
+      const k = Math.min(1, dt * 10), before = t.pos.clone();
+      if (t.pos.distanceTo(t.netPos) > 10) t.pos.copy(t.netPos); else t.pos.lerp(t.netPos, k);
+      let dy = t.netYaw - t.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); t.yaw += dy * k;
+      speed = before.distanceTo(t.pos) / Math.max(dt, 1e-4);
+      t.netSeen += dt;
+      if (t.netSeen > 2) summonDie(t, true); // 持ち主から状態が届かなくなった
+    } else {
+      t.life -= dt;
+      if (t.life <= 0) { summonDie(t, true); return false; }
+      // 燃焼・凍結
+      if (t.burnT > 0) { t.burnT -= dt; t.burnAcc += t.burnDps * dt; if (t.burnAcc >= 4) { const d = Math.floor(t.burnAcc); t.burnAcc -= d; damage(t, d, null, false); if (!t.alive) return false; } }
+      if (t.freezeT > 0) { t.freezeT -= dt; if (t.freezeT <= 0) t.frozenHard = false; }
+      if (t.vulnT > 0) t.vulnT -= dt;
+      const slow = t.freezeT > 0 ? (t.frozenHard ? 0.15 : 0.5) : 1;
+      t.retarget -= dt;
+      if (t.retarget <= 0 || !t.tgt || !t.tgt.alive) { t.tgt = summonEnemy(t); t.retarget = 0.4; }
+      const S = t.S, e = t.tgt, spd = S.speed * t.spd * slow;
+      const ow = player.pos;
+      if (t.kind === 'wisp') {
+        // 主の肩のあたりを回る
+        const a = st.time * 1.7 + t.phase;
+        const goal = new V3(ow.x + Math.cos(a) * 1.3, ow.y + 2.15 + Math.sin(a * 2) * 0.15, ow.z + Math.sin(a) * 1.3);
+        const before = t.pos.clone();
+        t.pos.lerp(goal, Math.min(1, dt * 6));
+        speed = before.distanceTo(t.pos) / Math.max(dt, 1e-4);
+        if (e) t.yaw = Math.atan2(e.center.x - t.pos.x, e.center.z - t.pos.z);
+      } else {
+        let goal, want = 0;
+        if (e) {
+          goal = e.center;
+          const dist = Math.hypot(goal.x - t.pos.x, goal.z - t.pos.z);
+          if (t.kind === 'spirit') want = dist > 14 ? 1 : dist < 7 ? -0.6 : 0;
+          else want = dist > S.range * t.scale + e.r * 0.8 ? 1 : 0;
+        } else {
+          // 敵がいないときは、主の横（少し後ろ）に控える
+          const sx = Math.cos(player.yaw), sz = -Math.sin(player.yaw);
+          goal = new V3(ow.x + sx * t.slotSide + Math.sin(player.yaw) * 1.6, ow.y, ow.z + sz * t.slotSide + Math.cos(player.yaw) * 1.6);
+          want = Math.hypot(goal.x - t.pos.x, goal.z - t.pos.z) > 1.3 ? 1 : 0;
+        }
+        const dir = new V3(goal.x - t.pos.x, 0, goal.z - t.pos.z), L = dir.length();
+        const before = t.pos.clone();
+        let stepLen = 0;
+        if (L > 0.05) {
+          dir.multiplyScalar(1 / L);
+          // 岩や壁にぶつかって進めないときは、しばらく横へ回りこむ
+          if (t.detourT > 0) dir.applyAxisAngle(UP, t.detourSign * 1.25);
+          let dy = Math.atan2(dir.x, dir.z) - t.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+          t.yaw += Math.sign(dy) * Math.min(Math.abs(dy), dt * 7);
+          if (want) {
+            const v = spd * (t.lunge > 0 ? 3.2 : 1) * (e && !t.lunge && want > 0 && L > 20 ? 1.3 : 1);
+            stepLen = Math.min(v * dt, want > 0 ? L : v * dt);
+            t.pos.addScaledVector(dir, stepLen * Math.sign(want));
+            speed = v;
+          }
+        }
+        t.detourT = Math.max(0, (t.detourT || 0) - dt);
+        if (t.dispV.lengthSq() > 1e-3) { t.pos.addScaledVector(t.dispV, dt); t.dispV.multiplyScalar(Math.exp(-4 * dt)); }
+        const b = W.bound(), r = Math.hypot(t.pos.x, t.pos.z); if (r > b) { t.pos.x *= b / r; t.pos.z *= b / r; }
+        if (t.kind === 'spirit') {
+          const fy = W.floorAt(t.pos.x, t.pos.z, t.pos.y + 3) + 2.4 + Math.sin(st.time * 2 + t.phase) * 0.25;
+          t.pos.y += (fy - t.pos.y) * Math.min(1, dt * 4);
+        } else {
+          W.pushOut(t.pos, t.r * 0.8);
+          // 進もうとしたのに、ほとんど進めなかった（地形に押し戻された）
+          if (stepLen > 0.01 && Math.hypot(t.pos.x - before.x, t.pos.z - before.z) < stepLen * 0.35) {
+            t.stuck = (t.stuck || 0) + dt;
+            if (t.stuck > 0.25 && !(t.detourT > 0)) { t.detourT = 1.0; t.detourSign = t.detourSign || (Math.random() < 0.5 ? -1 : 1); t.stuck = 0; }
+          } else t.stuck = 0;
+          const fl = W.floorAt(t.pos.x, t.pos.z, t.pos.y + (t.kind === 'beast' ? 0.6 : 0.3));
+          t.vy -= 20 * dt; t.pos.y += t.vy * dt;
+          if (t.pos.y <= fl) { t.pos.y = fl; t.vy = 0; }
+        }
+      }
+      t.lunge = Math.max(0, t.lunge - dt);
+      t.atkT -= dt * slow;
+      if (e && e.alive && t.atkT <= 0) {
+        const reach = t.kind === 'spirit' || t.kind === 'wisp' ? S.range : S.range * t.scale + e.r;
+        if (e.center.distanceTo(t.center) <= reach) { summonAttack(t, e, false); t.atkT = S.atkCd / t.spd; }
+      }
+    }
+    animateSummon(t, dt, speed);
+    t.group.position.copy(t.pos);
+    updateCenter(t);
+    if ((t.kind === 'spirit' || t.kind === 'wisp') && Math.random() < 0.5) FX.emit(t.center, { count: 1, c1, c2, speed: 0.4, up: -0.6, jitter: t.r * 0.5, life: 0.5, size: t.kind === 'wisp' ? 0.15 : 0.3, drag: 1, rainbow: t.spec.rainbow });
+    if (t.burnT > 0 && Math.random() < 0.4) FX.emit(t.center, { count: 1, c1: '#ff6a1a', c2: '#ffd24a', speed: 0.6, up: 2.5, jitter: t.r * 0.7, life: 0.6, size: 0.4, drag: 0.5 });
+    for (const m of t.mats) {
+      if (t.flash > 0) { m.emissive.setRGB(1, 1, 1); m.emissiveIntensity = 0.9; }
+      else if (t.freezeT > 0) { m.emissive.setRGB(0.3, 0.75, 1); m.emissiveIntensity = 0.55; }
+      else if (t.burnT > 0) { m.emissive.setRGB(1, 0.35, 0.05); m.emissiveIntensity = 0.35 + Math.random() * 0.25; }
+      else { m.emissive.copy(m.userData.baseEmissive); m.emissiveIntensity = m.userData.baseInt; }
+    }
+    return false;
+  }
+  // 相手の召喚獣に自分の魔法が当たった: ダメージを計算して、持ち主に送る
+  function hitPuppet(t, dmg, spec, o) {
+    if (!spec || spec.remote || !M.on || !t.alive) return 0;
+    let d = dmg * (spec.mult || 1), crit = false;
+    if (spec.crit && !o.noCrit && Math.random() < spec.crit) { d *= 2.5; crit = true; }
+    d = Math.max(1, Math.round(d));
+    const h = { id: t.sid, d, e: spec.element };
+    if (!o.noStatus) {
+      if (spec.burn > 0) h.burn = [1.5 + spec.burn * 1.2, (3 + spec.burn * 3) * (spec.mult || 1)];
+      if (spec.freeze > 0) h.frz = [0.8 + spec.freeze, spec.freeze >= 2 ? 1 : 0];
+      if (spec.corrode > 0) h.vul = 3 + spec.corrode * 2;
+      if (spec.knock > 0 && o.dir) { const k = o.dir.clone(); k.y = 0; if (k.lengthSq() < 1e-4) k.set(0, 0, -1); k.normalize(); h.kb = [k.x * spec.knock * 6, 0, k.z * spec.knock * 6]; }
+    }
+    t.flash = 0.12;
+    const p = t.center.clone(); p.x += rand(-0.3, 0.3); p.y += t.r * 0.6;
+    popup(p, crit ? d + '!' : String(d), crit ? 'crit' : 'pvp');
+    if (crit) AU.crit(); else AU.hit(spec.element, ap(t.center));
+    if (spec.rec) spec.rec.add(d);
+    if (G.onSummonHit) G.onSummonHit(t.ownerKey, h);
+    return d;
+  }
+  // 自分の召喚獣の状態（相手に送る）: [番号, 種類, 属性, x, y, z, 向き, HP, 最大HP, 大きさ]
+  function summonStateList() {
+    return targets.filter((t) => t.isSummon && !t.puppet && t.alive).slice(0, 5)
+      .map((t) => [t.sid, SUMMON_TYPES.indexOf(t.kind), t.spec.element].concat(arr(t.pos), [Math.round(t.yaw * 100) / 100, Math.max(0, Math.round(t.hp)), Math.round(t.maxHp), Math.round(t.scale * 100) / 100]));
+  }
+  // 相手から届いた召喚獣の状態で、相手の召喚獣を出す・動かす・消す
+  function syncPuppets(pid, list) {
+    const seen = new Set();
+    (Array.isArray(list) ? list.slice(0, 5) : []).forEach((e) => {
+      if (!Array.isArray(e) || e.length < 10) return;
+      const sid = Math.round(+e[0]) || 0, kind = SUMMON_TYPES[Math.round(+e[1])], el = MG.ELEMENTS[e[2]] ? e[2] : null;
+      const p = vec([e[3], e[4], e[5]]);
+      if (!kind || !el || !p) return;
+      seen.add(sid);
+      let t = targets.find((o) => o.isSummon && o.puppet && o.ownerKey === pid && o.sid === sid);
+      if (t && !t.alive) return;
+      p.set(clamp(p.x, -80, 80), clamp(p.y, -20, 60), clamp(p.z, -80, 80));
+      if (!t) {
+        const E = MG.ELEMENTS[el];
+        const spec = { element: el, colors: [E.c1, E.c2], rainbow: !!E.rainbow, remote: pid, casterT: avatars.get(pid) || null, dmg: 0, size: 1, mods: [], pulses: 0, chainHit: 0, name: { kanji: '' } };
+        t = makeSummon({ type: kind, spec, owner: pid, puppet: true, sid, pos: p, scale: clamp(e[9], 0.5, 2), hp: clamp(e[8], 1, 999), life: 999 });
+        summonCircleFx(new V3(p.x, W.heightAt(p.x, p.z), p.z), spec);
+      }
+      t.netPos.copy(p); t.netYaw = clamp(e[6], -1e4, 1e4); t.netSeen = 0;
+      const hp = clamp(e[7], 0, 999), mx = clamp(e[8], 1, 999);
+      if (hp !== t.hp || mx !== t.maxHp) { t.hp = hp; t.maxHp = mx; drawBar(t); }
+    });
+    targets.forEach((t) => { if (t.isSummon && t.puppet && t.ownerKey === pid && t.alive && !seen.has(t.sid)) summonDie(t, true); });
+  }
+
   const FORM = {
     // ---- 守り・回復・移動 ----
-    ward(spec) {
+    ward(spec, aim) {
       const c = casterPos(), [c1, c2] = colorsOf(spec);
+      const shape = spec.shape || 'sphere';
       FX.ring(new V3(c.x, c.y + 0.08, c.z), c1, 0.4, 3.4, 0.5);
       FX.emit(new V3(c.x, c.y + 1.1, c.z), { count: 44, c1, c2, speed: -3, jitter: 1.7, life: 0.5, size: 0.3, drag: 0, rainbow: spec.rainbow });
-      if (CTX) return; // 相手の障壁は、相手から届く状態で表示する
-      const amount = Math.max(1, Math.round(spec.dmg * (spec.mult || 1)));
-      SUP.shield = SUP.shieldMax = amount; SUP.shieldT = spec.dur; SUP.shieldSpec = spec; SUP.hitT = 0.4;
-      popup(ahead(2.5, 0.1), '障壁 ' + amount, 'ward');
+      if (shape === 'sphere' || shape === 'front') {
+        if (CTX) return; // 相手の障壁・大盾は、相手から届く状態で表示する
+        const amount = Math.max(1, Math.round(spec.dmg * (spec.mult || 1) * (shape === 'front' ? 1.6 : 1)));
+        SUP.shield = SUP.shieldMax = amount; SUP.shieldT = spec.dur; SUP.shieldSpec = spec; SUP.shieldShape = shape; SUP.hitT = 0.4;
+        popup(ahead(2.5, 0.1), (shape === 'front' ? '大盾 ' : '障壁 ') + amount, 'ward');
+        if (AU.barrier) AU.barrier(spec.element, shape, null);
+        return;
+      }
+      // 壁・城壁・ドーム: その場に残る魔法の壁を立てる（相手の画面でも同じ場所に立つ）
+      const owner = CTX ? String(CTX.casterT.pid) : 'me';
+      const f = aim.dir.clone(); f.y = 0; if (f.lengthSq() < 1e-4) f.set(0, 0, -1); f.normalize();
+      const yaw = Math.atan2(f.x, f.z);
+      const amount = spec.dmg * (spec.mult || 1), sc = spec.wardScale || 1;
+      const key = owner + ':' + castN;
+      const mk = (o) => { barrierSeq[key] = (barrierSeq[key] || 0) + 1; return spawnBarrier(Object.assign({ spec, owner, id: key + ':' + barrierSeq[key] }, o)); };
+      if (shape === 'wall') {
+        mk({ shape: 'wall', x: c.x + f.x * 3.2, z: c.z + f.z * 3.2, yaw, w: 5 * sc, h: Math.min(4.2, 2.8 * Math.sqrt(sc)), t: 0.7, hp: Math.round(amount * 1.5), dur: spec.dur * 1.35 });
+      } else if (shape === 'fort') {
+        [-1, 0, 1].forEach((sd) => {
+          const a = sd * 0.95, dir = f.clone().applyAxisAngle(UP, a), d = sd ? 2.7 : 3.1;
+          mk({ shape: 'wall', x: c.x + dir.x * d, z: c.z + dir.z * d, yaw: yaw + a, w: 3.4 * sc, h: Math.min(3.8, 2.4 * Math.sqrt(sc)), t: 0.6, hp: Math.round(amount), dur: spec.dur * 1.35 });
+        });
+      } else {
+        mk({ shape: 'dome', x: c.x, z: c.z, R: 4.5 * sc, hp: Math.round(amount * 2), dur: spec.dur * 1.2 });
+      }
+      if (!CTX) popup(ahead(2.5, 0.1), MG.WARD_SHAPES[shape].label, 'ward');
+    },
+    summon(spec, aim) {
+      const c = casterPos();
+      const f = aim.dir.clone(); f.y = 0; if (f.lengthSq() < 1e-4) f.set(0, 0, -1); f.normalize();
+      const n = spec.summonCount || 1, type = spec.summonType || 'spirit';
+      for (let i = 0; i < n; i++) {
+        const side = n > 1 ? (i - (n - 1) / 2) * 2.8 : 0;
+        const p = new V3(c.x + f.x * 3 + f.z * side, 0, c.z + f.z * 3 - f.x * side);
+        const b = W.bound(), r = Math.hypot(p.x, p.z); if (r > b - 1) { p.x *= (b - 1) / r; p.z *= (b - 1) / r; }
+        p.y = W.floorAt(p.x, p.z, c.y + 1);
+        summonCircleFx(p, spec);
+        // 相手の召喚獣は、相手から届く状態で出す
+        if (!CTX) after(0.35, () => { if (!st.running) return; const t = spawnSummon(type, spec, p); t.slotSide = (i % 2 ? -1 : 1) * (2.2 + i * 0.8); });
+      }
+      if (!CTX) popup(ahead(2.5, 0.1), MG.SUMMONS[type].label + (n > 1 ? ` ×${n}` : '') + 'を召喚', 'ward');
     },
     heal(spec) {
       const c = casterPos(), [c1] = colorsOf(spec);
@@ -1445,10 +2013,15 @@
       let len = spec.range;
       if (dir.y < -0.001) len = Math.min(len, -tip.y / dir.y);
       let end = tip.clone().addScaledVector(dir, len);
-      const walls = W.propsOnSegment(tip, end);
-      const allow = spec.penetrate || 0;
+      const walls = W.propsOnSegment(tip, end, ownerKey(spec));
+      let allow = spec.penetrate || 0;
+      const bi = walls.findIndex((w) => w.barrier);
+      if (bi >= 0 && bi < allow) allow = bi; // 魔法の壁は、光線でもつらぬけない
       const passed = walls.slice(0, allow);
-      if (walls.length > allow) { len = walls[allow].t; end = tip.clone().addScaledVector(dir, len); AU.blocked(ap(end)); }
+      if (walls.length > allow) {
+        len = walls[allow].t; end = tip.clone().addScaledVector(dir, len); AU.blocked(ap(end));
+        if (walls[allow].barrier && walls[allow].prop.game) damageBarrier(walls[allow].prop.game, spec.dmg, end.clone(), spec);
+      }
       const [c1, c2] = colorsOf(spec);
       const width = Math.max(0.12, spec.size) * 1.1;
       passed.forEach((w, i) => after(0.02 * i, () => pierceFx(tip.clone().addScaledVector(dir, w.t), spec, i + 1, w.prop)));
@@ -1982,8 +2555,11 @@
       setPierce(n) { if (n > this.pierce) { this.pierce = n; if (MG.UI && MG.UI.onCastPierce) MG.UI.onCastPierce(this); } },
     };
     const aim = getAim(spec.range || 70);
+    castN = ++castSerial; const n = castN;
     castSpell(spec, aim, rec);
     if (M.on && G.onLocalCast) G.onLocalCast(packCast(spec0, mods || G.castMods('slot'), aim));
+    // 使い魔: 小さな光の玉が現れて、しばらくそばで戦う
+    if (spec.familiar > 0) after(0.25, () => { if (st.running && (!M.on || M.alive)) spawnSummon('wisp', Object.assign({}, spec, { rec }), player.pos.clone().add(new V3(0, 2.2, 0))); });
     if (spec.guard > 0) { SUP.guardT = Math.max(SUP.guardT, spec.guard); popup(ahead(2.4, 0.35), '守護', 'ward'); }
     if (spec.haste > 0) { SUP.hasteT = Math.max(SUP.hasteT, spec.haste); popup(ahead(2.4, 0.5), '迅速', 'ward'); }
     if (spec.leap > 0) { player.vy = Math.max(player.vy, 9 + (spec.leap - 1) * 2); player.onGround = false; }
@@ -1996,7 +2572,7 @@
       player.pos.copy(to); player.kv.set(0, 0, 0);
     }
     if (spec.refund > 0) after(0.35, () => { st.mp = Math.min(st.mpMax, st.mp + spec.cost * spec.refund); FX.emit(getTip(), { count: 10, c1: '#7fd8ff', c2: '#ffffff', speed: 1.5, life: 0.4, size: 0.1 }); });
-    for (let k = 1; k <= spec.echo; k++) after(0.38 * k, () => { if (st.running) castSpell(spec, getAim(spec.range || 70), rec); });
+    for (let k = 1; k <= spec.echo; k++) after(0.38 * k, () => { if (st.running) { castN = n; castSpell(spec, getAim(spec.range || 70), rec); } });
     if (MG.UI) MG.UI.onCast(spec0, via, rec, spec);
     return rec;
   }
@@ -2215,7 +2791,7 @@
       if (MG.UI && MG.UI.handleKey(e)) return;
       if (st.paused) return;
       if (e.code.startsWith('Digit')) { const n = +e.code.slice(5) - 1; if (n >= 0 && n < st.slots.length) G.selectSlot(n); }
-      if (e.code === 'Space') { e.preventDefault(); if (player.onGround) { player.vy = 7.5; player.onGround = false; } }
+      if (e.code === 'Space') { e.preventDefault(); if (player.onGround) { player.vy = JUMP_V; player.onGround = false; } }
       if (e.code === 'KeyF' || e.code === 'KeyQ') G.castSlot(st.slot);
     });
     window.addEventListener('keyup', (e) => { input.keys[e.code] = false; });
@@ -2325,7 +2901,9 @@
     const bound = W.bound();
     if (r > bound) { player.pos.x *= bound / r; player.pos.z *= bound / r; }
     W.pushOut(player.pos, 0.45);
-    const floor = W.heightAt(player.pos.x, player.pos.z);
+    // 足もとの面: 地面のほか、岩・木箱・壁・石柱・魔法の壁の上にも立てる
+    const floor = W.floorAt(player.pos.x, player.pos.z, player.pos.y);
+    player.floor = floor;
     if (SUP.flyT > 0 && !dead) {
       // 飛翔: Space で上昇、C で下降、どちらも押さなければその高さにとどまる
       const want = ((k.Space ? 1 : 0) - (k.KeyC ? 1 : 0)) * 8;
@@ -2407,6 +2985,7 @@
     updateTargets(dt);
     updateProjs(dt);
     updateFields(dt);
+    updateBarriers(dt);
     for (let i = beams.length - 1; i >= 0; i--) {
       const b = beams[i]; b.t += dt;
       const k = 1 - b.t / b.life;
@@ -2521,7 +3100,7 @@
       seq: spec0.seq.slice(), m: { dmg: m.dmg, cost: m.cost, cd: m.cd, pen: m.pen, speed: m.speed, mode: m.mode },
       tip: arr(getTip()), o: arr(aim.origin), d: arr(aim.dir), p: arr(aim.point),
       tg: aim.target && aim.target.isPlayer ? aim.target.pid : null, dist: Math.round(aim.dist * 100) / 100, ground: !!aim.ground, range: aim.range,
-      pos: arr(player.pos),
+      pos: arr(player.pos), n: castN,
     };
   }
   function hurtFx(d) {
@@ -2583,7 +3162,7 @@
     G.noRespawn = true;
     targets.slice().forEach((t) => removeTargetObj(t));
     targets.length = 0; avatars.clear();
-    resetSup(); circleKey = '';
+    resetSup(); circleKey = ''; clearBarriers();
     W.setStage('arena');
     W.resetTerrain();
     selfT = makePlayerTarget({ self: true, id: o.myId });
@@ -2601,7 +3180,7 @@
     fields.length = 0; timers.length = 0;
     player.kv.set(0, 0, 0);
     applyWandLook(MG.WAND_MAP[st.wand]);
-    resetSup();
+    resetSup(); clearBarriers();
     W.setStage('practice');
     W.resetTerrain();
     G.noRespawn = false;
@@ -2620,6 +3199,8 @@
     avatars.delete(pid);
     const i = targets.indexOf(t); if (i >= 0) targets.splice(i, 1);
     removeTargetObj(t);
+    // その人の召喚獣も消す
+    targets.slice().forEach((o) => { if (o.isSummon && o.puppet && o.ownerKey === pid) { const j = targets.indexOf(o); removeTargetObj(o); if (j >= 0) targets.splice(j, 1); } });
   };
   // 相手から届いた状態（位置・向き・HP など）
   G.updateAvatar = function (pid, s) {
@@ -2636,19 +3217,36 @@
     t.netBurn = !!s.b; t.netFrozen = !!s.fr; t.netProt = !!s.pr;
     if (typeof s.w === 'string' && MG.WAND_MAP[s.w]) setAvatarWand(t, s.w);
     const we = s.wd && MG.ELEMENTS[s.wd] ? s.wd : null;
-    if (we && we !== t.netWard && t.ward) t.ward.material.uniforms.uColor.value.set(MG.ELEMENTS[we].c1);
-    t.netWard = we; t.netWardLow = !!s.wl;
+    if (we && we !== t.netWard && t.ward) { t.ward.material.uniforms.uColor.value.set(MG.ELEMENTS[we].c1); if (t.front) t.front.material.uniforms.uColor.value.set(MG.ELEMENTS[we].c1); }
+    t.netWard = we; t.netWardLow = !!s.wl; t.netWardFront = !!s.ws;
+    syncPuppets(pid, s.sm);
     t.netFly = s.fl && MG.ELEMENTS[s.fl] ? s.fl : null;
     t.netAura = s.au && MG.ELEMENTS[s.au] ? s.au : null;
   };
   function wardRipple(t, dir) {
     if (!t.ward || dir.lengthSq() < 1e-6) return;
     t.wardHit = 1; t.ward.material.uniforms.uHitDir.value.copy(dir).normalize();
+    if (t.front) t.front.material.uniforms.uHitDir.value.copy(dir).normalize();
   }
   // 相手の画面で起きた見た目だけの出来事（障壁に当たった・こわれた）
   G.remoteFx = function (pid, f) {
     if (!M.on || !f) return false;
     const t = avatars.get(pid);
+    // 相手の召喚獣の攻撃・倒れた、相手の魔法の壁がこわれた（相手の画面で決まったこと）
+    if (f.k === 'sumAtk' || f.k === 'sumDie') {
+      const s = targets.find((o) => o.isSummon && o.puppet && o.ownerKey === pid && o.sid === Math.round(+f.id));
+      if (!s || !s.alive) return false;
+      if (f.k === 'sumDie') { summonDie(s, false); return true; }
+      const tp = vec(f.tp); if (!tp) return false;
+      summonAttack(s, { center: tp, alive: true, r: 0.5 }, true);
+      return true;
+    }
+    if (f.k === 'barBreak') {
+      const b = barrierList.find((x) => x.id === pid + ':' + String(f.id).slice(0, 40));
+      if (!b) return false;
+      breakBarrier(b, true);
+      return true;
+    }
     if (f.k === 'wardHit') {
       if (!t) return false;
       const src = f.from === M.myId ? player.pos : avatars.get(f.from) ? avatars.get(f.from).pos : null;
@@ -2666,7 +3264,8 @@
   };
   G.localState = function () {
     return { p: arr(player.pos), y: Math.round(player.yaw * 1000) / 1000, pi: Math.round(player.pitch * 1000) / 1000, hp: Math.max(0, Math.round(M.hp)), a: M.alive ? 1 : 0, b: M.burnT > 0 ? 1 : 0, fr: M.slowT > 0 ? 1 : 0, pr: M.prot > 0 ? 1 : 0, wd: SUP.shield > 0 && SUP.shieldSpec ? SUP.shieldSpec.element : 0, wl: wardLow() ? 1 : 0, w: st.wand,
-      fl: SUP.flyT > 0 && SUP.flySpec ? SUP.flySpec.element : 0, au: SUP.auraT > 0 && SUP.auraSpec ? SUP.auraSpec.element : 0 };
+      fl: SUP.flyT > 0 && SUP.flySpec ? SUP.flySpec.element : 0, au: SUP.auraT > 0 && SUP.auraSpec ? SUP.auraSpec.element : 0,
+      ws: SUP.shieldShape === 'front' ? 1 : 0, sm: summonStateList() };
   };
   // 相手が魔法を放った: 自分の画面で、相手の位置と向きから同じ魔法を再現する（見た目だけ）
   G.remoteCast = function (pid, c) {
@@ -2683,7 +3282,7 @@
     const target = c.tg === M.myId ? selfT : c.tg ? avatars.get(c.tg) || null : null;
     const aim = { origin: o, dir: d, point: pt, target: target && target.alive ? target : null, dist: clamp(c.dist, 0, 200), ground: !!c.ground, range: clamp(c.range, 1, 200) };
     const ctx = { pos, tip, aim, casterT };
-    const run = () => { CTX = ctx; try { castSpell(spec, aim, null); } finally { CTX = null; } };
+    const run = () => { CTX = ctx; const keepN = castN; castN = Math.round(clamp(c.n, 0, 1e9)); try { castSpell(spec, aim, null); } finally { CTX = null; castN = keepN; } };
     casterT.castGlow = 1;
     run();
     for (let k = 1; k <= spec.echo; k++) after(0.38 * k, () => { if (M.on && avatars.has(pid)) run(); });
@@ -2718,6 +3317,22 @@
     return true;
   };
   G.avatarList = () => [...avatars.values()];
+  // 相手の魔法が、自分の召喚獣に当たった（相手の画面で決まったダメージ）
+  G.applySummonHit = function (from, h) {
+    if (!M.on || !h) return false;
+    const t = targets.find((o) => o.isSummon && !o.puppet && o.alive && o.sid === Math.round(+h.id));
+    if (!t) return false;
+    let d = clamp(h.d, 0, 5000); if (t.vulnT > 0) d *= 1.35;
+    if (Array.isArray(h.burn)) { t.burnT = Math.max(t.burnT, clamp(h.burn[0], 0, 10)); t.burnDps = Math.max(t.burnDps, clamp(h.burn[1], 0, 80)); }
+    if (Array.isArray(h.frz)) { t.freezeT = Math.max(t.freezeT, clamp(h.frz[0], 0, 7)); if (h.frz[1]) t.frozenHard = true; }
+    if (h.vul) t.vulnT = Math.max(t.vulnT, clamp(h.vul, 0, 12));
+    if (Array.isArray(h.kb)) { t.dispV.x += clamp(h.kb[0], -30, 30) * t.mass; t.dispV.z += clamp(h.kb[2], -30, 30) * t.mass; }
+    damage(t, d, null, false);
+    return true;
+  };
+  // 自分の召喚獣・魔法の壁の様子（画面下の表示用）
+  G.mySummons = () => targets.filter((t) => t.isSummon && !t.puppet && t.alive).map((t) => ({ kind: t.kind, label: MG.SUMMONS[t.kind].label, hp: Math.max(0, Math.round(t.hp)), maxHp: t.maxHp, left: Math.max(0, t.life) }));
+  G.myBarriers = () => barrierList.filter((b) => b.owner === 'me' && !b.dead).map((b) => ({ shape: b.shape, hp: Math.max(0, Math.round(b.hp)), maxHp: b.maxHp, left: Math.max(0, b.dur - b.t) }));
 
   G.startChallenge = function (sec) {
     st.score = 0; st.kills = 0; st.combo = 0; st.comboT = 0; st.mp = st.mpMax;
@@ -2734,7 +3349,7 @@
   window.__mg = {
     state: st,
     player,
-    targets: () => targets.filter((t) => t.alive).map((t) => ({ id: t.id, type: t.type, hp: t.hp, maxHp: t.maxHp, x: t.center.x, y: t.center.y, z: t.center.z, frozen: t.freezeT > 0, burning: t.burnT > 0 })),
+    targets: () => targets.filter((t) => t.alive && !t.isSummon).map((t) => ({ id: t.id, type: t.type, hp: t.hp, maxHp: t.maxHp, x: t.center.x, y: t.center.y, z: t.center.z, frozen: t.freezeT > 0, burning: t.burnT > 0 })),
     counts: () => ({ projs: projs.length, fields: fields.length, beams: beams.length, bolts: bolts.length, spikes: spikes.length, particles: FX.alive, timers: timers.length }),
     clearTargets() { G.noRespawn = true; targets.slice().forEach((t) => { removeTargetObj(t); }); targets.length = 0; },
     allowRespawn() { G.noRespawn = false; },
@@ -2770,9 +3385,18 @@
     keys: (o) => { Object.assign(input.keys, o || {}); },
     circles: () => [...avatars.values()].map((t) => ({ id: t.pid, key: t.circle ? t.circle.key : '', on: t.circle ? Math.round(t.circle.on * 100) / 100 : 0, visible: t.circle ? t.circle.g.visible : false, ward: !!t.netWard })),
     wardVisible: () => SUP.shield > 0 && (!M.on || M.alive),
-    wardFx: () => [...avatars.values()].map((t) => ({ id: t.pid, a: Math.round((t.wardA || 0) * 100) / 100, hit: Math.round((t.wardHit || 0) * 100) / 100, low: !!t.netWardLow, visible: t.ward ? t.ward.visible : false })),
+    wardFx: () => [...avatars.values()].map((t) => ({ id: t.pid, a: Math.round((t.wardA || 0) * 100) / 100, hit: Math.round((t.wardHit || 0) * 100) / 100, low: !!t.netWardLow, visible: t.ward ? t.ward.visible : false, front: t.front ? t.front.visible : false })),
     shatter: (x, y, z) => shatterFx(new V3(x, y, z), '#ff5a1f', 1.3),
     wandInfo: () => ({ id: wandModel.userData.id, parts: wandModel.userData.parts, visible: wand.visible, tipY: Math.round(wandModel.userData.tip.position.y * 100) / 100, glowK: wandModel.userData.glowK }),
+    summons: () => targets.filter((t) => t.isSummon && t.alive).map((t) => ({ kind: t.kind, puppet: t.puppet, owner: t.ownerKey, sid: t.sid, hp: t.hp, maxHp: t.maxHp, x: Math.round(t.pos.x * 100) / 100, y: Math.round(t.pos.y * 100) / 100, z: Math.round(t.pos.z * 100) / 100, life: Math.round(t.life * 10) / 10, element: t.spec.element, target: t.tgt ? (t.tgt.isSummon ? 'summon' : t.tgt.isPlayer ? 'player' : t.tgt.type) : null })),
+    barriers: () => barrierList.map((b) => ({ id: b.id, shape: b.shape, owner: b.owner, hp: b.hp, maxHp: b.maxHp, x: Math.round(b.wb.mesh.position.x * 100) / 100, z: Math.round(b.wb.mesh.position.z * 100) / 100, w: b.wb.half ? b.wb.half[0] * 2 : 0, h: b.h, R: b.wb.R || 0, left: Math.round((b.dur - b.t) * 10) / 10, yaw: b.wb.mesh.rotation.y })),
+    floor: () => Math.round((player.floor == null ? 0 : player.floor) * 100) / 100,
+    onGround: () => player.onGround,
+    setPlayerY(y) { player.pos.y = y; player.vy = 0; },
+    shoot(x, y, z, dx, dy, dz, remote) { // 動作確認用: 指定した位置から魔弾を1つ撃つ（remote を付けると相手の魔法として）
+      const spec = Object.assign({}, MG.buildSpell(['combustion', 'reduction']), remote ? { remote, casterT: null } : {});
+      spawnProj(spec, new V3(x, y, z), new V3(dx, dy, dz), { kind: 'bolt' }); return projs.length;
+    },
     avatarWands: () => [...avatars.values()].map((t) => ({ id: t.pid, wand: t.netWand, model: t.wandModel ? t.wandModel.userData.id : null, hands: t.hands ? t.hands[0].visible : false })),
   };
 })();

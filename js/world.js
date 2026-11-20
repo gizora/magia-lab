@@ -571,9 +571,10 @@
     return q.distanceTo(p);
   }
   // 線分 a→b にかかる地形を、近い順に返す（光線の貫通に使う）
-  W.propsOnSegment = function (a, b) {
+  W.propsOnSegment = function (a, b, owner) {
     const d = b.clone().sub(a); const len = d.length(); d.normalize();
     const out = [];
+    if (owner !== undefined) { const bh = W.barrierOnSegment(a, b, 0, owner); if (bh) out.push({ prop: bh.barrier, t: bh.t, barrier: true }); }
     for (const o of props) {
       if (!o.alive) continue;
       const t = o.kind === 'slab' ? rayBox(a, d, slabBox(o, 0)) : raySphere(a, d, o.mesh.position, o.r);
@@ -913,8 +914,9 @@
   };
 
   // 視線の先にある地形までの距離
-  W.raycast = function (origin, dir, maxD) {
+  W.raycast = function (origin, dir, maxD, owner) {
     let best = maxD;
+    if (owner !== undefined) { const bh = W.barrierOnSegment(origin, origin.clone().addScaledVector(dir, maxD), 0, owner); if (bh && bh.t > 0.05) best = bh.t; }
     const test = (c, r) => {
       const oc = c.clone().sub(origin); const tca = oc.dot(dir); if (tca < 0) return;
       const d2 = oc.lengthSq() - tca * tca; if (d2 > r * r) return;
@@ -925,24 +927,128 @@
     return best < maxD ? best : null;
   };
 
-  // プレイヤーが地形にめりこまないようにする
-  W.pushOut = function (pos, r) {
+  // ======================================================================
+  //  上に乗れる地形（第22版）: レンガ・木箱・薄い岩壁・魔法の壁は箱、岩は形そのもの、石柱は円柱として、
+  //  上面の高さ（W.floorAt）と、横からめりこまないための押し戻し（W.pushOut）を計算する
+  // ======================================================================
+  const barriers = [];           // 障壁の魔法で立てた壁・ドーム（game.js が作って、ここに登録する）
+  W.barriers = barriers;
+  const STEP = 0.45;             // この高さまでなら、足もとより少し上の面にも立てる（段差）
+  const _q = new THREE.Quaternion(), _lp = new V3(), _ray = new THREE.Raycaster(), _down = new V3(0, -1, 0), _o = new V3();
+  function boxHalf(o) {
+    if (o.half) return o.half;
+    if (o.kind === 'brick') return [0.73, 0.36, 0.4];
+    if (o.kind === 'crate') return [o.size / 2, o.size / 2, o.size / 2];
+    if (o.kind === 'slab') return [LANE.w / 2, LANE.h / 2, LANE.t / 2];
+    return null;
+  }
+  // 地形の中の座標（回転と大きさを戻す）
+  function toLocal(o, x, y, z) {
+    const m = o.mesh; _q.copy(m.quaternion).invert();
+    _lp.set(x - m.position.x, y - m.position.y, z - m.position.z).applyQuaternion(_q);
+    return _lp;
+  }
+  const boxTop = (o, h) => o.mesh.position.y + h[1] * o.mesh.scale.y;
+  // 岩の上面の高さ（真上から下へ光線を当てて調べる。けずれた形にも合う）。上にないときは null
+  function rockTop(o, x, z, fromY) {
+    const c = o.mesh.position;
+    if (Math.hypot(x - c.x, z - c.z) > o.r * 1.25) return null;
+    o.mesh.updateMatrixWorld();
+    _ray.set(_o.set(x, fromY, z), _down); _ray.far = fromY + 10;
+    const hit = _ray.intersectObject(o.mesh, false)[0];
+    return hit ? hit.point.y : null;
+  }
+  function pillarTop(p) { const cap = p.parts[3]; return cap ? cap.m.position.y + 0.35 : 7.6; }
+  const solidBarriers = () => barriers.filter((b) => b.alive && b.shape === 'wall');
+
+  // (x, z) で立てる面の高さ。y は今の足の高さ（これより STEP 以上高い面には乗れない）
+  W.floorAt = function (x, z, y, pad) {
+    pad = pad == null ? 0.25 : pad;
+    let best = W.heightAt(x, z);
+    const lim = (y == null ? 1e9 : y) + STEP;
+    const tryTop = (t) => { if (t != null && t <= lim && t > best) best = t; };
+    const testBox = (o, h) => {
+      const l = toLocal(o, x, o.mesh.position.y, z);
+      if (Math.abs(l.x) <= h[0] * o.mesh.scale.x + pad && Math.abs(l.z) <= h[2] * o.mesh.scale.z + pad) tryTop(boxTop(o, h));
+    };
     for (const o of props) {
-      if (!o.alive) continue;
-      const c = o.mesh.position;
-      if (o.kind === 'slab') {
-        const b = slabBox(o, r);
-        if (pos.x > b.minX && pos.x < b.maxX && pos.z > b.minZ && pos.z < b.maxZ && pos.y < b.maxY) {
-          const dz = pos.z - c.z, dx = pos.x - c.x;
-          if ((b.maxZ - b.minZ) / 2 - Math.abs(dz) < (b.maxX - b.minX) / 2 - Math.abs(dx)) pos.z = dz >= 0 ? b.maxZ : b.minZ;
-          else pos.x = dx >= 0 ? b.maxX : b.minX;
-        }
-        continue;
-      }
-      if (pos.y > c.y + o.r * 0.6) continue;
-      const dx = pos.x - c.x, dz = pos.z - c.z, d = Math.hypot(dx, dz), min = o.col + r;
-      if (d < min && d > 1e-4) { pos.x = c.x + (dx / d) * min; pos.z = c.z + (dz / d) * min; }
+      if (!o.alive || o.vanish != null) continue;
+      if (o.kind === 'rock') tryTop(rockTop(o, x, z, Math.min(lim, 60)));
+      else { const h = boxHalf(o); if (h) testBox(o, h); }
     }
+    for (const b of solidBarriers()) testBox(b, b.half);
+    for (const p of pillars) if (p.alive && p.vanish == null && p.parts.length && Math.hypot(p.x - x, p.z - z) < 1.25 + pad * 0.5) tryTop(pillarTop(p));
+    return best;
+  };
+
+  // プレイヤー（や召喚獣）が地形にめりこまないようにする。上に乗っているときは押し戻さない
+  W.pushOut = function (pos, r) {
+    const boxPush = (o, h) => {
+      const top = boxTop(o, h);
+      if (pos.y >= top - 0.05) return;
+      if (pos.y + 1.7 < o.mesh.position.y - h[1] * o.mesh.scale.y) return;
+      const l = toLocal(o, pos.x, pos.y, pos.z).clone();
+      const ex = h[0] * o.mesh.scale.x + r, ez = h[2] * o.mesh.scale.z + r;
+      if (Math.abs(l.x) >= ex || Math.abs(l.z) >= ez) return;
+      const d = new V3();
+      if (ex - Math.abs(l.x) < ez - Math.abs(l.z)) d.x = (l.x >= 0 ? ex : -ex) - l.x; else d.z = (l.z >= 0 ? ez : -ez) - l.z;
+      d.applyQuaternion(o.mesh.quaternion);
+      pos.x += d.x; pos.z += d.z;
+    };
+    for (const o of props) {
+      if (!o.alive || o.vanish != null) continue;
+      if (o.kind !== 'rock') { const h = boxHalf(o); if (h) boxPush(o, h); continue; }
+      const c = o.mesh.position;
+      const dx = pos.x - c.x, dz = pos.z - c.z, d = Math.hypot(dx, dz), min = o.col + r;
+      if (d >= min || d < 1e-4) continue;
+      // 岩の上に乗っている（足が岩の面より上）なら押し戻さない
+      const t = rockTop(o, pos.x, pos.z, pos.y + 4);
+      if (t != null ? pos.y >= t - 0.1 : pos.y > c.y + o.r * 0.9) continue;
+      pos.x = c.x + (dx / d) * min; pos.z = c.z + (dz / d) * min;
+    }
+    for (const b of solidBarriers()) boxPush(b, b.half);
+    for (const p of pillars) {
+      if (!p.alive || p.vanish != null || !p.parts.length || pos.y >= pillarTop(p) - 0.05) continue;
+      const dx = pos.x - p.x, dz = pos.z - p.z, d = Math.hypot(dx, dz), min = 1.15 + r;
+      if (d < min && d > 1e-4) { pos.x = p.x + (dx / d) * min; pos.z = p.z + (dz / d) * min; }
+    }
+  };
+
+  // ---- 障壁の魔法の壁・ドーム ----
+  // b = { shape: 'wall' | 'dome', mesh, half（壁の半分の大きさ）, R（ドームの半径）, owner（立てた人）, alive }
+  W.addBarrier = function (b) { b.alive = true; barriers.push(b); if (!b.mesh.parent) scene.add(b.mesh); return b; };
+  W.removeBarrier = function (b) { b.alive = false; const i = barriers.indexOf(b); if (i >= 0) barriers.splice(i, 1); if (b.mesh.parent) b.mesh.parent.remove(b.mesh); };
+  W.clearBarriers = function () { barriers.slice().forEach((b) => W.removeBarrier(b)); };
+  function wallBox(b, pad) { // 壁の中の座標での箱
+    const h = b.half; return { minX: -h[0] - pad, maxX: h[0] + pad, minY: -h[1] - pad, maxY: h[1] + pad, minZ: -h[2] - pad, maxZ: h[2] + pad };
+  }
+  // 線分 a→b が、owner 以外の障壁にかかるか（弾が通り抜けないように、動いた分の線分で調べる）。かかった障壁と、そこまでの距離を返す
+  W.barrierOnSegment = function (a, bb, r, owner) {
+    let best = null;
+    const d = bb.clone().sub(a), len = d.length(); if (len < 1e-6) return null; d.normalize();
+    for (const b of barriers) {
+      if (!b.alive || b.owner === owner) continue;
+      let t = null;
+      if (b.shape === 'wall') {
+        const la = toLocal(b, a.x, a.y, a.z).clone();
+        const ld = d.clone().applyQuaternion(_q.copy(b.mesh.quaternion).invert());
+        t = rayBox(la, ld, wallBox(b, r));
+      } else {
+        // ドーム: 球の面をまたいだところ（外から内でも、内から外でも）。地面より下は無し
+        const c = b.mesh.position, R = b.R;
+        const da = a.distanceTo(c), db = bb.distanceTo(c);
+        if ((da < R) !== (db < R)) {
+          const oc = a.clone().sub(c), bq = oc.dot(d), cq = oc.lengthSq() - R * R, disc = bq * bq - cq;
+          if (disc >= 0) { const s = Math.sqrt(disc); const t1 = -bq - s, t2 = -bq + s; t = t1 >= 0 && t1 <= len ? t1 : t2 >= 0 && t2 <= len ? t2 : null; }
+          if (t != null && a.y + d.y * t < c.y - 0.2) t = null;
+        }
+      }
+      if (t != null && t <= len && (!best || t < best.t)) best = { barrier: b, t };
+    }
+    return best;
+  };
+  W.barriersNear = function (p, radius) {
+    return barriers.filter((b) => b.alive && (b.shape === 'wall' ? b.mesh.position.distanceTo(p) < radius + Math.max(b.half[0], b.half[1]) : Math.abs(b.mesh.position.distanceTo(p) - b.R) < radius));
   };
 
   // ---- 消滅領域: 球の内側にあるものを跡形なく消す ----
@@ -1124,6 +1230,7 @@
   W.follow = function (camPos) { sky.position.copy(camPos); };
 
   W.info = () => ({
+    barriers: barriers.filter((b) => b.alive).map((b) => ({ shape: b.shape, owner: b.owner, x: Math.round(b.mesh.position.x * 100) / 100, y: Math.round(b.mesh.position.y * 100) / 100, z: Math.round(b.mesh.position.z * 100) / 100 })),
     props: props.length, alive: props.filter((o) => o.alive).length, debris: debris.length,
     pillars: pillars.filter((p) => p.alive).length, mode: W.mode, timeK, stats: Object.assign({}, W.stats), stage: W.stage, bound: W.bound(),
     minHeight: heights ? Math.min.apply(null, Array.from(heights)) : 0,

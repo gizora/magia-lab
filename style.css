@@ -565,6 +565,11 @@ kbd { font-family: var(--sans); font-size: 11px; padding: 1px 6px; border-radius
 .ward-overlay.low .wo-hex, .ward-overlay.low .wo-glow { animation: woFlicker 0.22s steps(2, jump-none) infinite; }
 @keyframes woFlicker { from { opacity: 0.85; } to { opacity: 0.25; } }
 .ward-overlay.shatter { animation: woShatter 0.55s ease-out forwards; }
+/* 大盾: 体の前に構えた盾として、画面の下の真ん中に網目を出す */
+.ward-overlay.front { -webkit-mask-image: radial-gradient(ellipse 34% 30% at 50% 100%, #000 55%, transparent 100%); mask-image: radial-gradient(ellipse 34% 30% at 50% 100%, #000 55%, transparent 100%); }
+.ward-overlay.front .wo-glow { box-shadow: inset 0 -90px 120px -30px var(--ward); }
+.sup-chip.summon { border-color: #c3b4ff; } .sup-chip.summon b { color: #d9ceff; }
+.sup-chip small { font-size: 11px; color: var(--muted); }
 @keyframes woShatter { 0% { opacity: 1; transform: scale(1); filter: brightness(1.35); } 100% { opacity: 0; transform: scale(1.25); filter: brightness(1); } }
 /* 対戦中は、守り・回復の表示を HP バーの上に出す（重ならないように） */
 .vs-on .sup-hud { position: absolute; left: 0; right: 0; bottom: 162px; }

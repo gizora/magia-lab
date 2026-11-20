@@ -133,7 +133,9 @@
     if (relock !== false && !G.isTouch()) G.lockPointer();
   }
   document.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', () => { AU.click(); close(); }));
-  document.querySelectorAll('.panel-overlay').forEach((ov) => ov.addEventListener('mousedown', (e) => { if (e.target === ov) close(false); }));
+  // 外側をクリックすると閉じる（一時停止の画面だけは、クリックでそのまま練習場に戻る）
+  document.querySelectorAll('.panel-overlay').forEach((ov) => ov.addEventListener('mousedown', (e) => { if (e.target === ov) close(ov.id === 'pause' ? undefined : false); }));
+  $('pause-menu').addEventListener('click', () => { AU.click(); open('menu'); });
 
   // ======================================================================
   //  HUD
@@ -208,7 +210,15 @@
     $('lock-hint').hidden = !(!G.isTouch() && !G.isLocked() && st.running && !st.paused);
     const S = G.sup, chips = [];
     updateWardOverlay(S);
-    if (S.shield > 0) chips.push(`<span class="sup-chip ward"><b>障壁</b> ${Math.ceil(S.shield)}<span class="sup-bar"><span style="width:${Math.round((S.shield / Math.max(1, S.shieldMax)) * 100)}%"></span></span>${S.shieldT.toFixed(1)}秒</span>`);
+    if (S.shield > 0) chips.push(`<span class="sup-chip ward"><b>${S.shieldShape === 'front' ? '大盾' : '障壁'}</b> ${Math.ceil(S.shield)}${S.shieldShape === 'front' ? '<small>（前だけ）</small>' : ''}<span class="sup-bar"><span style="width:${Math.round((S.shield / Math.max(1, S.shieldMax)) * 100)}%"></span></span>${S.shieldT.toFixed(1)}秒</span>`);
+    // 魔法の壁（壁・城壁・ドーム）と召喚獣
+    const bars = G.myBarriers ? G.myBarriers() : [];
+    if (bars.length) {
+      const b0 = bars.reduce((a, b) => (b.left > a.left ? b : a));
+      const name = bars.length > 1 && b0.shape === 'wall' ? `壁 ×${bars.length}` : { wall: '壁', dome: 'ドーム' }[b0.shape];
+      chips.push(`<span class="sup-chip ward"><b>${name}</b> ${bars.reduce((s, b) => s + b.hp, 0)}<span class="sup-bar"><span style="width:${Math.round((bars.reduce((s, b) => s + b.hp, 0) / Math.max(1, bars.reduce((s, b) => s + b.maxHp, 0))) * 100)}%"></span></span>${b0.left.toFixed(1)}秒</span>`);
+    }
+    (G.mySummons ? G.mySummons() : []).forEach((m) => chips.push(`<span class="sup-chip summon"><b>${m.label}</b> HP ${m.hp}<span class="sup-bar"><span style="width:${Math.round((m.hp / Math.max(1, m.maxHp)) * 100)}%"></span></span>${Math.ceil(m.left)}秒</span>`));
     if (S.guardT > 0) chips.push(`<span class="sup-chip guard"><b>守護</b> ダメージ半分 ${S.guardT.toFixed(1)}秒</span>`);
     if (S.regenT > 0) chips.push(`<span class="sup-chip heal"><b>再生中</b>${G.match.on ? '' : '（練習場では HP は減りません）'}</span>`);
     if (S.flyT > 0) chips.push(`<span class="sup-chip fly"><b>飛翔</b> Space 上昇・C 下降<span class="sup-bar"><span style="width:${Math.round((S.flyT / Math.max(0.1, S.flyMax)) * 100)}%"></span></span>${S.flyT.toFixed(1)}秒</span>`);
@@ -259,6 +269,7 @@
     if (!wardEl.classList.contains('shatter')) wardEl.style.opacity = on ? Math.min(1, 0.45 + S.hitT * 1.8).toFixed(2) : '0';
     wardEl.classList.toggle('low', on && G.wardLow());
     wardEl.classList.toggle('on', on);
+    if (on || !wardEl.classList.contains('shatter')) wardEl.classList.toggle('front', on && S.shieldShape === 'front'); // 大盾: 画面の下の真ん中だけ
   }
 
   let toastTimer = 0;
@@ -605,7 +616,7 @@
       if (!inTab.length) { list.innerHTML = `<p class="empty-note">まだ${RANK_NAME[bookTab]}はありません。<br>魔法工房でことばを ${bookTab.slice(1)} つ並べ、練習場で放つと、ここに記録されます。</p>`; $('book-detail').innerHTML = ''; bookSel = null; return; }
       if (!shown.length) { list.innerHTML = '<p class="empty-note">条件に合う魔法がありません。絞りこみを「すべて」に戻してください。</p>'; $('book-detail').innerHTML = ''; bookSel = null; return; }
       const favs = shown.filter((e) => save.fav[e.key]), rest = shown.filter((e) => !save.fav[e.key]);
-      const toRow = (e) => ({ id: e.key, name: e.spec.name.kanji, fav: !!save.fav[e.key], sub: `${MG.ELEMENTS[e.spec.element].label} ・ ${MG.FORMS[e.spec.form].label}${isSupport(e.spec) ? '' : ''}`, right: rowRight(e), c1: e.spec.colors[0], c2: e.spec.colors[1], support: isSupport(e.spec), inSlot: (st.slots || []).some((x) => x && keyOf(x.seq) === e.key) });
+      const toRow = (e) => ({ id: e.key, name: e.spec.name.kanji, fav: !!save.fav[e.key], sub: `${MG.ELEMENTS[e.spec.element].label} ・ ${MG.FORMS[e.spec.form].label}${e.spec.shape && MG.WARD_SHAPES[e.spec.shape] ? `（${MG.WARD_SHAPES[e.spec.shape].label}）` : e.spec.summonType && MG.SUMMONS[e.spec.summonType] ? `（${MG.SUMMONS[e.spec.summonType].label}）` : ''}`, right: rowRight(e), c1: e.spec.colors[0], c2: e.spec.colors[1], support: isSupport(e.spec), inSlot: (st.slots || []).some((x) => x && keyOf(x.seq) === e.key) });
       if (favs.length) rows.push({ head: '★ お気に入り' }, ...favs.map(toRow));
       if (favs.length && rest.length) rows.push({ head: 'そのほか' });
       rows.push(...rest.map(toRow));
@@ -1031,7 +1042,7 @@
     onSelect() { renderSlots(); banner(st.slots[st.slot]); },
     onKill() {},
     flashMp() { const b = $('mp-fill').parentElement; b.animate([{ transform: 'translateX(-4px)' }, { transform: 'translateX(4px)' }, { transform: 'none' }], { duration: 200 }); },
-    onUnlock() { unlockAt = performance.now(); open('menu'); },
+    onUnlock() { unlockAt = performance.now(); open('pause'); }, // Esc でマウスの固定が外れた: メニューではなく一時停止の画面（メニューは Tab）
     onWand() { buildSlots(); renderSlots(); if (current === 'crafter') renderRegister(); if (current === 'book') renderBookDetail(); },
     onEngines() { renderEngines(); },
     onChallengeEnd(score) {
@@ -1050,12 +1061,18 @@
       $('stick-knob').style.transform = `translate(${d.x * 32}px, ${d.y * 32}px)`;
     },
     handleKey(e) {
-      if (e.code === 'Escape') { if (performance.now() - unlockAt < 400) return true; if (current) { close(false); return true; } open('menu'); return true; }
+      // メニューは Tab で開け閉めする。Esc は開いている画面を閉じるだけ（何も開いていなければ一時停止）
+      if (e.code === 'Escape') { if (performance.now() - unlockAt < 400) return true; if (current) { close(false); return true; } open('pause'); return true; }
+      if (e.code === 'Tab' && !e.shiftKey && (!current || current === 'menu' || current === 'pause')) {
+        e.preventDefault();
+        if (current === 'menu') close(); else open('menu');
+        return true;
+      }
       if (current) {
         if ((e.code === 'KeyE' && current === 'crafter') || (e.code === 'KeyG' && current === 'book')) { close(); return true; }
         return false;
       }
-      if (e.code === 'KeyE' || e.code === 'Tab') { e.preventDefault(); open('crafter'); return true; }
+      if (e.code === 'KeyE') { open('crafter'); return true; }
       if (e.code === 'KeyG') { open('book'); return true; }
       if (e.code === 'KeyM') { setSound(!AU.enabled); return true; }
       if (e.code === 'KeyV') { voiceToggle(); return true; }

@@ -42,7 +42,7 @@
     orb:    { label: '宝珠', desc: 'ゆっくり的を追いかけ、大きく炸裂する宝珠', kanji: ['球', '宝珠', '星'], kana: ['オーブ', 'スフィア', 'スター'], dmg: 45, speed: 14, size: 0.9, radius: 5, count: 1, cost: 22, cd: 1.3, life: 6, homing: 1.4 },
     volley: { label: '連弾', desc: '短い間隔で続けて撃つ魔弾', kanji: ['連弾', '乱射', '三連'], kana: ['ラッシュ', 'ガトリング', 'トリプル'], dmg: 13, speed: 50, size: 0.28, radius: 1.3, count: 3, cost: 14, cd: 0.6, life: 2 },
     // 守り・回復・移動の形（support）。dmg は、障壁なら吸い取れるダメージ、再生なら回復する HP、転移なら着いた場所の衝撃の威力
-    ward:   { label: '障壁', desc: '自分のまわりに、ダメージを吸い取る障壁を張る（こわれると、まわりに衝撃を放つ）', dmg: 60, radius: 4, dur: 6, cost: 22, cd: 5, support: true },
+    ward:   { label: '障壁', desc: '自分を守る障壁を張る（球・大盾・壁・城壁・ドーム。形は1番目の属性と3・4番目の効果で変わる。こわれると衝撃を放つ）', dmg: 60, radius: 4, dur: 6, cost: 22, cd: 5, support: true },
     heal:   { label: '再生', desc: '自分の HP を回復し、燃焼・凍結・腐食を消す', dmg: 45, dur: 3, cost: 26, cd: 7, support: true },
     warp:   { label: '転移', desc: '狙った場所へ一瞬で移り、着いた場所に衝撃を放つ（壁や柱はこえられない）', dmg: 16, radius: 3.5, range: 24, cost: 18, cd: 3.5, support: true },
     // 飛翔: dur 秒だけ空を飛べる（Space で上昇、C で下降）。纏い: dur 秒だけ属性の力をまとい、足が速くなり、まわり radius m の的に tick 秒ごとに dmg
@@ -50,6 +50,8 @@
     aura:   { label: '纏い', desc: '属性の力を体にまとい、しばらく足が速くなる。まわりの的にも少しずつダメージを与える', dmg: 7, radius: 3, dur: 7, tick: 0.5, cost: 22, cd: 9, support: true },
     // 流星: 狙った場所の上空に魔法陣を描き、そこから count 個の大きな流星を dur 秒かけて落とす
     meteor: { label: '流星', desc: '狙った場所の上空に魔法陣を描き、そこから大きな流星を次々と落とす', dmg: 40, speed: 38, size: 1.3, radius: 5, count: 3, cost: 34, cd: 2.6, area: 4.5, dur: 1.1 },
+    // 召喚: 属性に合った召喚獣（ゴーレム・精霊・獣）を呼び出し、dur 秒のあいだ一緒に戦わせる。dmg は1回の攻撃の威力
+    summon: { label: '召喚', desc: '属性に合った召喚獣を呼び出し、しばらく一緒に戦わせる（ゴーレム・精霊・獣）', dmg: 10, size: 1, radius: 2, count: 1, dur: 15, cost: 32, cd: 8 },
   };
   MG.SUPPORT_FORMS = { ward: 1, heal: 1, warp: 1, fly: 1, aura: 1 };
 
@@ -88,6 +90,7 @@
     float:    { kanji: '浮遊', kana: 'フロート', desc: '放つと同時に、上へ高く跳び上がる', apply: (s) => { s.leap += 1; } },
     smash:    { kanji: '粉砕', kana: 'クラッシュ', desc: '威力1.2倍。岩や壁などの地形も壊せるようになる', apply: (s) => { s.dmg *= 1.2; s.smash += 1; } },
     haste:    { kanji: '迅速', kana: 'ヘイスト', desc: '放ったあと4秒間、足が速くなる', apply: (s) => { s.haste += 4; } },
+    familiar: { kanji: '使い魔', kana: 'ファミリア', desc: '放つと小さな使い魔（光の玉）が現れ、10秒間そばを飛びながら近くの敵を小さな弾で撃つ', apply: (s) => { s.familiar += 1; } },
   };
 
   // ---- 科学の単語（化学14・物理19） ----
@@ -126,6 +129,7 @@
     { id: 'lift',            label: '揚力', group: 'phys', elem: 'wind',      form: 'fly',    mod: 'float',    sci: '流れの中にある翼に、上向きにはたらく力。飛行機や鳥が空を飛べるのは揚力のおかげ。' },
     { id: 'collision',       label: '衝突', group: 'phys', elem: 'earth',     form: 'meteor', mod: 'smash',    sci: '物どうしがぶつかること。宇宙から落ちてきた隕石が地面に衝突すると、クレーターができる。' },
     { id: 'electrification', label: '帯電', group: 'phys', elem: 'lightning', form: 'aura',   mod: 'haste',    sci: '物が電気をおびること。下じきで髪をこすると、静電気で帯電して髪が持ち上がる。' },
+    { id: 'synthesis',       label: '合成', group: 'chem', elem: 'ether',     form: 'summon', mod: 'familiar', sci: '2つ以上の物質を反応させて、新しい物質をつくること。薬やプラスチックも合成でつくられる。' },
   ];
   // 声で唱えるときの読み方（yomi）と、音声認識が出しがちな同音の言葉（alias）
   const VOICE = {
@@ -139,6 +143,7 @@
     reinforcement: ['きょうか', ['教化', '狂歌']], vacuum: ['しんくう', ['新空']], regression: ['かいき', ['怪奇', '皆既', '快気', '開基']],
     shielding: ['しゃへい', []], regeneration: ['さいせい', ['再製', '再成', '最盛']], transition: ['てんい', ['転位', '天意']],
     lift: ['ようりょく', ['容量', '用量']], collision: ['しょうとつ', []], electrification: ['たいでん', []],
+    synthesis: ['ごうせい', ['豪勢', '剛性', '合声']],
   };
   MG.WORD_MAP = {};
   MG.WORDS.forEach((w, i) => { w.index = i; MG.WORD_MAP[w.id] = w; w.yomi = VOICE[w.id][0]; w.alias = [w.label, w.yomi].concat(VOICE[w.id][1]); });
@@ -162,6 +167,32 @@
     { id: 'erase',     seq: ['reinforcement', 'compression', 'vacuum', 'regression'], kanji: '消滅領域', kana: 'イレイズ・スフィア', elem: 'vacuum', cost: 85,
       desc: '強めた力で空間を押し縮めて真空にし、無へと還す。少し離れた場所に透明な球体を生み、その内部にあるものを、的も地形も地面も跡形なく消し去る。', hint: '強めて、押し縮め、空っぽにして、無へ還す（4語）' },
   ];
+
+  // ---- 障壁の形（第22版）: 1番目の属性で「壁・大盾・球」が決まり、3・4番目の効果でさらに変わる ----
+  const WARD_WALL_EL = { earth: 1, metal: 1, ice: 1, crystal: 1 };   // 実体のある属性は、目の前に壁を立てる
+  const WARD_FRONT_EL = { force: 1, magnet: 1, sound: 1, light: 1 }; // 体の前に大盾を構える
+  const WARD_SHAPE_MOD = { area: 'dome', scatter: 'fort', compress: 'front' }; // 拡散→ドーム、屈折（多重）→城壁、圧縮（凝縮）→大盾
+  MG.WARD_SHAPES = {
+    sphere: { label: '球', kanji: '盾', kana: 'シールド', desc: '自分のまわりを包む球。どの方向からのダメージも吸い取る' },
+    front:  { label: '大盾', kanji: '大盾', kana: 'イージス', desc: '体の前に大きな盾を構える。前から来たダメージだけを、球より多く（1.6倍）吸い取る' },
+    wall:   { label: '壁', kanji: '壁', kana: 'ウォール', desc: '目の前に壁を立てる。その場に残って相手の弾や光線を止め、上に乗ることもできる' },
+    fort:   { label: '城壁', kanji: '城壁', kana: 'フォート', desc: '前と左右ななめに3枚の壁を立てて、自分を囲む' },
+    dome:   { label: 'ドーム', kanji: '天蓋', kana: 'ドーム', desc: 'その場に大きな半球のドームを張る。外から飛んでくる相手の弾や光線を止める（自分の魔法は内側から通る）' },
+  };
+  MG.wardShape = function (elemId, mods) {
+    for (const m of mods || []) if (WARD_SHAPE_MOD[m]) return WARD_SHAPE_MOD[m];
+    return WARD_WALL_EL[elemId] ? 'wall' : WARD_FRONT_EL[elemId] ? 'front' : 'sphere';
+  };
+  // ---- 召喚獣（第22版）: 1番目の属性で種類が決まる ----
+  const SUMMON_GOLEM = { earth: 1, metal: 1, crystal: 1, force: 1, magnet: 1 };
+  const SUMMON_BEAST = { wind: 1, sound: 1, time: 1, vacuum: 1, acid: 1 };
+  MG.SUMMONS = {
+    golem:  { label: 'ゴーレム', kanji: '像', kana: 'ゴーレム', desc: '重くて固い。歩いて近づき、太い腕で殴る', hp: 150, dmgMul: 2.2, atkCd: 1.6, speed: 3.4, range: 2.6 },
+    spirit: { label: '精霊', kanji: '精', kana: 'スピリット', desc: '宙に浮かび、少し離れた所から属性の弾を撃つ', hp: 70, dmgMul: 1, atkCd: 1.1, speed: 5.5, range: 22 },
+    beast:  { label: '獣', kanji: '獣', kana: 'ビースト', desc: 'すばやく走り、飛びかかってかみつく', hp: 90, dmgMul: 1.1, atkCd: 0.8, speed: 8.5, range: 2.3 },
+    wisp:   { label: '使い魔', kanji: '従', kana: 'ファミリア', desc: '小さな光の玉。そばを飛びながら小さな弾を撃つ', hp: 30, dmgMul: 0.5, atkCd: 0.9, speed: 9, range: 18 },
+  };
+  MG.summonType = (elemId) => (SUMMON_GOLEM[elemId] ? 'golem' : SUMMON_BEAST[elemId] ? 'beast' : 'spirit');
 
   MG.DESTROY_FORMS = { lob: 1, rain: 1, orb: 1, vortex: 1, pillar: 1, meteor: 1 };
   MG.DESTROY_SECRETS = ['supernova', 'horizon', 'fusion', 'cumulo', 'erase'];
@@ -191,8 +222,14 @@
     bolt: ['弾', 'バレット'], lob: ['砲弾', 'キャノン'], spray: ['散弾', 'ショット'], beam: ['槍', 'ランス'], chain: ['鎖', 'チェイン'],
     rain: ['雨', 'レイン'], pillar: ['柱', 'ピラー'], mist: ['霧', 'ミスト'], vortex: ['渦', 'ボルテクス'], nova: ['環', 'ノヴァ'],
     orb: ['球', 'オーブ'], volley: ['連弾', 'ラッシュ'], ward: ['盾', 'シールド'], heal: ['癒', 'ヒール'], warp: ['転', 'ワープ'],
-    fly: ['翼', 'ウィング'], aura: ['纏', 'オーラ'], meteor: ['流星', 'メテオ'],
+    fly: ['翼', 'ウィング'], aura: ['纏', 'オーラ'], meteor: ['流星', 'メテオ'], summon: ['精', 'スピリット'],
   };
+  // 障壁と召喚は、形・種類によって名前の字が変わる（例: 岩壁＝ロック・ウォール、炎精＝フレア・スピリット）
+  function formName(formId, elemId, modIds) {
+    if (formId === 'ward') { const S = MG.WARD_SHAPES[MG.wardShape(elemId, modIds)]; return [S.kanji, S.kana]; }
+    if (formId === 'summon') { const S = MG.SUMMONS[MG.summonType(elemId)]; return [S.kanji, S.kana]; }
+    return NAME_FORM[formId];
+  }
   // 効果: 漢字1字＋短い読み（名前の前に付く）
   const NAME_MOD = {
     burn: ['灼', 'バーン'], corrode: ['蝕', 'ラスト'], refund: ['還', 'リターン'], merge: ['巨', 'ギガ'], split: ['裂', 'シャード'],
@@ -201,7 +238,7 @@
     bounce: ['跳', 'バウンド'], resonate: ['震', 'ビート'], area: ['広', 'ワイド'], knock: ['衝', 'ノック'], heavy: ['重', 'ヘヴィ'],
     homing: ['追', 'ホーミング'], chain: ['連', 'リンク'], compress: ['凝', 'コア'], expand: ['膨', 'メガ'], reinforce: ['強', 'ブースト'],
     suction: ['吸', 'サクション'], rewind: ['巻', 'リワインド'], guard: ['護', 'ガード'], drain: ['奪', 'ドレイン'], blink: ['瞬', 'ブリンク'],
-    float: ['浮', 'フロート'], smash: ['砕', 'クラッシュ'], haste: ['迅', 'ヘイスト'],
+    float: ['浮', 'フロート'], smash: ['砕', 'クラッシュ'], haste: ['迅', 'ヘイスト'], familiar: ['従', 'ファミリア'],
   };
   MG.NAME_PARTS = { elem: NAME_ELEM, form: NAME_FORM, mod: NAME_MOD };
 
@@ -215,6 +252,7 @@
     ward: (E) => `${E}の障壁を張り、ダメージを吸い取る`, heal: () => 'HP を回復し、燃焼・凍結・腐食を消す', warp: (E) => `狙った場所へ一瞬で移り、着いた場所に${E}の衝撃を放つ`,
     fly: (E) => `${E}の翼で、しばらく空を自由に飛ぶ`, aura: (E) => `${E}の力を体にまとい、足が速くなる`,
     meteor: (E) => `狙った場所の上空に魔法陣を描き、${E}の流星を落とす`,
+    summon: (E) => `${E}の召喚獣を呼び出し、一緒に戦わせる`,
   };
   const ELEM_SHORT = {
     fire: '燃やす', ice: '動きを遅くする', steam: '効果が長く残る', lightning: '近くの的へはね移る', plasma: '高威力・MP 多め', light: 'とても速い',
@@ -228,9 +266,18 @@
     speed: '速く、待ち時間が短い', pull: '引き寄せる', scatter: '弾が2つ増える', bounce: 'はね返る', resonate: '振動で追加ダメージ', area: '範囲がとても広い',
     knock: '大きく吹き飛ばす', heavy: '重い一撃', homing: '追いかける', chain: '近くの的へ連鎖', compress: '小さく強い', expand: '大きく広がる',
     reinforce: '威力1.3倍', suction: '強く吸い寄せる', rewind: '同じダメージをもう一度', guard: '3秒間ダメージ半分', drain: 'HP を吸い取る', blink: '後ろへ跳び退く',
-    float: '上へ跳び上がる', smash: '威力1.2倍', haste: '4秒間 足が速い',
+    float: '上へ跳び上がる', smash: '威力1.2倍', haste: '4秒間 足が速い', familiar: '使い魔が撃つ',
   };
   const SUP_TRAITS = { fly: ['空を飛ぶ'], aura: ['足が速くなる', 'まわりにダメージ'] }; // 守り・回復・移動の形の特徴（属性の特徴の代わり）
+  // 障壁・召喚のときだけ意味が変わる効果（札の言葉と、説明に足す一言）
+  const CTX_TRAIT = {
+    ward: { area: 'ドームになる', scatter: '壁が3枚', compress: '大盾になる', merge: '大きい', expand: '大きい', radiance: '大きい' },
+    summon: { scatter: '2体呼ぶ', merge: '大きく強い', expand: '大きい', speed: 'すばやい', radiance: '大きい' },
+  };
+  const CTX_NOTE = {
+    ward: { area: '障壁では、形がドームになる', scatter: '障壁では、壁が3枚の城壁になる', compress: '障壁では、形が大盾になる', merge: '障壁が大きくなる', expand: '障壁が大きくなる', radiance: '障壁が大きくなる' },
+    summon: { scatter: '召喚では、召喚獣が2体になる', merge: '召喚獣が大きく、HP も多くなる', expand: '召喚獣が大きく、HP も多くなる', speed: '召喚獣の動きと攻撃が速くなる', radiance: '召喚獣が少し大きくなる' },
+  };
   const SUM_NOUN = { crystal: '結晶', magnet: '磁力' }; // ひとこと説明の中だけ、読みやすい言い方にする（晶の弾 → 結晶の弾）
   MG.SHORT = { form: FORM_ACT, elem: ELEM_SHORT, mod: MOD_SHORT };
   const KANA_MAX = 12; // 読みが4語になるときや、これより長くなるときは、属性の読みを省いて短くする（属性は漢字と色でわかる）
@@ -241,7 +288,7 @@
     const sec = MG.findSecret(seq);
     if (sec) return { kanji: sec.kanji, kana: sec.kana, rank: '禁呪', secret: true };
     const words = seq.map((id) => MG.WORD_MAP[id]);
-    const E = NAME_ELEM[words[0].elem], F = NAME_FORM[words[1].form];
+    const E = NAME_ELEM[words[0].elem], F = formName(words[1].form, words[0].elem, words.slice(2).map((w) => w.mod));
     const mods = words.slice(2).map((w) => NAME_MOD[w.mod]);
     // 同じ効果が2回並んだときは、字を重ねずに1回だけ書く
     const modK = [], modR = [];
@@ -269,7 +316,7 @@
       cd: F.cd, life: F.life || 2, range: F.range || 60, jumps: F.jumps || 0, jumpRange: F.jumpRange || 18,
       area: F.area || 5, dur: F.dur || 0, tick: F.tick || 0.4, spreadDeg: F.spreadDeg || 0, homing: F.homing || 0,
       burn: 0, corrode: 0, refund: 0, split: 0, freeze: 0, pierce: 0, echo: 0, crit: 0, pull: 0, bounce: 0,
-      pulses: 0, knock: 0, chainHit: 0, rewind: 0, guard: 0, drain: 0, blink: 0, leap: 0, smash: 0, haste: 0, costMul: 1, mods: [],
+      pulses: 0, knock: 0, chainHit: 0, rewind: 0, guard: 0, drain: 0, blink: 0, leap: 0, smash: 0, haste: 0, familiar: 0, costMul: 1, mods: [],
       support: F.support ? formId : null,
     };
     s.dmg *= E.dmg; s.speed *= E.spd; s.costMul *= E.cost;
@@ -283,6 +330,16 @@
       s.mods.push(words[i].mod);
     }
     s.burst = (F.burst || 0) * (s.dmg / F.dmg);
+    // 障壁の形と大きさ（巨大・膨大・光輝で大きく、凝縮で小さく）
+    if (formId === 'ward' && !sec) {
+      s.shape = MG.wardShape(elemId, s.mods);
+      s.wardScale = Math.round(Math.max(0.75, Math.min(2.2, s.size / 0.3)) * 100) / 100;
+    }
+    // 召喚獣の種類と数（多重で2体）
+    if (formId === 'summon' && !sec) {
+      s.summonType = MG.summonType(elemId);
+      s.summonCount = Math.min(3, 1 + Math.floor((Math.round(s.count) - 1) / 2));
+    }
     s.cost = Math.round((F.cost + (seq.length - 2) * 4) * s.costMul);
     s.cd = Math.round(s.cd * 100) / 100;
     s.name = MG.nameSpell(seq);
@@ -303,12 +360,21 @@
     } else {
       lines.push(`${E.label}属性の、${F.desc}。`);
       if (formId === 'heal') lines.push('属性の特徴: 回復の魔法では、光の色が変わる。');
-      else if (formId === 'ward') lines.push(`属性の特徴: 障壁がこわれるとき、まわりに${E.label}の衝撃を放つ（${E.note}）。`);
+      else if (formId === 'ward') {
+        const S = MG.WARD_SHAPES[s.shape];
+        lines.push(`形: ${S.label} — ${S.desc}。`);
+        lines.push(`属性の特徴: 障壁がこわれるとき、${E.label}の衝撃を放つ（${E.note}）。`);
+      }
+      else if (formId === 'summon') {
+        const S = MG.SUMMONS[s.summonType];
+        lines.push(`召喚獣: ${E.label}の${S.label}${s.summonCount > 1 ? `（${s.summonCount}体）` : ''} — ${S.desc}。${Math.round(s.dur)}秒で消える。相手の魔法で倒されることもある。`);
+        lines.push(`属性の特徴: 召喚獣の攻撃に${E.label}の力が宿る（${E.note}）。`);
+      }
       else if (formId === 'warp') lines.push(`属性の特徴: 着いた場所で${E.label}の衝撃を放つ（${E.note}）。`);
       else if (formId === 'fly') lines.push(`属性の特徴: 飛んでいる間、${E.label}の光の粒が尾を引く。時間が切れたら、ゆっくり降りる。`);
       else if (formId === 'aura') lines.push(`属性の特徴: まわりの的に、${E.label}の力で少しずつダメージを与える（${E.note}）。速い属性ほど足が速くなり、雷属性はとくに速い。`);
       else lines.push(`属性の特徴: ${E.note}。`);
-      s.mods.forEach((id) => lines.push(`効果: ${MG.MODS[id].desc}。`));
+      s.mods.forEach((id) => lines.push(`効果: ${MG.MODS[id].desc}。${(CTX_NOTE[formId] && CTX_NOTE[formId][id]) ? `（${CTX_NOTE[formId][id]}）` : ''}`));
     }
     if (s.destroy) lines.push('破壊: 岩や壁などの地形をこわし、地面にクレーターを作る。');
     s.desc = lines;
@@ -318,8 +384,21 @@
       s.summary = (parts.length > 1 ? parts.slice(1) : parts).join('。') + '。';
       s.traits = ['隠し魔法'];
     } else {
-      s.summary = FORM_ACT[formId](SUM_NOUN[elemId] || E.label) + '。';
+      const EN = SUM_NOUN[elemId] || E.label;
+      s.summary = FORM_ACT[formId](EN) + '。';
       s.traits = (F.support ? (SUP_TRAITS[formId] || []) : [ELEM_SHORT[elemId]]).concat(s.mods.map((id) => MOD_SHORT[id]));
+      // 障壁・召喚では、形や数を変える効果の札を、その意味の言葉に置きかえる
+      if (CTX_TRAIT[formId]) s.traits = (F.support ? (SUP_TRAITS[formId] || []) : [ELEM_SHORT[elemId]]).concat(s.mods.map((id) => CTX_TRAIT[formId][id] || MOD_SHORT[id])).filter((t, i, a) => t && a.indexOf(t) === i);
+      if (formId === 'ward') {
+        const S = MG.WARD_SHAPES[s.shape];
+        s.summary = { sphere: `${EN}の障壁で自分を包み、ダメージを吸い取る`, front: `${EN}の大盾を前に構え、前からのダメージを吸い取る`, wall: `目の前に${EN}の壁を立てて、相手の弾を止める`, fort: `${EN}の壁を3枚立てて、自分を囲む`, dome: `その場に${EN}のドームを張り、外からの弾を止める` }[s.shape] + '。';
+        s.traits.unshift(S.label);
+      }
+      if (formId === 'summon') {
+        const S = MG.SUMMONS[s.summonType];
+        s.summary = `${EN}の${S.label}を呼び出し、一緒に戦わせる。`;
+        s.traits.unshift(S.label + (s.summonCount > 1 ? ` ${s.summonCount}体` : ''));
+      }
       s.traits = s.traits.filter((t, i, a) => t && a.indexOf(t) === i);
     }
     if (s.destroy) s.traits.push('地形を壊す');
@@ -342,7 +421,9 @@
     if (formId === 'fly') power = s.dur;
     if (sec) power = { redox: 240, cumulo: 330, supernova: 200, horizon: 290, aurora: 70 * 8, zero: 320, fusion: 260, erase: 999 }[sec.id] || power;
     s.power = Math.round(power);
-    s.areaSize = formId === 'rain' || formId === 'meteor' ? s.area : (formId === 'beam' || formId === 'chain' || formId === 'heal' || formId === 'fly') ? 0 : s.radius;
+    if (formId === 'summon') power = s.dmg * (MG.SUMMONS[s.summonType] || MG.SUMMONS.spirit).dmgMul * 8 * (s.summonCount || 1);
+    s.power = Math.round(power);
+    s.areaSize = formId === 'rain' || formId === 'meteor' ? s.area : (formId === 'beam' || formId === 'chain' || formId === 'heal' || formId === 'fly' || formId === 'summon') ? 0 : s.radius;
     // 守り・回復・移動の魔法は、性能の見出しを変える（威力 → 吸収量・回復量）
     s.powerLabel = formId === 'ward' ? '吸収できるダメージ' : formId === 'heal' ? '回復する HP' : formId === 'warp' ? '着地の衝撃' : formId === 'fly' ? '飛べる時間' : formId === 'aura' ? '足の速さ' : '威力';
     // 図鑑で、実測の最大ダメージの代わりに見せる値（守り・回復・飛翔・纏い）
