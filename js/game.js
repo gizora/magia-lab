@@ -141,7 +141,7 @@
       shards.forEach((s) => { s.v.y -= 9 * dt; s.m.position.addScaledVector(s.v, dt); s.m.rotation.x += s.s.x * dt; s.m.rotation.y += s.s.y * dt; s.m.material.opacity = k; });
       if (t >= 1.1) { shards.forEach((s) => { scene.remove(s.m); s.m.material.dispose(); }); return false; }
       return true;
-    });
+    }, shards.map((s) => s.m));
   }
 
   // 杖の形: 杖ごとに、柄の太さ・長さ・色と、先の飾りを大きく変える（色を見なくても区別できるように）
@@ -1561,7 +1561,7 @@
       if (Math.random() < 0.6) FX.emit(new V3(p.x + rand(-1.4, 1.4), p.y + 0.1, p.z + rand(-1.4, 1.4)), { count: 1, c1, c2, speed: 0.3, up: 3, life: 0.6, size: 0.3, drag: 0.5 });
       if (t >= 1.2) { scene.remove(m); m.geometry.dispose(); m.material.dispose(); return false; }
       return true;
-    });
+    }, [m]);
   }
   // 自分の召喚獣を呼び出す（type: 'golem' | 'spirit' | 'beast' | 'wisp'）
   function spawnSummon(type, spec, at) {
@@ -1949,7 +1949,7 @@
           return false;
         }
         return true;
-      });
+      }, [outer, inner, glow]);
       for (let i = 0; i < n; i++) {
         after(delay + (n > 1 ? (i * dur) / (n - 1) : 0), () => {
           const a = rand(0, Math.PI * 2), r = i === 0 ? 0 : Math.sqrt(Math.random()) * area * 0.85;
@@ -2187,7 +2187,19 @@
     el.style.transition = 'none'; el.style.opacity = String(strength || 0.8);
     requestAnimationFrame(() => { el.style.transition = 'opacity 0.9s ease-out'; el.style.opacity = '0'; });
   }
-  function special(update) { fields.push({ kind: 'special', update, spec: { colors: ['#fff', '#fff'] } }); }
+  // objs: 途中で片づける（対戦の開始・終了やチャレンジの開始）ときに、場面から消す物体
+  function special(update, objs) {
+    (objs || []).forEach((o) => { if (o) o.userData.special = true; });
+    fields.push({ kind: 'special', update, objs: objs || [], spec: { colors: ['#fff', '#fff'] } });
+  }
+  // 効果の場（霧・竜巻・特殊演出）をすべて片づける。演出の物体を残すと、上空に魔法陣や球が残ったままになる
+  function clearFields() {
+    for (const f of fields) {
+      if (f.kind !== 'special') continue;
+      for (const o of f.objs) { if (!o) continue; scene.remove(o); if (o.isMesh && o.geometry) o.geometry.dispose(); if (o.material && !o.isSprite) o.material.dispose(); }
+    }
+    fields.length = 0; meteorCircles = 0;
+  }
   let meteorCircles = 0; // 上空に出ている流星の魔法陣の数（動作確認用）
 
   const SECRET = {
@@ -2256,7 +2268,7 @@
           return false;
         }
         return true;
-      });
+      }, [star, star2]);
     },
     horizon(spec, aim) {
       const p = groundPointOf(aim, 45); p.y = 3;
@@ -2297,7 +2309,7 @@
           return false;
         }
         return true;
-      });
+      }, [hole, disk, halo]);
     },
     aurora(spec, aim) {
       const f = aim.dir.clone(); f.y = 0; if (f.lengthSq() < 1e-4) f.set(0, 0, -1); f.normalize();
@@ -2459,7 +2471,7 @@
           }
         }
         return true;
-      });
+      }, [sphere, core]);
     },
     fusion(spec, aim) {
       const f = aim.dir.clone(); f.y = 0; if (f.lengthSq() < 1e-4) f.set(0, 0, -1); f.normalize();
@@ -2501,7 +2513,7 @@
         }
         [sun, corona, ball].forEach((o) => o.position.copy(pos));
         return true;
-      });
+      }, [sun, corona, ball]);
     },
   };
 
@@ -2537,11 +2549,18 @@
   function applyMods(spec, m) {
     return Object.assign({}, spec, { mult: m.dmg, cost: Math.max(1, Math.round(spec.cost * m.cost)), cd: spec.cd * m.cd, penetrate: (spec.penetrate || 0) + m.pen, speed: (spec.speed || 0) * m.speed, castMode: m.mode });
   }
-  // スロットの残り回数（杖ごと・スロットごと。時間で1回ずつ戻る）
+  // スロットの残り回数（杖ごと・スロットごと。時間で1回ずつ戻る）。隠し魔法のスロットは1回まで
+  G.chargeMax = function (i, wandId) {
+    const sp = (st.slotsByWand[wandId || st.wand] || [])[i];
+    return sp && sp.secret ? MG.SECRET_CHARGES : MG.SLOT_CHARGES;
+  };
   G.charge = function (i, wandId) {
     const k = (wandId || st.wand) + ':' + i;
-    if (!st.charges[k]) st.charges[k] = { n: MG.SLOT_CHARGES, t: 0 };
-    return st.charges[k];
+    const max = G.chargeMax(i, wandId);
+    if (!st.charges[k]) st.charges[k] = { n: max, t: 0, max };
+    const c = st.charges[k];
+    c.max = max; if (c.n > max) c.n = max;
+    return c;
   };
   function release(spec0, via, mods) {
     const spec = applyMods(spec0, mods || G.castMods('slot'));
@@ -2649,7 +2668,7 @@
     const arr = slotsOf(id);
     if (i >= arr.length) return false;
     arr[i] = seq ? MG.buildSpell(seq) : null;
-    const ch = G.charge(i, id); ch.n = MG.SLOT_CHARGES; ch.t = 0; // 入れ直すと回数は満タン
+    const ch = G.charge(i, id); ch.n = ch.max; ch.t = 0; // 入れ直すと回数は満タン
     if (id === st.wand && i === st.slot) G.selectSlot(i);
     return true;
   };
@@ -2976,7 +2995,7 @@
     for (let i = timers.length - 1; i >= 0; i--) if (timers[i].t <= st.time) { const fn = timers[i].fn; timers.splice(i, 1); fn(); }
     st.mp = Math.min(st.mpMax, st.mp + st.mpRegen * dt);
     for (let i = 0; i < st.cds.length; i++) st.cds[i] = Math.max(0, st.cds[i] - dt);
-    for (const k in st.charges) { const c = st.charges[k]; if (c.n < MG.SLOT_CHARGES) { c.t += dt; if (c.t >= MG.RECHARGE_SEC) { c.n++; c.t = 0; } } else c.t = 0; }
+    for (const k in st.charges) { const c = st.charges[k]; if (c.n < (c.max || MG.SLOT_CHARGES)) { c.t += dt; if (c.t >= MG.RECHARGE_SEC) { c.n++; c.t = 0; } } else c.t = 0; }
     st.gcd = Math.max(0, st.gcd - dt);
     if (st.comboT > 0) { st.comboT -= dt; if (st.comboT <= 0) st.combo = 0; }
     if (input.mouseDown && input.locked) G.castSlot(st.slot);
@@ -3158,7 +3177,7 @@
     M.slowT = 0; M.slowHard = false; M.vulnT = 0; M.burnT = 0; M.burnAcc = 0;
     st.challenge = null;
     projs.slice().forEach(() => removeProj(projs.length - 1));
-    fields.length = 0; timers.length = 0;
+    clearFields(); timers.length = 0;
     G.noRespawn = true;
     targets.slice().forEach((t) => removeTargetObj(t));
     targets.length = 0; avatars.clear();
@@ -3169,7 +3188,7 @@
     targets.push(selfT);
     placeAt(SPAWNS[Math.max(0, o.spawn || 0) % SPAWNS.length]);
     st.mp = st.mpMax; st.cds = [0, 0, 0, 0, 0]; st.gcd = 0; st.vcd = {};
-    for (const k in st.charges) { st.charges[k].n = MG.SLOT_CHARGES; st.charges[k].t = 0; }
+    for (const k in st.charges) { st.charges[k].n = st.charges[k].max || MG.SLOT_CHARGES; st.charges[k].t = 0; }
   };
   G.matchEnd = function () {
     if (!M.on) return;
@@ -3177,7 +3196,7 @@
     targets.slice().forEach((t) => removeTargetObj(t));
     targets.length = 0; avatars.clear(); selfT = null;
     projs.slice().forEach(() => removeProj(projs.length - 1));
-    fields.length = 0; timers.length = 0;
+    clearFields(); timers.length = 0;
     player.kv.set(0, 0, 0);
     applyWandLook(MG.WAND_MAP[st.wand]);
     resetSup(); clearBarriers();
@@ -3338,7 +3357,7 @@
     st.score = 0; st.kills = 0; st.combo = 0; st.comboT = 0; st.mp = st.mpMax;
     st.cds = [0, 0, 0, 0, 0];
     projs.slice().forEach((_, i) => removeProj(projs.length - 1));
-    fields.length = 0;
+    clearFields();
     player.pos.set(0, 0, 16); player.yaw = 0; player.pitch = -0.05;
     G.resetTargets();
     st.challenge = { left: sec || 60, total: sec || 60 };
@@ -3363,7 +3382,7 @@
     setPlayer(x, z) { player.pos.set(x, 0, z); camera.position.set(x, EYE, z); camera.updateMatrixWorld(true); },
     step(sec) { const n = Math.round(sec * 60); for (let i = 0; i < n; i++) step(1 / 60); camera.updateMatrixWorld(true); },
     aim: () => { camera.updateMatrixWorld(true); const a = getAim(); return { target: a.target ? a.target.id : null, x: a.point.x, y: a.point.y, z: a.point.z }; },
-    fillMp() { st.mp = st.mpMax; st.cds = [0, 0, 0, 0, 0]; st.gcd = 0; st.vcd = {}; for (const k in st.charges) { st.charges[k].n = MG.SLOT_CHARGES; st.charges[k].t = 0; } },
+    fillMp() { st.mp = st.mpMax; st.cds = [0, 0, 0, 0, 0]; st.gcd = 0; st.vcd = {}; for (const k in st.charges) { st.charges[k].n = st.charges[k].max || MG.SLOT_CHARGES; st.charges[k].t = 0; } },
     build: () => ({ state: st.build.state, words: st.build.words.slice(), need: st.build.need, rings: buildRings.filter((r) => r.on > 0.5).length, visible: buildGroup.visible }),
     wandVisible: () => wand.visible, handVisible: () => handGlow.visible,
     renderInfo: () => renderer.info.render,
@@ -3378,6 +3397,8 @@
     hasCtx: () => CTX !== null,
     sup: SUP,
     meteorCircles: () => meteorCircles,
+    leftovers: () => scene.children.filter((o) => o.userData.special).length, // 演出の物体が場面に残っている数
+    startChallenge: (sec) => G.startChallenge(sec),
     rocks: () => projs.filter((p) => p.kind === 'meteor').length,
     height: () => Math.round((player.pos.y - W.heightAt(player.pos.x, player.pos.z)) * 100) / 100,
     moveBoost: () => Math.round(moveBoost() * 100) / 100,

@@ -446,6 +446,7 @@
   MG.WANDS.forEach((w) => (MG.WAND_MAP[w.id] = w));
   MG.CHANT_WAND_MUL = 0.7;  // 杖を持って詠唱したときの効果（30%ダウン）
   MG.SLOT_CHARGES = 3;      // スロットの魔法を無詠唱で使える回数
+  MG.SECRET_CHARGES = 1;    // 隠し魔法は強いので、無詠唱で使えるのは1回だけ
   MG.RECHARGE_SEC = 15;     // 1回分が戻るまでの秒数
 
   // 単語の役割の説明（工房の辞典用）

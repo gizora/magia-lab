@@ -291,11 +291,11 @@
       noise({ type: 'highpass', f0: 3000, f1: 900, dur: 1.4, vol: 0.4 * s, attack: 0.02, hold: 0.2, dest: d });
       noise({ brown: true, type: 'lowpass', f0: 600, f1: 120, dur: 0.6, vol: 0.4 * s, dest: d });
     },
-    lightning(s, d) { // バリバリッと裂けて、ゴロゴロと雷鳴が遠ざかる
+    lightning(s, d) { // バリバリッと裂けて、短くゴロッと鳴る
       noise({ type: 'highpass', f0: 1500, dur: 0.09, vol: 0.9 * s, dist: 12, dest: d });
       for (let i = 0; i < 6; i++) noise({ type: 'bandpass', f0: rnd(1500, 7000), q: 3, dur: 0.04, vol: 0.4 * s, delay: 0.03 + i * rnd(0.02, 0.05), dist: 8, dest: d });
       thump(d, s, 90, 30, 0.6);
-      noise({ brown: true, type: 'lowpass', f0: 500, f1: 70, dur: 2.2, vol: 0.6 * s, delay: 0.08, attack: 0.15, am: { freq: 3.5, depth: 0.7, type: 'triangle' }, dest: d });
+      noise({ brown: true, type: 'lowpass', f0: 500, f1: 70, dur: 0.8, vol: 0.55 * s, delay: 0.06, attack: 0.08, am: { freq: 5, depth: 0.6, type: 'triangle' }, dest: d });
     },
     plasma(s, d) { // ビュワァンとゆがみ、低くうなる
       tone({ type: 'square', f0: 1500, f1: 60, glide: 0.35, dur: 0.5, vol: 0.14 * s, vib: 40, vibDepth: 150, lp: 2800, dist: 4, dest: d });
@@ -396,8 +396,8 @@
   const SCAST = {
     fire() { sample('ignite', { vol: 0.75 }); sample('fire_wind', { offset: 0.75, dur: 1.2, vol: 0.55, rate: 1.1 }); },
     ice() { sample('ice', { offset: 0.45, dur: 1.4, vol: 0.7, rev: 0.25 }); },
-    lightning() { sample('thunder', { offset: 0.05, dur: 0.9, vol: 0.7 }); },
-    plasma() { sample('thunder', { offset: 0.05, dur: 0.9, vol: 0.6, rate: 0.75 }); },
+    lightning() { sample('thunder', { offset: 0.08, dur: 0.5, vol: 0.7 }); },
+    plasma() { sample('thunder', { offset: 0.08, dur: 0.4, vol: 0.6, rate: 0.75 }); },
     light() { sample('cast_holy', { offset: 0.25, dur: 1.5, vol: 0.6, rate: 1.1, rev: 0.3 }); },
     prism() { sample('cast_holy', { offset: 0.25, dur: 1.3, vol: 0.5, rate: 1.35, rev: 0.3 }); },
     arcane() { sample('chant_a', { offset: 0.2, dur: 1.2, vol: 0.55, rate: 1.15, rev: 0.3 }); },
@@ -415,8 +415,8 @@
     fire(s, d) { sample((fireAlt++ % 2) ? 'fire_a' : 'fire_b', { vol: 0.85 * s, rate: 0.9 + Math.random() * 0.2, dest: d }); },
     ice(s, d) { sample('impact_frost', { offset: 1.15, dur: 2.4, vol: 0.8 * s, dest: d }); },
     crystal(s, d) { sample('impact_frost', { offset: 1.15, dur: 1.8, vol: 0.7 * s, rate: 1.35, dest: d }); },
-    lightning(s, d) { sample('thunder', { dur: 1.8, vol: 0.8 * s, dest: d }); },
-    plasma(s, d) { sample('thunder', { dur: 1.6, vol: 0.7 * s, rate: 0.7, dest: d }); },
+    lightning(s, d) { sample('thunder', { offset: 0.1, dur: 0.7, vol: 0.8 * s, dest: d }); },
+    plasma(s, d) { sample('thunder', { offset: 0.1, dur: 0.55, vol: 0.7 * s, rate: 0.7, dest: d }); },
     light(s, d) { sample('cast_holy', { offset: 0.35, dur: 1.2, vol: 0.55 * s, rate: 1.5, dest: d }); },
     earth(s, d) { sample('impact_epic', { dur: 1.6, vol: 0.6 * s, rate: 0.9, dest: d }); },
     metal(s, d) { sample('impact_epic', { dur: 1.4, vol: 0.5 * s, rate: 1.15, dest: d }); },
@@ -432,6 +432,7 @@
     elements: () => Object.keys(IMPACT),
     info: () => ({ reverb: !!revIn, brownNoise: !!brown, state: ctx ? ctx.state : 'none', samples: Object.keys(samples).length, sampleKeys: Object.keys(samples), voices: sampleVoices }),
     sampleCount: () => Object.keys(samples).length,
+    sampleLen: (key) => (samples[key] ? Math.round(samples[key].duration * 100) / 100 : 0),
     playSample: (key, o) => (ready() ? sample(key, o) : false),
     setEnabled(v) {
       enabled = !!v;
@@ -510,7 +511,7 @@
       [1047, 1319, 1568].forEach((f, i) => tone({ f0: f, dur: 0.35, vol: 0.08, delay: 0.05 + i * 0.06, rev: 0.4 }));
     },
     zap(ap) { if (!ready() || !throttle('zap', 50)) return; noise({ type: 'bandpass', f0: rnd(2000, 5000), q: 4, dur: 0.08, vol: 0.35, dist: 8, dest: bus(ap, 0.25) }); },
-    thunder(ap) { if (!ready() || !throttle('thunder', 120)) return; const d = bus(ap, 0.6); sample('thunder', { vol: 0.8, rate: 0.85 + Math.random() * 0.2, dest: d }); soft(has('thunder') ? 0.6 : 1, () => IMPACT.lightning(1.3, d)); },
+    thunder(ap) { if (!ready() || !throttle('thunder', 120)) return; const d = bus(ap, 0.6); sample('thunder', { offset: 0.1, dur: 0.8, vol: 0.8, rate: 0.85 + Math.random() * 0.2, dest: d }); soft(has('thunder') ? 0.6 : 1, () => IMPACT.lightning(1.3, d)); },
     whoosh() { if (!ready() || !throttle('whoosh', 60)) return; noise({ type: 'bandpass', f0: 500, f1: 2200, q: 1.2, dur: 0.3, vol: 0.22, attack: 0.05 }); },
     rumble(dd) { if (!ready()) return; noise({ brown: true, type: 'lowpass', f0: 300, f1: 60, dur: dd || 1.5, vol: 0.6, attack: 0.3, am: { freq: 4, depth: 0.4 } }); tone({ f0: 45, f1: 30, dur: dd || 1.5, vol: 0.4, attack: 0.3 }); },
     charge(dd) { if (!ready()) return; sample('converge', { vol: 0.5, rate: Math.max(0.6, Math.min(1.4, 2.3 / ((dd || 1) * 1.6))), rev: 0.5 }); tone({ type: 'sawtooth', f0: 70, f1: 900, dur: dd || 1, vol: 0.12, lp: 2500, attack: 0.25, rev: 0.5 }); noise({ type: 'bandpass', f0: 200, f1: 5000, q: 2, dur: dd || 1, vol: 0.18, attack: 0.4, rev: 0.5 }); },

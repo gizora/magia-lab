@@ -191,7 +191,7 @@
       b.querySelector('.s-cd').style.setProperty('--cd', s && s.cd ? Math.min(1, st.cds[i] / s.cd).toFixed(3) : 0);
       b.classList.toggle('no-mp', !!s && isKnown(s.seq) && st.mp < G.costFor(s, 'slot'));
       // 無詠唱の残り回数（●○）と、次の1回が戻るまで
-      const ch = G.charge(i), max = MG.SLOT_CHARGES;
+      const ch = G.charge(i), max = ch.max;
       const el = b.querySelector('.s-charge');
       const txt = s ? '●'.repeat(ch.n) + '○'.repeat(max - ch.n) + (ch.n < max ? ` ${Math.ceil(MG.RECHARGE_SEC - ch.t)}s` : '') : '';
       if (el.textContent !== txt) el.textContent = txt;
@@ -991,7 +991,7 @@
     const w = MG.WAND_MAP[st.wand];
     $('wand-chip').innerHTML = st.wand === 'bare'
       ? '<b>素手</b> ・ 詠唱（V キー）と紋章のみ ・ 効果 ×1.5 ・ MP ×1.6'
-      : `<span class="wc-gem" style="--gem:${w.gem}"></span><b>${esc(w.name)}</b> ・ スロットは無詠唱で各 ${MG.SLOT_CHARGES} 回 ・ 詠唱は効果 ×0.7`;
+      : `<span class="wc-gem" style="--gem:${w.gem}"></span><b>${esc(w.name)}</b> ・ スロットは無詠唱で各 ${MG.SLOT_CHARGES} 回（隠し魔法は ${MG.SECRET_CHARGES} 回） ・ 詠唱は効果 ×0.7`;
   }
   function startChallenge() {
     if (G.match && G.match.on) { toast('対戦中は 60 秒チャレンジを始められません'); return; }
