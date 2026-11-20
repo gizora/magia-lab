@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>マギア・ラボ</title>
+<meta name="description" content="科学の言葉を並べて魔法をつくり、3D の練習場で放つゲーム">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="world"></div>
+
+<!-- ===== HUD ===== -->
+<div id="hud" hidden>
+  <div id="crosshair" aria-hidden="true"><span></span></div>
+  <div id="popups" aria-hidden="true"></div>
+  <div id="flash" aria-hidden="true"></div>
+  <div id="hurt" aria-hidden="true"></div>
+
+  <!-- 自分の障壁: 画面のふちに六角形の網目 -->
+  <div id="aura-overlay" class="aura-overlay" aria-hidden="true"></div>
+  <div id="ward-overlay" class="ward-overlay" aria-hidden="true"><div class="wo-glow"></div><div class="wo-hex"></div><div class="wo-crack"></div></div>
+
+  <!-- 対戦中の表示 -->
+  <div id="vs-hud" class="vs-hud" hidden>
+    <ul id="vs-board" class="vs-board" aria-label="倒した数"></ul>
+    <div id="vs-timer" class="vs-timer" aria-label="残り時間">5:00</div>
+    <ul id="vs-feed" class="vs-feed" aria-live="polite"></ul>
+    <div class="vs-hp">
+      <span class="vs-hp-label">HP</span>
+      <div class="vs-hp-bar"><div id="vs-hp-fill" class="vs-hp-fill"></div></div>
+      <span id="vs-hp-num" class="vs-hp-num">200</span>
+      <span id="vs-tags" class="vs-tags"></span>
+    </div>
+    <div id="vs-dead" class="vs-dead" role="status" hidden></div>
+  </div>
+
+  <div class="hud-top">
+    <div class="score-box">
+      <div class="score-label">スコア</div>
+      <div id="score" class="score-num">0</div>
+      <div id="combo" class="combo"></div>
+    </div>
+    <div id="timer" class="timer" hidden><span id="timer-num">60</span><small>秒</small></div>
+    <div class="hud-buttons">
+      <button type="button" id="btn-wands" class="hud-btn"><span>杖</span><kbd>T</kbd></button>
+      <button type="button" id="btn-voice" class="hud-btn btn-voice" aria-pressed="false"><span class="mic-dot" aria-hidden="true"></span><span id="btn-voice-label">詠唱</span><kbd>V</kbd></button>
+      <button type="button" id="btn-time" class="hud-btn" aria-label="昼と夜を切り替える"><span id="btn-time-label">夜</span><kbd>N</kbd></button>
+      <button type="button" id="btn-full" class="hud-btn" aria-pressed="false"><span id="btn-full-label">全画面</span></button>
+      <button type="button" id="btn-craft" class="hud-btn"><span>魔法工房</span><kbd>E</kbd></button>
+      <button type="button" id="btn-book" class="hud-btn"><span>図鑑</span><kbd>G</kbd></button>
+      <button type="button" id="btn-menu" class="hud-btn"><span>メニュー</span><kbd>Esc</kbd></button>
+    </div>
+  </div>
+
+  <div id="lock-hint" class="lock-hint" hidden>画面をクリックすると視点を動かせます</div>
+  <div id="spell-banner" class="spell-banner" aria-live="polite"></div>
+  <div id="reveal" class="reveal" aria-live="assertive"></div>
+  <div id="voice-box" class="voice-box" aria-live="polite"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <div class="hud-bottom">
+    <div id="sup-hud" class="sup-hud" aria-live="polite"></div>
+    <div class="mp-wrap">
+      <div class="mp-label">MP</div>
+      <div class="mp-bar"><div id="mp-fill" class="mp-fill"></div></div>
+      <div id="mp-num" class="mp-num">150</div>
+    </div>
+    <div id="wand-chip" class="wand-chip"></div>
+    <div id="slots" class="slots"></div>
+  </div>
+
+  <div id="touch-ui" class="touch-ui" hidden>
+    <div id="stick" class="stick" hidden><div id="stick-knob" class="stick-knob"></div></div>
+    <button type="button" id="btn-cast" class="btn-cast" aria-label="魔法を放つ">放つ</button>
+  </div>
+</div>
+
+<!-- ===== タイトル ===== -->
+<section id="title" class="overlay title-screen" role="dialog" aria-modal="true" aria-labelledby="title-h">
+  <div class="title-inner">
+    <p class="title-kicker">SCIENCE × MAGIC</p>
+    <h1 id="title-h">マギア・ラボ</h1>
+    <p class="title-sub">科学のことばを並べて、自分だけの魔法をつくる</p>
+    <ol class="title-steps">
+      <li><b>ことばを並べる</b><span>「燃焼」「結合」など科学の単語を 2〜4 個。並べる順番で魔法が変わる</span></li>
+      <li><b>放ってみる</b><span>どんな魔法になるかは、放ってみるまでわからない</span></li>
+      <li><b>名前が明かされる</b><span>初めて放った瞬間に、魔法の名前と威力がわかる。隠し魔法も 8 つある</span></li>
+    </ol>
+    <div class="title-btns">
+      <button type="button" id="btn-start" class="btn-primary">はじめる</button>
+      <button type="button" id="btn-versus-title" class="btn-secondary">友達と対戦</button>
+    </div>
+    <p id="engine-status" class="engine-status" aria-live="polite">本物の物理とエフェクトを準備しています…</p>
+    <p id="webgl-error" class="webgl-error" hidden>このブラウザでは 3D 表示（WebGL）が使えないため、遊べません。Edge や Chrome の最新版で開いてください。</p>
+    <dl class="controls">
+      <div><dt>WASD</dt><dd>移動（Shift で走る）</dd></div>
+      <div><dt>マウス</dt><dd>視点・ねらい</dd></div>
+      <div><dt>クリック</dt><dd>魔法を放つ（長押しで連射）</dd></div>
+      <div><dt>1〜4 / ホイール</dt><dd>魔法の切り替え</dd></div>
+      <div><dt>Space</dt><dd>ジャンプ（飛翔の魔法中は Space で上昇・C で下降）</dd></div>
+      <div><dt>E / G</dt><dd>魔法工房 / 図鑑</dd></div>
+      <div><dt>N</dt><dd>昼と夜の切り替え</dd></div>
+      <div><dt>V</dt><dd>声で唱える（マイク）のオン・オフ</dd></div>
+      <div><dt>右クリック</dt><dd>押しながら紋章を描く（2つ以上重ねて左クリックで発動）</dd></div>
+      <div><dt>T</dt><dd>杖をえらぶ（素手にもできる）</dd></div>
+    </dl>
+  </div>
+</section>
+
+<!-- ===== 魔法工房 ===== -->
+<section id="crafter" class="overlay panel-overlay" role="dialog" aria-modal="true" aria-labelledby="crafter-h" hidden>
+  <div class="panel crafter">
+    <header class="panel-head">
+      <h2 id="crafter-h">魔法工房 <small>ことばを並べて、魔法を錬成する</small></h2>
+      <button type="button" class="btn-close" data-close aria-label="閉じる">×</button>
+    </header>
+    <div class="crafter-body">
+      <div class="palette-col">
+        <div class="palette-group">
+          <h3><span class="tag tag-chem">化学</span>反応のことば</h3>
+          <div id="palette-chem" class="palette"></div>
+        </div>
+        <div class="palette-group">
+          <h3><span class="tag tag-phys">物理</span>力と波のことば</h3>
+          <div id="palette-phys" class="palette"></div>
+        </div>
+        <div id="word-info" class="word-info" aria-live="polite"></div>
+      </div>
+      <div class="forge-col">
+        <div class="seq-head">
+          <span>並べたことば <small>（クリックで外す・ドラッグか ← → キーで並べかえ）</small></span>
+          <button type="button" id="btn-clear" class="btn-small">全部外す</button>
+        </div>
+        <div id="seq" class="seq"></div>
+        <div id="preview" class="preview"></div>
+        <div class="register">
+          <div class="register-label">スロットに登録して使う</div>
+          <div id="register-btns" class="register-btns"></div>
+        </div>
+        <button type="button" id="btn-try" class="btn-primary btn-try" data-close>練習場で試す</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== 図鑑 ===== -->
+<section id="book" class="overlay panel-overlay" role="dialog" aria-modal="true" aria-labelledby="book-h" hidden>
+  <div class="panel book">
+    <header class="panel-head">
+      <h2 id="book-h">魔法図鑑</h2>
+      <button type="button" class="btn-close" data-close aria-label="閉じる">×</button>
+    </header>
+    <div class="book-progress" id="book-progress"></div>
+    <div class="book-tabs" role="tablist" aria-label="図鑑の種類">
+      <button type="button" role="tab" id="tab-r2" class="book-tab" aria-selected="true" aria-controls="book-list">初級 <small>2語</small> <span id="count-r2" class="tab-count"></span></button>
+      <button type="button" role="tab" id="tab-r3" class="book-tab" aria-selected="false" aria-controls="book-list">中級 <small>3語</small> <span id="count-r3" class="tab-count"></span></button>
+      <button type="button" role="tab" id="tab-r4" class="book-tab" aria-selected="false" aria-controls="book-list">上級 <small>4語</small> <span id="count-r4" class="tab-count"></span></button>
+      <button type="button" role="tab" id="tab-secret" class="book-tab" aria-selected="false" aria-controls="book-list">隠し魔法 <span id="count-secret" class="tab-count"></span></button>
+    </div>
+    <div class="book-body" id="book-body">
+      <div class="book-left">
+        <div class="book-tools" id="book-tools">
+          <div class="bt-kind" role="group" aria-label="種類で絞りこむ">
+            <button type="button" class="bt-btn" data-kind="all" aria-pressed="true">すべて</button>
+            <button type="button" class="bt-btn" data-kind="attack" aria-pressed="false">攻撃</button>
+            <button type="button" class="bt-btn" data-kind="support" aria-pressed="false">守り・回復・移動</button>
+          </div>
+          <div class="bt-row">
+            <select id="bt-elem" class="bt-select" aria-label="属性で絞りこむ"></select>
+            <select id="bt-sort" class="bt-select" aria-label="並び順">
+              <option value="new">新しい順</option>
+              <option value="power">威力順</option>
+              <option value="use">よく使う順</option>
+              <option value="name">名前順</option>
+            </select>
+          </div>
+        </div>
+        <div class="book-list" id="book-list" role="tabpanel" aria-labelledby="tab-r2"></div>
+      </div>
+      <div class="book-detail" id="book-detail" aria-live="polite"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== メニュー ===== -->
+<section id="menu" class="overlay panel-overlay" role="dialog" aria-modal="true" aria-labelledby="menu-h" hidden>
+  <div class="panel menu">
+    <header class="panel-head">
+      <h2 id="menu-h">メニュー</h2>
+      <button type="button" class="btn-close" data-close aria-label="閉じる">×</button>
+    </header>
+    <div class="menu-body">
+      <button type="button" class="btn-primary" data-close>練習場に戻る</button>
+      <button type="button" id="btn-challenge" class="btn-secondary">60秒チャレンジ <small id="best-score"></small></button>
+      <button type="button" id="menu-craft" class="btn-secondary">魔法工房</button>
+      <button type="button" id="menu-book" class="btn-secondary">魔法図鑑</button>
+      <button type="button" id="menu-wands" class="btn-secondary">杖をえらぶ</button>
+      <button type="button" id="menu-versus" class="btn-secondary">友達と対戦</button>
+      <div class="setting">
+        <label for="sens">視点の感度</label>
+        <input type="range" id="sens" min="0.3" max="2.5" step="0.1" value="1">
+      </div>
+      <div class="setting">
+        <span id="time-label">練習場の時間</span>
+        <div class="seg" role="group" aria-labelledby="time-label">
+          <button type="button" class="seg-btn" data-time="day" aria-pressed="false">昼</button>
+          <button type="button" class="seg-btn" data-time="night" aria-pressed="true">夜</button>
+        </div>
+      </div>
+      <div class="setting">
+        <span id="shake-label">画面の揺れ</span>
+        <div class="seg" role="group" aria-labelledby="shake-label">
+          <button type="button" class="seg-btn" data-shake="0" aria-pressed="false">オフ</button>
+          <button type="button" class="seg-btn" data-shake="0.5" aria-pressed="false">弱</button>
+          <button type="button" class="seg-btn" data-shake="1" aria-pressed="true">標準</button>
+          <button type="button" class="seg-btn" data-shake="1.5" aria-pressed="false">強</button>
+        </div>
+      </div>
+      <div class="setting setting-col">
+        <div class="setting-row">
+          <span id="pad-label">ゲームパッドの振動</span>
+          <div class="setting-btns">
+            <button type="button" id="btn-pad-test" class="btn-small">テスト</button>
+            <button type="button" id="btn-pad" class="btn-toggle" aria-pressed="true" aria-labelledby="pad-label btn-pad">オン</button>
+          </div>
+        </div>
+        <p id="pad-status" class="setting-note"></p>
+      </div>
+      <div class="setting">
+        <span id="voice-label">声で唱える（V キー）</span>
+        <button type="button" id="btn-voice-menu" class="btn-toggle" aria-pressed="false" aria-labelledby="voice-label btn-voice-menu">オフ</button>
+      </div>
+      <div class="setting">
+        <span id="full-label">全画面</span>
+        <button type="button" id="btn-full-menu" class="btn-toggle" aria-pressed="false" aria-labelledby="full-label btn-full-menu">オフ</button>
+      </div>
+      <div class="setting">
+        <label for="bgm-vol" id="bgm-label">BGM</label>
+        <div class="setting-btns">
+          <input type="range" id="bgm-vol" min="0" max="1" step="0.05" value="0.6" aria-label="BGM の音量">
+          <button type="button" id="btn-bgm" class="btn-toggle" aria-pressed="true" aria-labelledby="bgm-label btn-bgm">オン</button>
+        </div>
+      </div>
+      <div class="setting">
+        <span id="sound-label">音</span>
+        <button type="button" id="btn-sound" class="btn-toggle" aria-pressed="true" aria-labelledby="sound-label btn-sound">オン</button>
+      </div>
+      <button type="button" id="btn-reset-terrain" class="btn-secondary">壊れた地形を元に戻す</button>
+      <div class="setting setting-col save-io">
+        <div class="setting-row">
+          <span id="data-label">セーブデータ</span>
+          <div class="setting-btns">
+            <button type="button" id="btn-export" class="btn-small">書き出す</button>
+            <button type="button" id="btn-import" class="btn-small">読み込む</button>
+          </div>
+        </div>
+        <input type="file" id="import-file" accept=".json,application/json" hidden>
+        <div id="import-confirm" class="import-confirm" hidden>
+          <p id="import-summary"></p>
+          <div class="setting-btns">
+            <button type="button" id="import-ok" class="btn-small danger">上書きして読み込む</button>
+            <button type="button" id="import-cancel" class="btn-small">やめる</button>
+          </div>
+        </div>
+        <p id="data-status" class="setting-note" aria-live="polite"></p>
+      </div>
+      <p id="menu-engine" class="menu-note"></p>
+      <p class="menu-note credits">物理: Jolt Physics（MIT）／ エフェクト: Effekseer（MIT）、エフェクト素材: Effekseer 公式サンプル（NextSoft・Pierre・AndrewFM、CC0）／ 対戦の顔合わせ: PeerJS（MIT）</p>
+      <p class="menu-note">60秒チャレンジ: 制限時間内に的を壊してスコアを競います。続けて壊すとコンボで点が増えます。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ===== 杖をえらぶ ===== -->
+<section id="wands" class="overlay panel-overlay" role="dialog" aria-modal="true" aria-labelledby="wands-h" hidden>
+  <div class="panel wands">
+    <header class="panel-head">
+      <h2 id="wands-h">杖をえらぶ <small>T キー</small></h2>
+      <button type="button" class="btn-close" data-close aria-label="閉じる">×</button>
+    </header>
+    <div class="wands-body">
+      <ul class="wand-rules">
+        <li><b>杖を持っているとき</b>: スロットに入れた魔法は<b>無詠唱（クリック）で各 3 回</b>使える（15 秒で 1 回分戻る）。図鑑にある魔法は、<b>名前を唱えて</b>も放てる（多少の言い間違いは通る。効果は 30% ダウン）。</li>
+        <li><b>紋章</b>: 右クリックを押しながら、ことばの紋章を順に描いて重ね、<b>左クリックで発動</b>（まだ放ったことのない魔法も放てる）。杖を持っていても<b>効果は下がらない</b>。</li>
+        <li><b>素手のとき</b>: スロットは使えず、<b>詠唱と紋章</b>で放つ。詠唱は厳しく、<b>名前を一字一句そのまま</b>唱えないと発動しない。MP は 1.6 倍かかるが、<b>効果は 50% アップ</b>。</li>
+      </ul>
+      <div id="wand-list" class="wand-list"></div>
+      <button type="button" class="btn-primary btn-try" data-close>練習場に戻る</button>
+    </div>
+  </div>
+</section>
+
+<!-- ===== 声で唱える: はじめての確認 ===== -->
+<section id="voice-consent" class="overlay panel-overlay" role="dialog" aria-modal="true" aria-labelledby="voice-h" hidden>
+  <div class="panel consent">
+    <h2 id="voice-h">声で唱えて魔法を放つ</h2>
+    <p>マイクで声を聞き取り、唱えた魔法を放てるようにします。</p>
+    <ul class="consent-list">
+      <li><b>唱え方</b>: 一度放って名前がわかった魔法の<b>名前</b>（「フレア・キャノン」のような読み）を唱えます。杖を持っていれば多少の言い間違いも通りますが、素手のときは一字一句そのまま唱えないと発動しません。</li>
+      <li><b>声の送り先</b>: 文字にするため、声はブラウザの提供元の音声認識サーバー（Edge は Microsoft、Chrome は Google）に送られます。インターネット接続が必要です。</li>
+      <li><b>料金</b>: かかりません。</li>
+      <li><b>使い方</b>: <b>V キー</b>でマイクをオンにすると、オフにするまで聞き続け、唱えた魔法がその場で放たれます。もう一度 V キーで止まります。</li>
+      <li>ブラウザがマイクの使用許可をたずねたら「許可」を選んでください。</li>
+    </ul>
+    <p id="voice-file-note" class="file-note" hidden><b>ご注意:</b> いまは index.html を直接開いているため、ブラウザがマイクの許可を覚えず、<b>聞き取りが止まるたびに V キーで聞き直す必要があり、そのつど許可を聞かれます</b>。ゲームのフォルダーにある <b>start.bat</b> から開くと（http://localhost:8765/ で開きます）、最初に一度「許可」を押すだけで、自動で聞き続けます。</p>
+    <div class="result-btns">
+      <button type="button" id="btn-voice-ok" class="btn-primary">マイクを使って始める</button>
+      <button type="button" class="btn-secondary" data-close>やめる</button>
+    </div>
+  </div>
+</section>
+
+<!-- ===== 友達と対戦: ロビー ===== -->
+<section id="versus" class="overlay panel-overlay" role="dialog" aria-modal="true" aria-labelledby="versus-h" hidden>
+  <div class="panel versus">
+    <header class="panel-head">
+      <h2 id="versus-h">友達と対戦 <small>インターネット越し・最大4人</small></h2>
+      <button type="button" class="btn-close" data-close aria-label="閉じる">×</button>
+    </header>
+    <div class="vs-body">
+      <div class="vs-name-row">
+        <label for="vs-name">あなたの名前</label>
+        <input type="text" id="vs-name" maxlength="12" placeholder="名無しの魔法使い" autocomplete="off" spellcheck="false">
+      </div>
+      <p id="vs-unsupported" class="file-note" hidden>このブラウザでは対戦（WebRTC）が使えません。Edge や Chrome の最新版で開いてください。</p>
+
+      <div id="vs-home">
+        <div class="vs-name-row vs-custom-row">
+          <label for="vs-room-custom">合言葉 <small>（自分で決める場合）</small></label>
+          <input type="text" id="vs-room-custom" maxlength="30" placeholder="空欄なら自動で決まります（例: ほのお-1234）" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="vs-choice">
+          <button type="button" id="vs-host-btn" class="btn-primary">部屋を作る<small>友達を招待する</small></button>
+          <button type="button" id="vs-join-btn" class="btn-secondary">部屋に入る<small>合言葉を聞いた</small></button>
+        </div>
+        <ol class="vs-flow" aria-label="つなぎ方">
+          <li><b>1</b><span>部屋を作る</span><small>合言葉が出る</small></li>
+          <li><b>2</b><span>合言葉を伝える</span><small>LINE・通話など</small></li>
+          <li><b>3</b><span>友達が入る</span><small>最大4人</small></li>
+          <li><b>4</b><span>対戦開始</span><small>部屋を作った人が押す</small></li>
+        </ol>
+        <details class="vs-more">
+          <summary>ルール・料金・送られる情報</summary>
+          <ul class="vs-notes">
+            <li><b>ルール</b>: いつもの魔法・杖・詠唱・紋章で撃ち合う。HP 200、倒されると 4 秒後に復活。決めた人数を先に倒すか、時間切れで一番多く倒した人の勝ち。</li>
+            <li><b>料金</b>: かからない。対戦のデータはブラウザどうしで直接やりとりする（WebRTC）。</li>
+            <li><b>送られる情報</b>: 最初の顔合わせだけ無料の公開サーバー PeerJS（0.peerjs.com）を使い、つなぐための情報（回線の IP アドレスなど）を渡す。名前は部屋のメンバーにだけ届く。つなぎ先を調べるため、STUN サーバー（Google・Cloudflare）にも問い合わせる。</li>
+            <li><b>合言葉</b>: 自分で決めるなら 2〜24 文字（ひらがな／カタカナ、全角／半角、大文字／小文字は区別しない）。信頼できる友達にだけ伝える。</li>
+            <li><b>つながらないとき</b>: 会社・学校の回線などでは、つながらないことがある。部屋の画面の「コードで招待する（予備）」も試せる。</li>
+          </ul>
+        </details>
+      </div>
+
+      <div id="vs-host" hidden>
+        <h3 class="vs-h3">部屋のメンバー</h3>
+        <ul id="vs-roster" class="vs-roster"></ul>
+        <div id="vs-room-box" class="vs-room">
+          <div class="vs-room-label">合言葉</div>
+          <div class="vs-room-row"><output id="vs-room-code" class="vs-room-code">準備中…</output><button type="button" id="vs-copy-room" class="btn-small">コピー</button></div>
+          <p id="vs-room-hint" class="vs-room-hint">友達に伝えて、「部屋に入る」で入力してもらいます。</p>
+          <p id="vs-room-err" class="vs-room-err" hidden></p>
+          <button type="button" id="vs-room-edit" class="btn-small vs-room-edit">合言葉を変える</button>
+          <div id="vs-room-form" class="vs-room-form" hidden>
+            <label for="vs-room-new">新しい合言葉（2〜24 文字）</label>
+            <div class="vs-code-row"><input type="text" id="vs-room-new" class="vs-room-input" maxlength="30" placeholder="例: そらのへや" autocomplete="off" spellcheck="false"><button type="button" id="vs-room-set" class="btn-small btn-accent">この合言葉にする</button></div>
+            <button type="button" id="vs-room-auto" class="btn-small">自動で決める</button>
+            <p class="vs-room-hint">友達がつながる前だけ変えられます。短すぎると、知らない人に当てられることがあります。</p>
+          </div>
+        </div>
+        <details id="vs-code-host" class="vs-alt">
+          <summary>合言葉でつながらないとき: コードで招待する（予備）</summary>
+          <div class="vs-alt-body">
+            <button type="button" id="vs-make-invite" class="btn-secondary">招待コードを作る</button>
+            <div id="vs-invite-box" class="vs-code" hidden>
+              <label for="vs-invite-out">① この招待コードを友達に送る</label>
+              <div class="vs-code-row"><textarea id="vs-invite-out" readonly rows="3"></textarea><button type="button" id="vs-copy-invite" class="btn-small">コピー</button></div>
+              <label for="vs-answer-in">② 友達から届いた返事コードを貼り付ける</label>
+              <div class="vs-code-row"><textarea id="vs-answer-in" rows="3" placeholder="MAGIA-ANS-…" spellcheck="false"></textarea><button type="button" id="vs-accept" class="btn-small btn-accent">つなぐ</button></div>
+            </div>
+          </div>
+        </details>
+        <div class="vs-rules">
+          <label>勝ち <select id="vs-kills"><option value="3">3人倒す</option><option value="5">5人倒す</option><option value="10">10人倒す</option></select></label>
+          <label>制限時間 <select id="vs-minutes"><option value="3">3分</option><option value="5">5分</option><option value="10">10分</option></select></label>
+        </div>
+        <button type="button" id="vs-start" class="btn-primary" disabled>友達がつながると始められます</button>
+      </div>
+
+      <div id="vs-guest" hidden>
+        <div id="vs-guest-entry">
+          <div class="vs-code">
+            <label for="vs-room-in">友達（部屋を作った人）から聞いた合言葉を入れる</label>
+            <div class="vs-code-row"><input type="text" id="vs-room-in" class="vs-room-input" placeholder="ほのお-1234 や、決めてもらった合言葉" maxlength="30" autocomplete="off" spellcheck="false"><button type="button" id="vs-room-join" class="btn-small btn-accent">入る</button></div>
+          </div>
+          <details id="vs-code-guest" class="vs-alt">
+            <summary>招待コードをもらったとき（予備のつなぎ方）</summary>
+            <div class="vs-alt-body">
+              <div class="vs-code">
+                <label for="vs-invite-in">① 友達（部屋を作った人）から届いた招待コードを貼り付ける</label>
+                <div class="vs-code-row"><textarea id="vs-invite-in" rows="3" placeholder="MAGIA-INV-…" spellcheck="false"></textarea><button type="button" id="vs-make-answer" class="btn-small btn-accent">返事コードを作る</button></div>
+              </div>
+              <div id="vs-answer-box" class="vs-code" hidden>
+                <label for="vs-answer-out">② この返事コードを、部屋を作った人に送り返す</label>
+                <div class="vs-code-row"><textarea id="vs-answer-out" readonly rows="3"></textarea><button type="button" id="vs-copy-answer" class="btn-small">コピー</button></div>
+              </div>
+            </div>
+          </details>
+        </div>
+        <div id="vs-guest-wait" hidden>
+          <h3 class="vs-h3">部屋のメンバー</h3>
+          <ul id="vs-roster-guest" class="vs-roster"></ul>
+        </div>
+      </div>
+
+      <p id="vs-status" class="vs-status" role="status" aria-live="polite"></p>
+      <div class="vs-foot">
+        <button type="button" id="vs-back" class="btn-small" hidden>最初の画面にもどる</button>
+        <button type="button" id="vs-leave" class="btn-small" hidden>部屋を出る</button>
+        <button type="button" class="btn-small" data-close>練習場に戻る</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== 友達と対戦: 結果 ===== -->
+<section id="vs-result" class="overlay panel-overlay" role="dialog" aria-modal="true" aria-labelledby="vs-result-h" hidden>
+  <div class="panel result vs-result">
+    <h2 id="vs-result-h">対戦終了</h2>
+    <p id="vs-result-why" class="result-detail"></p>
+    <ol id="vs-result-list" class="vs-result-list"></ol>
+    <div class="result-btns">
+      <button type="button" id="vs-again" class="btn-primary">同じメンバーでもう一度</button>
+      <p id="vs-wait-host" class="vs-wait-host">部屋を作った人が、もう一度始めるのを待っています</p>
+      <button type="button" id="vs-to-lobby" class="btn-secondary">ロビーに戻る</button>
+      <button type="button" id="vs-quit" class="btn-secondary">部屋を出て練習場に戻る</button>
+    </div>
+  </div>
+</section>
+
+<!-- ===== チャレンジの結果 ===== -->
+<section id="result" class="overlay panel-overlay" role="dialog" aria-modal="true" aria-labelledby="result-h" hidden>
+  <div class="panel result">
+    <h2 id="result-h">チャレンジ終了</h2>
+    <div class="result-score"><span id="result-score">0</span><small>点</small></div>
+    <p id="result-detail" class="result-detail"></p>
+    <p id="result-best" class="result-best"></p>
+    <div class="result-btns">
+      <button type="button" id="btn-retry" class="btn-primary">もう一度</button>
+      <button type="button" class="btn-secondary" data-close>練習場に戻る</button>
+    </div>
+  </div>
+</section>
+
+<script src="vendor/three.min.js"></script>
+<script src="js/words.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/fx.js"></script>
+<script src="vendor/effekseer/effekseer.min.js"></script>
+<script src="js/physics.js"></script>
+<script src="js/efk.js"></script>
+<script src="js/haptics.js"></script>
+<script src="js/voice.js"></script>
+<script src="js/draw.js"></script>
+<script src="vendor/peerjs/peerjs.min.js"></script>
+<script src="js/net.js"></script>
+<script src="js/world.js"></script>
+<script src="js/game.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/versus.js"></script>
+</body>
+</html>

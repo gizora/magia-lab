@@ -1,0 +1,1153 @@
+// 世界: 空と昼夜、へこむ地面（クレーター）、壊せる地形（石壁・岩・木箱・石柱）。ステージは「練習場」と、対戦用の「闘技場」
+(function () {
+  'use strict';
+  const MG = window.MG, FX = MG.FX;
+  const V3 = THREE.Vector3;
+  const W = (MG.World = {});
+  const ARENA = 54;
+
+  let scene, renderer, sky, skyMat, starsMat, moonGroup, sunGroup, mtMat, groundMat, outerMat, circleMat, hemi, dirLight, amb, decorP;
+  const lamps = [], crystals = [], props = [], debris = [], pillars = [];
+  const timers = [];
+  let clock = 0;
+  W.stats = { destroyed: 0, craters: 0, chips: 0, erased: 0, carved: 0 };
+
+  const rand = (a, b) => a + Math.random() * (b - a);
+  // 位置から決まる乱数（同じ場所の頂点は同じだけ動くようにするため）
+  const prand = (x, y, z) => { const s = Math.sin(x * 12.9898 + y * 78.233 + z * 37.719) * 43758.5453; return s - Math.floor(s); };
+
+  // ======================================================================
+  //  昼と夜
+  // ======================================================================
+  const C = (h) => new THREE.Color(h);
+  const PRESET = {
+    day: {
+      top: C('#2f6fd6'), mid: C('#6fa8ec'), hor: C('#d9e6f2'), fog: C('#bfd3e6'), fogD: 0.0065,
+      hemiSky: C('#dce9ff'), hemiGround: C('#6b5a40'), hemiI: 1.0, dirC: C('#fff1d8'), dirI: 1.7, ambC: C('#ffffff'), ambI: 0.22,
+      stars: 0, moon: 0, sun: 1, mt: C('#7d9cc4'), ground: C('#e2ddd2'), exposure: 1.0, lamp: 0.25, circle: 0.2, fireflies: 0,
+    },
+    night: {
+      top: C('#030512'), mid: C('#0d1238'), hor: C('#4d2460'), fog: C('#0a1030'), fogD: 0.0145,
+      hemiSky: C('#8c9cff'), hemiGround: C('#1a1030'), hemiI: 0.75, dirC: C('#b8c6ff'), dirI: 0.75, ambC: C('#30305a'), ambI: 0.35,
+      stars: 1, moon: 1, sun: 0, mt: C('#23235c'), ground: C('#8a95c8'), exposure: 1.15, lamp: 1, circle: 0.35, fireflies: 1,
+    },
+  };
+  const MOON_POS = new V3(-110, 120, -220), SUN_POS = new V3(130, 125, -200);
+  let timeK = 1, timeTarget = 1; // 0 = 昼, 1 = 夜
+  W.mode = 'night';
+
+  function applyTime(k) {
+    const a = PRESET.day, b = PRESET.night;
+    const L = (x, y) => x + (y - x) * k;
+    const LC = (x, y, out) => out.copy(x).lerp(y, k);
+    LC(a.top, b.top, skyMat.uniforms.uTop.value);
+    LC(a.mid, b.mid, skyMat.uniforms.uMid.value);
+    LC(a.hor, b.hor, skyMat.uniforms.uHor.value);
+    skyMat.uniforms.uSun.value = 1 - k;
+    LC(a.fog, b.fog, scene.fog.color);
+    scene.fog.density = L(a.fogD, b.fogD);
+    LC(a.hemiSky, b.hemiSky, hemi.color); LC(a.hemiGround, b.hemiGround, hemi.groundColor); hemi.intensity = L(a.hemiI, b.hemiI);
+    LC(a.dirC, b.dirC, dirLight.color); dirLight.intensity = L(a.dirI, b.dirI);
+    dirLight.position.copy(SUN_POS).lerp(MOON_POS, k).normalize().multiplyScalar(50);
+    LC(a.ambC, b.ambC, amb.color); amb.intensity = L(a.ambI, b.ambI);
+    starsMat.opacity = Math.max(0, k * 1.4 - 0.4);
+    moonGroup.children.forEach((c) => (c.material.opacity = Math.max(0, k * 1.3 - 0.3)));
+    sunGroup.children.forEach((c) => (c.material.opacity = Math.max(0, (1 - k) * 1.3 - 0.3)));
+    LC(a.mt, b.mt, mtMat.color);
+    LC(a.ground, b.ground, groundMat.color); outerMat.color.copy(groundMat.color);
+    renderer.toneMappingExposure = L(a.exposure, b.exposure);
+    const lampK = L(a.lamp, b.lamp);
+    lamps.forEach((l) => { l.glow.material.opacity = lampK; });
+    circleMat.opacity = L(a.circle, b.circle);
+  }
+
+  W.setTime = function (mode, instant) {
+    W.mode = mode === 'day' ? 'day' : 'night';
+    timeTarget = W.mode === 'day' ? 0 : 1;
+    if (instant) { timeK = timeTarget; applyTime(timeK); }
+  };
+  W.timeK = () => timeK;
+
+  // ======================================================================
+  //  空・遠景
+  // ======================================================================
+  function buildSky() {
+    skyMat = new THREE.ShaderMaterial({
+      side: THREE.BackSide, depthWrite: false, fog: false,
+      uniforms: { uTop: { value: new THREE.Color() }, uMid: { value: new THREE.Color() }, uHor: { value: new THREE.Color() }, uSun: { value: 0 }, uSunDir: { value: SUN_POS.clone().normalize() } },
+      vertexShader: 'varying vec3 vP; void main(){ vP = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragmentShader: `uniform vec3 uTop, uMid, uHor, uSunDir; uniform float uSun; varying vec3 vP;
+        void main(){
+          float h = vP.y;
+          vec3 c = mix(uHor, uMid, smoothstep(0.0, 0.22, h));
+          c = mix(c, uTop, smoothstep(0.22, 0.85, h));
+          if (h < 0.0) c = mix(uHor * 0.7, uHor * 0.25, smoothstep(0.0, -0.15, h));
+          float s = max(dot(vP, uSunDir), 0.0);
+          c += uSun * (vec3(1.0, 0.9, 0.7) * pow(s, 24.0) * 0.6 + vec3(1.0, 0.95, 0.85) * pow(s, 300.0));
+          gl_FragColor = vec4(c, 1.0); }`,
+    });
+    sky = new THREE.Mesh(new THREE.SphereGeometry(320, 32, 16), skyMat);
+    sky.renderOrder = -10;
+    scene.add(sky);
+
+    const starN = 1600, sp = new Float32Array(starN * 3), sc = new Float32Array(starN * 3);
+    for (let i = 0; i < starN; i++) {
+      const u = Math.random() * 0.95 + 0.03, th = Math.random() * Math.PI * 2, r = Math.sqrt(1 - u * u);
+      sp[i * 3] = Math.cos(th) * r * 300; sp[i * 3 + 1] = u * 300; sp[i * 3 + 2] = Math.sin(th) * r * 300;
+      const c = new THREE.Color().setHSL(rand(0.55, 0.7), rand(0.2, 0.6), rand(0.65, 0.95));
+      sc[i * 3] = c.r; sc[i * 3 + 1] = c.g; sc[i * 3 + 2] = c.b;
+    }
+    const sg = new THREE.BufferGeometry();
+    sg.setAttribute('position', new THREE.BufferAttribute(sp, 3));
+    sg.setAttribute('color', new THREE.BufferAttribute(sc, 3));
+    starsMat = new THREE.PointsMaterial({ size: 1.7, sizeAttenuation: false, vertexColors: true, fog: false, transparent: true, depthWrite: false });
+    const stars = new THREE.Points(sg, starsMat); stars.renderOrder = -9;
+    sky.add(stars);
+
+    const disc = (draw, scale, pos) => {
+      const tex = FX.canvasTex(128, 128, draw);
+      const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, fog: false, depthWrite: false, transparent: true }));
+      s.scale.setScalar(scale); s.position.copy(pos); return s;
+    };
+    const glow = (col, scale, pos) => { const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: FX.glowTex, color: col, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, fog: false })); s.scale.setScalar(scale); s.position.copy(pos); return s; };
+    moonGroup = new THREE.Group();
+    moonGroup.add(glow('#d8e4ff', 60, MOON_POS));
+    moonGroup.add(disc((g, w) => {
+      const gr = g.createRadialGradient(w * 0.45, w * 0.42, 0, w / 2, w / 2, w / 2);
+      gr.addColorStop(0, '#ffffff'); gr.addColorStop(0.85, '#e4e9ff'); gr.addColorStop(0.97, '#c8d0f0'); gr.addColorStop(1, 'rgba(200,208,240,0)');
+      g.fillStyle = gr; g.beginPath(); g.arc(w / 2, w / 2, w / 2, 0, Math.PI * 2); g.fill();
+      g.fillStyle = 'rgba(150,160,200,0.25)';
+      [[0.35, 0.55, 0.1], [0.6, 0.35, 0.07], [0.62, 0.65, 0.12]].forEach(([x, y, r]) => { g.beginPath(); g.arc(x * w, y * w, r * w, 0, Math.PI * 2); g.fill(); });
+    }, 18, MOON_POS));
+    sky.add(moonGroup);
+    sunGroup = new THREE.Group();
+    sunGroup.add(glow('#fff2c8', 90, SUN_POS));
+    sunGroup.add(disc((g, w) => { const gr = g.createRadialGradient(w / 2, w / 2, 0, w / 2, w / 2, w / 2); gr.addColorStop(0, '#ffffff'); gr.addColorStop(0.8, '#fff8e0'); gr.addColorStop(1, 'rgba(255,240,200,0)'); g.fillStyle = gr; g.fillRect(0, 0, w, w); }, 16, SUN_POS));
+    sky.add(sunGroup);
+
+    // 遠くの山（白で描いて、昼夜で色をつける）
+    const mtTex = FX.canvasTex(1024, 128, (g, w, h) => {
+      g.clearRect(0, 0, w, h);
+      for (let layer = 0; layer < 2; layer++) {
+        g.fillStyle = layer ? '#9a9a9a' : '#ffffff';
+        g.beginPath(); g.moveTo(0, h);
+        let y = h * (layer ? 0.55 : 0.4);
+        for (let x = 0; x <= w; x += 8) { y += rand(-7, 7); y = Math.max(h * (layer ? 0.35 : 0.15), Math.min(h * 0.85, y)); g.lineTo(x, y); }
+        g.lineTo(w, h); g.closePath(); g.fill();
+      }
+    });
+    mtTex.wrapS = THREE.RepeatWrapping; mtTex.repeat.x = 3;
+    mtMat = new THREE.MeshBasicMaterial({ map: mtTex, transparent: true, side: THREE.BackSide, fog: false, depthWrite: false });
+    const mt = new THREE.Mesh(new THREE.CylinderGeometry(230, 230, 50, 64, 1, true), mtMat);
+    mt.position.y = 14; mt.renderOrder = -8;
+    sky.add(mt);
+  }
+
+  // ======================================================================
+  //  へこむ地面
+  // ======================================================================
+  // 地面は 10×10 のブロックに分ける。ふだんは平らな板（三角形 2 枚）で、
+  // クレーターができたブロックだけを細かい網目に置きかえて、へこませる（描画を軽くするため）
+  const G_SIZE = 130, CH = 10, CH_SEG = 18, G_SEG = CH * CH_SEG, G_HALF = G_SIZE / 2, G_STEP = G_SIZE / G_SEG, CH_SIZE = G_SIZE / CH, TILE = 6.5;
+  let heights, colors, chunks = [];
+  function chunkGeometry(cx, cz, detailed) {
+    const seg = detailed ? CH_SEG : 1;
+    const geo = new THREE.PlaneGeometry(CH_SIZE, CH_SIZE, seg, seg);
+    geo.rotateX(-Math.PI / 2);
+    geo.translate(-G_HALF + (cx + 0.5) * CH_SIZE, 0, -G_HALF + (cz + 0.5) * CH_SIZE);
+    const n = (seg + 1) * (seg + 1);
+    geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n * 3).fill(1), 3));
+    return geo;
+  }
+  // 細かいブロックの頂点を、高さと焦げ跡の表に合わせる
+  function syncChunk(c) {
+    const pos = c.mesh.geometry.attributes.position, col = c.mesh.geometry.attributes.color, R = G_SEG + 1;
+    for (let j = 0; j <= CH_SEG; j++) for (let i = 0; i <= CH_SEG; i++) {
+      const v = j * (CH_SEG + 1) + i;
+      const gi = (c.cz * CH_SEG + j) * R + (c.cx * CH_SEG + i);
+      pos.setY(v, heights[gi]);
+      col.setXYZ(v, colors[gi * 3], colors[gi * 3 + 1], colors[gi * 3 + 2]);
+    }
+    pos.needsUpdate = true; col.needsUpdate = true;
+    c.mesh.geometry.computeVertexNormals();
+    // ブロックの境目で光の当たり方がずれないよう、端の法線を上向きの平均に寄せる
+  }
+  function detailChunk(c) {
+    if (c.detailed) return;
+    c.mesh.geometry.dispose();
+    c.mesh.geometry = chunkGeometry(c.cx, c.cz, true);
+    c.detailed = true;
+  }
+  function buildGround() {
+    const tex = FX.canvasTex(256, 256, (g, w) => {
+      g.fillStyle = '#5e5f66'; g.fillRect(0, 0, w, w);
+      for (let i = 0; i < 2600; i++) { const v = rand(60, 140) | 0; g.fillStyle = `rgba(${v},${v},${v + 6},${rand(0.1, 0.35)})`; g.fillRect(rand(0, w), rand(0, w), rand(1, 4), rand(1, 4)); }
+      g.strokeStyle = 'rgba(20,20,28,0.85)'; g.lineWidth = 3;
+      for (let r = 0; r < 4; r++) {
+        g.beginPath(); g.moveTo(0, r * 64); g.lineTo(w, r * 64); g.stroke();
+        for (let c = 0; c < 4; c++) { const x = c * 64 + (r % 2) * 32; g.beginPath(); g.moveTo(x, r * 64); g.lineTo(x, r * 64 + 64); g.stroke(); }
+      }
+    });
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+    const inner = tex.clone(); inner.needsUpdate = true; inner.repeat.set(CH_SIZE / TILE, CH_SIZE / TILE);
+    const outer = tex.clone(); outer.needsUpdate = true; outer.repeat.set(1 / TILE, 1 / TILE);
+
+    const n = (G_SEG + 1) * (G_SEG + 1);
+    heights = new Float32Array(n);
+    colors = new Float32Array(n * 3).fill(1);
+    groundMat = new THREE.MeshStandardMaterial({ map: inner, vertexColors: true, roughness: 0.95, metalness: 0.05 });
+    for (let cz = 0; cz < CH; cz++) for (let cx = 0; cx < CH; cx++) {
+      const mesh = new THREE.Mesh(chunkGeometry(cx, cz, false), groundMat);
+      scene.add(mesh);
+      chunks.push({ cx, cz, mesh, detailed: false });
+    }
+
+    const sh = new THREE.Shape();
+    sh.moveTo(-250, -250); sh.lineTo(250, -250); sh.lineTo(250, 250); sh.lineTo(-250, 250); sh.lineTo(-250, -250);
+    const hole = new THREE.Path();
+    hole.moveTo(-G_HALF, -G_HALF); hole.lineTo(-G_HALF, G_HALF); hole.lineTo(G_HALF, G_HALF); hole.lineTo(G_HALF, -G_HALF); hole.lineTo(-G_HALF, -G_HALF);
+    sh.holes.push(hole);
+    const og = new THREE.ShapeGeometry(sh); og.rotateX(-Math.PI / 2);
+    outerMat = new THREE.MeshStandardMaterial({ map: outer, roughness: 0.95, metalness: 0.05 });
+    scene.add(new THREE.Mesh(og, outerMat));
+
+    circleMat = new THREE.MeshBasicMaterial({ map: FX.circleTex, color: 0x3fb8ff, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false });
+    const circle = new THREE.Mesh(new THREE.PlaneGeometry(16, 16), circleMat);
+    circle.rotation.x = -Math.PI / 2; circle.position.set(0, 0.04, 17);
+    decorP.add(circle);
+    groundTex.practice = { inner, outer };
+    W.circle = circle;
+  }
+
+  W.heightAt = function (x, z) {
+    const fx = (x + G_HALF) / G_STEP, fz = (z + G_HALF) / G_STEP;
+    if (fx < 0 || fz < 0 || fx >= G_SEG || fz >= G_SEG) return 0;
+    const ix = Math.floor(fx), iz = Math.floor(fz), tx = fx - ix, tz = fz - iz, R = G_SEG + 1;
+    const h00 = heights[iz * R + ix], h10 = heights[iz * R + ix + 1], h01 = heights[(iz + 1) * R + ix], h11 = heights[(iz + 1) * R + ix + 1];
+    return (h00 * (1 - tx) + h10 * tx) * (1 - tz) + (h01 * (1 - tx) + h11 * tx) * tz;
+  };
+
+  // クレーターをつくる
+  W.crater = function (p, r) {
+    r = Math.max(1, Math.min(9, r));
+    const depth = Math.min(2.6, 0.3 + r * 0.24);
+    const R = G_SEG + 1;
+    const ext = r * 1.6;
+    const x0 = Math.max(0, Math.floor((p.x - ext + G_HALF) / G_STEP)), x1 = Math.min(G_SEG, Math.ceil((p.x + ext + G_HALF) / G_STEP));
+    const z0 = Math.max(0, Math.floor((p.z - ext + G_HALF) / G_STEP)), z1 = Math.min(G_SEG, Math.ceil((p.z + ext + G_HALF) / G_STEP));
+    if (x0 > x1 || z0 > z1) return false;
+    for (let iz = z0; iz <= z1; iz++) for (let ix = x0; ix <= x1; ix++) {
+      const i = iz * R + ix;
+      const x = -G_HALF + ix * G_STEP, z = -G_HALF + iz * G_STEP;
+      const d = Math.hypot(x - p.x, z - p.z) / r;
+      if (d > 1.6) continue;
+      let h = heights[i];
+      // 地面の端に近いほど浅くする（外側の平らな地面との段差を作らない）
+      const edge = Math.max(0, Math.min(1, (G_HALF - Math.max(Math.abs(x), Math.abs(z))) / 8));
+      const jag = (0.85 + prand(x, 0, z) * 0.3) * edge;
+      if (d < 1) h -= depth * (1 - d * d) * 0.75 * jag;
+      else if (d < 1.35) h += depth * 0.16 * Math.sin(((d - 1) / 0.35) * Math.PI) * jag;
+      heights[i] = Math.max(-4.5, Math.min(1.2, h));
+      // 焦げ跡
+      const sc = d < 1 ? 0.12 + 0.5 * d * d : 0.62 + 0.38 * ((d - 1) / 0.6);
+      colors[i * 3] = Math.min(colors[i * 3], sc * 1.02);
+      colors[i * 3 + 1] = Math.min(colors[i * 3 + 1], sc * 0.94);
+      colors[i * 3 + 2] = Math.min(colors[i * 3 + 2], sc * 0.9);
+    }
+    // 変わった範囲にかかるブロックだけ細かくして更新する
+    const cx0 = Math.floor(x0 / CH_SEG), cx1 = Math.min(CH - 1, Math.floor(x1 / CH_SEG));
+    const cz0 = Math.floor(z0 / CH_SEG), cz1 = Math.min(CH - 1, Math.floor(z1 / CH_SEG));
+    for (let cz = Math.max(0, cz0 - (z0 % CH_SEG === 0 ? 1 : 0)); cz <= cz1; cz++) for (let cx = Math.max(0, cx0 - (x0 % CH_SEG === 0 ? 1 : 0)); cx <= cx1; cx++) {
+      const c = chunks[cz * CH + cx];
+      detailChunk(c); syncChunk(c);
+    }
+    W.stats.craters++;
+    if (W.phys) PH.rebuildGroundSoon(W.heightAt, G_SIZE);
+    // 砂ぼこりと石つぶて
+    FX.emit(new V3(p.x, W.heightAt(p.x, p.z) + 0.3, p.z), { count: Math.min(80, 15 + r * 10), c1: '#8a7a68', c2: '#c9b9a0', speed: r * 1.5, up: r * 0.8, gravity: 4, drag: 1.5, life: 1.6, size: 0.9 + r * 0.15, alpha: 0.35, flat: true, jitter: r * 0.5 });
+    const n = Math.min(10, 2 + Math.round(r));
+    for (let k = 0; k < n; k++) {
+      const a = rand(0, Math.PI * 2);
+      const m = new THREE.Mesh(chunkGeo, rockMat);
+      m.scale.setScalar(rand(0.15, 0.35) * Math.min(2, r * 0.4));
+      m.position.set(p.x + Math.cos(a) * r * 0.4, W.heightAt(p.x, p.z) + 0.4, p.z + Math.sin(a) * r * 0.4);
+      addDebris(m, new V3(Math.cos(a) * rand(3, 8), rand(5, 11), Math.sin(a) * rand(3, 8)), 5);
+    }
+    return true;
+  };
+
+  function resetGround() {
+    heights.fill(0); colors.fill(1);
+    chunks.forEach((c) => { if (c.detailed) { c.mesh.geometry.dispose(); c.mesh.geometry = chunkGeometry(c.cx, c.cz, false); c.detailed = false; } });
+  }
+  W.detailedChunks = () => chunks.filter((c) => c.detailed).length;
+
+  // ======================================================================
+  //  壊れるかけら
+  // ======================================================================
+  const chunkGeo = new THREE.IcosahedronGeometry(1, 0);
+  let rockMat, brickMat, woodMat, pillarMat;
+  const PH = MG.Phys;
+  W.phys = false;
+  // three.js の形から、物理の形を選んで動く物体を作る
+  function debrisBody(mesh, vel, ang) {
+    const g = mesh.geometry, s = mesh.scale, prm = g.parameters || {};
+    const o = { mesh, vel, ang, fast: true, friction: 0.75, restitution: 0.2 };
+    if (g.type === 'BoxGeometry') return PH.box(mesh.position, mesh.quaternion, prm.width * s.x / 2, prm.height * s.y / 2, prm.depth * s.z / 2, o);
+    if (g.type === 'CylinderGeometry') return PH.cylinder(mesh.position, mesh.quaternion, prm.height * s.y / 2, (prm.radiusTop + prm.radiusBottom) / 2 * s.x, o);
+    return PH.sphere(mesh.position, Math.max(0.08, (prm.radius || 1) * s.x * 0.85), o);
+  }
+  function addDebris(mesh, vel, life, opts) {
+    opts = opts || {};
+    if (!mesh.parent) scene.add(mesh);
+    const bb = opts.half || mesh.scale.y * 0.5;
+    const ang = new V3(rand(-6, 6), rand(-6, 6), rand(-6, 6)).multiplyScalar(opts.spin == null ? 1 : opts.spin);
+    const d = { mesh, vel, ang, life, max: life, half: bb, rest: false, keep: !!opts.keep, s0: mesh.scale.clone(), body: null };
+    if (W.phys) { mesh.updateMatrixWorld(); d.body = debrisBody(mesh, vel, ang); }
+    debris.push(d);
+    const cap = W.phys ? 170 : 260;
+    while (debris.length > cap) { const i = debris.findIndex((x) => !x.keep); if (i < 0) break; removeDebris(i); }
+  }
+  function removeDebris(i) { const d = debris[i]; scene.remove(d.mesh); if (d.body) PH.remove(d.body); debris.splice(i, 1); }
+  function updateDebris(dt) {
+    for (let i = debris.length - 1; i >= 0; i--) {
+      const d = debris[i];
+      d.life -= dt;
+      if (d.body) {
+        if (d.life < 0.6) d.mesh.scale.copy(d.s0).multiplyScalar(Math.max(0.01, d.life / 0.6));
+        if (d.life <= 0) removeDebris(i);
+        continue;
+      }
+      if (!d.rest) {
+        d.vel.y -= 20 * dt;
+        d.mesh.position.addScaledVector(d.vel, dt);
+        d.mesh.rotation.x += d.ang.x * dt; d.mesh.rotation.y += d.ang.y * dt; d.mesh.rotation.z += d.ang.z * dt;
+        const g = W.heightAt(d.mesh.position.x, d.mesh.position.z) + d.half;
+        if (d.mesh.position.y < g) {
+          d.mesh.position.y = g;
+          d.vel.y *= -0.28; d.vel.x *= 0.55; d.vel.z *= 0.55; d.ang.multiplyScalar(0.5);
+          if (Math.abs(d.vel.y) < 1.2 && Math.hypot(d.vel.x, d.vel.z) < 0.8) d.rest = true;
+        }
+      }
+      if (d.life < 0.6) d.mesh.scale.copy(d.s0).multiplyScalar(Math.max(0.01, d.life / 0.6));
+      if (d.life <= 0) { scene.remove(d.mesh); debris.splice(i, 1); }
+    }
+  }
+
+  // ======================================================================
+  //  壊せる地形
+  // ======================================================================
+  function makeMaterials() {
+    rockMat = new THREE.MeshStandardMaterial({ color: 0x8a8578, roughness: 0.95, flatShading: true });
+    brickMat = new THREE.MeshStandardMaterial({ color: 0xa08f7c, roughness: 0.9, flatShading: true });
+    const woodTex = FX.canvasTex(128, 128, (g, w) => {
+      g.fillStyle = '#9a6a3a'; g.fillRect(0, 0, w, w);
+      for (let i = 0; i < 4; i++) { g.fillStyle = i % 2 ? '#8a5c30' : '#a87444'; g.fillRect(0, i * 32 + 2, w, 28); }
+      g.strokeStyle = '#4a2e14'; g.lineWidth = 8; g.strokeRect(4, 4, w - 8, w - 8);
+      g.beginPath(); g.moveTo(8, 8); g.lineTo(w - 8, w - 8); g.stroke();
+      for (let i = 0; i < 300; i++) { g.fillStyle = `rgba(60,30,10,${rand(0.05, 0.2)})`; g.fillRect(rand(0, w), rand(0, w), rand(4, 18), 1); }
+    });
+    woodMat = new THREE.MeshStandardMaterial({ map: woodTex, roughness: 0.8 });
+    pillarMat = new THREE.MeshStandardMaterial({ color: 0x5d6380, roughness: 0.9, flatShading: true });
+  }
+
+  // 地形1つ分の物体を作る（レンガ・木箱は眠った状態の動く物体、岩・薄い壁は動かない物体）
+  function makeBody(o) {
+    const m = o.mesh; m.updateMatrixWorld();
+    if (o.kind === 'brick') o.body = PH.box(m.position, m.quaternion, 0.73, 0.36, 0.4, { mesh: m, sleep: true, friction: 0.8, restitution: 0.05, tag: 'brick' });
+    else if (o.kind === 'crate') o.body = PH.box(m.position, m.quaternion, o.size / 2, o.size / 2, o.size / 2, { mesh: m, sleep: true, friction: 0.6, tag: 'crate' });
+    else if (o.kind === 'rock') o.body = PH.convex(m.position, m.quaternion, m.geometry, m.scale, { static: true });
+    else if (o.kind === 'slab') o.body = PH.box(m.position, m.quaternion, LANE.w / 2, LANE.h / 2, LANE.t / 2 + 0.08, { static: true });
+  }
+  function pillarBodies(p) {
+    (p.bodies || []).forEach((b) => PH.remove(b));
+    p.bodies = W.phys ? p.parts.map((pt) => PH.cylinder(pt.m.position, pt.m.quaternion, pt.half, pt.half > 0.5 ? 1.12 : 1.3, { static: true })) : [];
+  }
+  W.enablePhysics = function () {
+    if (!PH.ready || W.phys) return false;
+    W.phys = true;
+    PH.setGround(W.heightAt, G_SIZE);
+    props.forEach((o) => { if (o.alive) makeBody(o); });
+    pillars.forEach((p) => { if (p.alive) pillarBodies(p); });
+    return true;
+  };
+  const isDynamicProp = (o) => o.kind === 'brick' || o.kind === 'crate';
+  // 爆風で、動く地形（レンガ・木箱）を押し飛ばす
+  function blastPush(o, p, radius, dmg) {
+    if (!W.phys || !o.body || !o.body.alive || !isDynamicProp(o)) return;
+    const c = o.mesh.position, d = c.distanceTo(p);
+    if (d > radius * 1.25) return;
+    const k = Math.min(14, (dmg / 25) * (1 - d / (radius * 1.25)) * 6 + 2);
+    const dir = c.clone().sub(p); if (dir.lengthSq() < 1e-4) dir.set(0, 1, 0); dir.normalize();
+    PH.kick(o.body, { x: dir.x * k, y: Math.abs(dir.y) * k * 0.6 + k * 0.35, z: dir.z * k }, { x: rand(-4, 4), y: rand(-4, 4), z: rand(-4, 4) });
+  }
+
+  function addProp(o) {
+    o.alive = true; o.maxHp = o.hp; o.respawn = 0;
+    o.home = { pos: o.mesh.position.clone(), rot: o.mesh.rotation.clone(), scale: o.mesh.scale.clone() };
+    scene.add(o.mesh);
+    props.push(o);
+    return o;
+  }
+
+  let wallCount = 0;
+  const walls = [];
+  function buildWall(x0, z0, len, rows, rotY) {
+    const wall = { id: wallCount++, bricks: [], respawnAt: 0 };
+    walls.push(wall);
+    const bw = 1.5, bh = 0.75, bd = 0.8;
+    const geo = new THREE.BoxGeometry(bw - 0.04, bh - 0.03, bd);
+    const dir = new V3(Math.cos(rotY), 0, -Math.sin(rotY));
+    const n = Math.floor(len / bw);
+    const grid = [];
+    for (let r = 0; r < rows; r++) {
+      grid[r] = [];
+      const off = r % 2 ? bw / 2 : 0;
+      const cnt = r % 2 ? n - 1 : n;
+      for (let c = 0; c < cnt; c++) {
+        const along = off + c * bw + bw / 2;
+        const m = new THREE.Mesh(geo, brickMat);
+        m.position.set(x0 + dir.x * along, bh / 2 + r * bh, z0 + dir.z * along);
+        m.rotation.y = rotY;
+        const shade = 0.85 + prand(along, r, x0) * 0.3;
+        m.material = brickMat;
+        m.scale.set(1, 1, 1);
+        const p = addProp({ mesh: m, kind: 'brick', hp: 30, r: 0.62, col: 0.75, along, row: r, shade, wall });
+        wall.bricks.push(p);
+        grid[r].push(p);
+      }
+    }
+    // 上の段は、下の段のレンガに支えられている
+    for (let r = 1; r < rows; r++) grid[r].forEach((p) => { p.support = grid[r - 1].filter((q) => Math.abs(q.along - p.along) < bw * 0.99); });
+  }
+
+  function buildRock(x, z, r) {
+    const geo = new THREE.IcosahedronGeometry(r, 1);
+    const pos = geo.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+      const vx = pos.getX(i), vy = pos.getY(i), vz = pos.getZ(i);
+      const k = 0.8 + prand(vx.toFixed(3) * 1, vy.toFixed(3) * 1, vz.toFixed(3) * 1) * 0.35;
+      pos.setXYZ(i, vx * k, vy * k * 0.8, vz * k);
+    }
+    geo.computeVertexNormals();
+    const m = new THREE.Mesh(geo, rockMat);
+    m.position.set(x, r * 0.55, z);
+    m.rotation.y = rand(0, Math.PI * 2);
+    addProp({ mesh: m, kind: 'rock', hp: 55 * r, r: r * 0.9, col: r * 0.85, size: r });
+  }
+
+  function buildCrate(x, z, y, s) {
+    s = s || 1.1;
+    const m = new THREE.Mesh(new THREE.BoxGeometry(s, s, s), woodMat);
+    m.position.set(x, (y || 0) + s / 2, z);
+    m.rotation.y = rand(-0.4, 0.4);
+    const p = addProp({ mesh: m, kind: 'crate', hp: 22, r: s * 0.7, col: s * 0.6, size: s });
+    return p;
+  }
+
+  function buildProps() {
+    buildWall(-21, -12, 16.5, 3, 0);
+    buildWall(4.5, -12, 16.5, 3, 0);
+    buildWall(-27, 10, 13.5, 2, Math.PI / 2);
+    buildWall(27, 10, 13.5, 2, Math.PI / 2);
+    [[-22, -22, 2.2], [24, -24, 2.6], [-33, 4, 1.8], [34, 2, 2.0], [-14, 26, 1.6], [16, 28, 2.2], [0, -30, 3], [-40, -14, 2.4], [30, -34, 1.8], [-6, -24, 1.3], [7, -25, 1.5]].forEach(([x, z, r]) => buildRock(x, z, r));
+    const c1 = buildCrate(-19, 7); buildCrate(-17.7, 7.3); const top = buildCrate(-18.4, 7.1, 1.1); top.support = [c1];
+    const c2 = buildCrate(19, 8); buildCrate(20.3, 7.4); const top2 = buildCrate(19.6, 7.7, 1.1); top2.support = [c2];
+    buildCrate(-9, -17); buildCrate(-7.7, -16.6);
+    buildCrate(9, -17.5); buildCrate(10.3, -17.2, 0, 0.9);
+    buildPierceLane();
+  }
+
+  // ---- 貫通テスト場: 番号つきの薄い岩壁を縦に並べる ----
+  const LANE = { x: 42, start: 15, slabs: [7, 3, -1, -5, -9, -13], target: -19, w: 5, h: 3.6, t: 0.5 };
+  W.LANE = LANE;
+  function labelSprite(text, w, h, opts) {
+    opts = opts || {};
+    const tex = FX.canvasTex(256, Math.round(256 * h / w), (g, cw, ch) => {
+      g.fillStyle = opts.bg || 'rgba(10,14,40,0.85)';
+      const r = 24; g.beginPath(); g.moveTo(r, 0); g.arcTo(cw, 0, cw, ch, r); g.arcTo(cw, ch, 0, ch, r); g.arcTo(0, ch, 0, 0, r); g.arcTo(0, 0, cw, 0, r); g.fill();
+      g.strokeStyle = opts.border || '#ffd36b'; g.lineWidth = 8; g.stroke();
+      g.fillStyle = opts.color || '#ffffff'; g.textAlign = 'center'; g.textBaseline = 'middle';
+      const lines = String(text).split('\n');
+      const fs = opts.size || Math.round(ch * 0.55 / lines.length);
+      g.font = `bold ${fs}px "Yu Gothic UI", "Hiragino Sans", sans-serif`;
+      lines.forEach((ln, i) => g.fillText(ln, cw / 2, ch / 2 + (i - (lines.length - 1) / 2) * fs * 1.15));
+    });
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+    sp.scale.set(w, h, 1);
+    return sp;
+  }
+  function slabGeometry() {
+    const geo = new THREE.BoxGeometry(LANE.w, LANE.h, LANE.t, 6, 4, 1);
+    const pos = geo.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+      const j = prand(x.toFixed(2) * 1, y.toFixed(2) * 1, 3.1);
+      const edgeX = Math.abs(Math.abs(x) - LANE.w / 2) < 0.01, top = Math.abs(y - LANE.h / 2) < 0.01;
+      pos.setXYZ(i, x + (edgeX ? (j - 0.5) * 0.3 : 0), y + (top ? (j - 0.5) * 0.35 : 0), z * (0.8 + j * 0.45));
+    }
+    geo.computeVertexNormals();
+    return geo;
+  }
+  function buildPierceLane() {
+    const mat = new THREE.MeshStandardMaterial({ color: 0x8d8579, roughness: 0.95, flatShading: true });
+    LANE.slabs.forEach((z, i) => {
+      const m = new THREE.Mesh(slabGeometry(), mat);
+      m.position.set(LANE.x, LANE.h / 2, z);
+      const o = addProp({ mesh: m, kind: 'slab', hp: 70, r: 2.6, col: 0, size: 1.3, index: i + 1, respawnTime: 12 });
+      o.label = labelSprite(String(i + 1), 0.9, 0.9, { size: 150 });
+      o.label.position.set(LANE.x, LANE.h + 0.75, z);
+      scene.add(o.label);
+    });
+    // 結果の掲示板（射撃位置の横）
+    const bc = document.createElement('canvas'); bc.width = 512; bc.height = 256;
+    const btex = new THREE.CanvasTexture(bc); btex.encoding = THREE.sRGBEncoding;
+    const board = new THREE.Sprite(new THREE.SpriteMaterial({ map: btex, transparent: true, depthWrite: false }));
+    board.scale.set(4.4, 2.2, 1); board.position.set(LANE.x - LANE.w / 2 - 2.6, 2.6, LANE.start - 3);
+    decorP.add(board);
+    W.pierceBoard = { canvas: bc, tex: btex, sprite: board, last: null };
+    W.setPierceBoard(null);
+    // 通路の線
+    const lineMat = new THREE.MeshBasicMaterial({ color: 0xffd36b, transparent: true, opacity: 0.35, depthWrite: false });
+    [-LANE.w / 2 - 0.3, LANE.w / 2 + 0.3].forEach((dx) => {
+      const ln = new THREE.Mesh(new THREE.PlaneGeometry(0.12, LANE.start - LANE.target + 3), lineMat);
+      ln.rotation.x = -Math.PI / 2; ln.position.set(LANE.x + dx, 0.05, (LANE.start + LANE.target) / 2); decorP.add(ln);
+    });
+  }
+
+  // 掲示板に、前回つらぬいた枚数を書く（n = null で案内だけ）
+  W.setPierceBoard = function (n, name) {
+    const b = W.pierceBoard; if (!b) return;
+    b.last = n;
+    const g = b.canvas.getContext('2d'), w = b.canvas.width, h = b.canvas.height;
+    g.clearRect(0, 0, w, h);
+    g.fillStyle = 'rgba(10,14,40,0.9)'; g.beginPath(); g.roundRect ? g.roundRect(4, 4, w - 8, h - 8, 28) : g.rect(4, 4, w - 8, h - 8); g.fill();
+    g.strokeStyle = '#ffd36b'; g.lineWidth = 8; g.stroke();
+    g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = '#c8cbe8';
+    g.font = 'bold 34px "Yu Gothic UI", "Hiragino Sans", sans-serif';
+    g.fillText(n == null ? '貫通テストの結果' : '前回の結果', w / 2, 48);
+    if (n == null) {
+      g.fillStyle = '#ffffff'; g.font = 'bold 40px "Yu Gothic UI", sans-serif';
+      g.fillText('奥へ撃つと、ここに', w / 2, 118); g.fillText('つらぬいた枚数が出ます', w / 2, 172);
+    } else {
+      const all = n >= LANE.slabs.length;
+      g.fillStyle = all ? '#5dff9a' : n > 0 ? '#ffd36b' : '#ff9a6a';
+      g.font = 'bold 96px "Yu Gothic UI", sans-serif';
+      g.fillText(all ? '全6枚 貫通！' : n + ' 枚 貫通', w / 2, 132);
+      if (name) { g.fillStyle = '#c8cbe8'; g.font = '30px "Yu Mincho", serif'; g.fillText(String(name).slice(0, 16), w / 2, 206); }
+    }
+    b.tex.needsUpdate = true;
+  };
+  W.isLaneSlab = (o) => !!o && o.kind === 'slab';
+
+  // 薄い壁（slab）は箱、それ以外は球として当たりを調べる
+  function slabBox(o, pad) {
+    const c = o.mesh.position;
+    return { minX: c.x - LANE.w / 2 - pad, maxX: c.x + LANE.w / 2 + pad, minY: c.y - LANE.h / 2 - pad, maxY: c.y + LANE.h / 2 + pad, minZ: c.z - LANE.t / 2 - pad, maxZ: c.z + LANE.t / 2 + pad };
+  }
+  function inBox(p, b) { return p.x >= b.minX && p.x <= b.maxX && p.y >= b.minY && p.y <= b.maxY && p.z >= b.minZ && p.z <= b.maxZ; }
+  function rayBox(o, d, b) {
+    let t0 = 0, t1 = Infinity;
+    for (const ax of ['x', 'y', 'z']) {
+      const mn = b['min' + ax.toUpperCase()], mx = b['max' + ax.toUpperCase()];
+      if (Math.abs(d[ax]) < 1e-9) { if (o[ax] < mn || o[ax] > mx) return null; continue; }
+      let a = (mn - o[ax]) / d[ax], c = (mx - o[ax]) / d[ax];
+      if (a > c) { const s = a; a = c; c = s; }
+      t0 = Math.max(t0, a); t1 = Math.min(t1, c);
+      if (t0 > t1) return null;
+    }
+    return t0;
+  }
+  function raySphere(o, d, c, r) {
+    const oc = c.clone().sub(o); const tca = oc.dot(d); if (tca < 0) return null;
+    const d2 = oc.lengthSq() - tca * tca; if (d2 > r * r) return null;
+    const t = tca - Math.sqrt(r * r - d2); return t > 0 ? t : null;
+  }
+  function distToProp(o, p) {
+    if (o.kind !== 'slab') return o.mesh.position.distanceTo(p) - o.r;
+    const b = slabBox(o, 0);
+    const q = new V3(Math.max(b.minX, Math.min(p.x, b.maxX)), Math.max(b.minY, Math.min(p.y, b.maxY)), Math.max(b.minZ, Math.min(p.z, b.maxZ)));
+    return q.distanceTo(p);
+  }
+  // 線分 a→b にかかる地形を、近い順に返す（光線の貫通に使う）
+  W.propsOnSegment = function (a, b) {
+    const d = b.clone().sub(a); const len = d.length(); d.normalize();
+    const out = [];
+    for (const o of props) {
+      if (!o.alive) continue;
+      const t = o.kind === 'slab' ? rayBox(a, d, slabBox(o, 0)) : raySphere(a, d, o.mesh.position, o.r);
+      if (t != null && t <= len) out.push({ prop: o, t });
+    }
+    for (const p of pillars) {
+      if (!p.alive) continue;
+      let best = null;
+      for (const y of [1.2, 3.5, 5.8]) { const t = raySphere(a, d, new V3(p.x, y, p.z), 1.3); if (t != null && (best == null || t < best)) best = t; }
+      if (best != null && best <= len) out.push({ prop: p, t: best, pillar: true });
+    }
+    return out.sort((x, y) => x.t - y.t);
+  };
+  // 壁をつらぬいたときの見た目（ダメージなし）
+  W.scratch = function (o, from) {
+    if (!o || !o.mesh) return;
+    o.shake = 0.12;
+    FX.emit(from, { count: 22, c1: '#77706a', c2: '#d8d0c0', speed: 6, up: 2, gravity: 14, drag: 0.6, life: 0.9, size: 0.22 });
+    FX.emit(from, { count: 10, c1: '#8a7a68', c2: '#c9b9a0', speed: 1.5, life: 1.2, size: 1.1, alpha: 0.35, drag: 1.5 });
+  };
+  W.damageProp = function (o, dmg, from) {
+    if (!o || !o.alive || o.parts) return;
+    o.hp -= dmg;
+    if (o.hp <= 0) destroyProp(o, from); else chip(o, from);
+  };
+
+  // 外周の石柱
+  let drumGeo, capGeo, lampGeo;
+  function buildPillars() {
+    for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * Math.PI * 2;
+      buildPillarAt(Math.cos(a) * (ARENA + 6), Math.sin(a) * (ARENA + 6), i, i % 2 ? '#7fd8ff' : '#c08bff');
+    }
+  }
+  function buildPillarAt(x, z, i, colr) {
+    if (!drumGeo) { drumGeo = new THREE.CylinderGeometry(1.05, 1.15, 2.3, 8); capGeo = new THREE.CylinderGeometry(1.5, 1.1, 0.7, 8); lampGeo = new THREE.IcosahedronGeometry(0.45, 0); }
+    {
+      const p = { x, z, hp: 160, maxHp: 160, alive: true, parts: [], lamp: null, glow: null, respawn: 0, rise: 1, ph: i };
+      const mk = () => {
+        p.parts = [];
+        for (let k = 0; k < 3; k++) { const d = new THREE.Mesh(drumGeo, pillarMat); d.position.set(x, 1.15 + k * 2.3, z); d.rotation.y = k * 0.3; scene.add(d); p.parts.push({ m: d, half: 1.15 }); }
+        const cap = new THREE.Mesh(capGeo, pillarMat); cap.position.set(x, 7.25, z); scene.add(cap); p.parts.push({ m: cap, half: 0.35 });
+        p.lamp = new THREE.Mesh(lampGeo, new THREE.MeshBasicMaterial({ color: colr })); p.lamp.position.set(x, 8.4, z); scene.add(p.lamp);
+        if (!p.glow) { p.glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: FX.glowTex, color: colr, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true })); p.glow.scale.setScalar(4.5); scene.add(p.glow); lamps.push(p); }
+        p.glow.visible = true; p.glow.position.copy(p.lamp.position);
+      };
+      p.build = mk;
+      mk();
+      pillars.push(p);
+    }
+  }
+
+  // ======================================================================
+  //  ステージ（練習場 / 闘技場）
+  // ======================================================================
+  const ARENA_R = 40;          // 闘技場の壁の内側の半径
+  W.ARENA_R = ARENA_R;
+  W.stage = 'practice';
+  W.bound = () => (W.stage === 'arena' ? ARENA_R - 1.2 : ARENA); // 動ける範囲（半径）
+  const stash = {};            // しまってあるステージの、壊せる地形・柱・壁
+  const decor = {};            // ステージごとの飾り
+  const groundTex = {};        // ステージごとの地面の模様
+  const fires = [];            // 闘技場のかがり火
+
+  function stashStage(name) {
+    const s = { props: props.splice(0), pillars: pillars.splice(0), walls: walls.splice(0) };
+    s.props.forEach((o) => { scene.remove(o.mesh); if (o.label) o.label.visible = false; if (o.body) { PH.remove(o.body); o.body = null; } });
+    s.pillars.forEach((p) => {
+      (p.bodies || []).forEach((b) => PH.remove(b)); p.bodies = [];
+      p.parts.forEach((pt) => scene.remove(pt.m)); p.parts = [];
+      if (p.lamp) scene.remove(p.lamp);
+      if (p.glow) p.glow.visible = false;
+      p.vanish = null;
+    });
+    stash[name] = s;
+  }
+  function unstashStage(name) {
+    const s = stash[name]; delete stash[name];
+    props.push(...s.props); pillars.push(...s.pillars); walls.push(...s.walls);
+    props.forEach((o) => { o.body = null; restoreProp(o); });
+    pillars.forEach((p) => { restorePillar(p); p.rise = 1; });
+    walls.forEach((w) => (w.respawnAt = 0));
+  }
+  function applyGround(name) {
+    const t = groundTex[name]; if (!t) return;
+    groundMat.map = t.inner; outerMat.map = t.outer;
+    groundMat.needsUpdate = true; outerMat.needsUpdate = true;
+  }
+  // ステージを切り替える（'arena' / 'practice'）。地形は元どおりにする
+  W.setStage = function (name) {
+    name = name === 'arena' ? 'arena' : 'practice';
+    if (name === W.stage) return false;
+    stashStage(W.stage);
+    decor[W.stage].visible = false;
+    W.stage = name;
+    if (name === 'arena' && !decor.arena) buildArena();
+    else unstashStage(name);
+    decor[name].visible = true;
+    applyGround(name);
+    W.resetTerrain();
+    return true;
+  };
+
+  // ---- 闘技場: 石の壁と客席に囲まれた、砂の円形の広場。中には盾にできる壁・柱・岩・木箱 ----
+  function buildArena() {
+    const g = new THREE.Group();
+    decor.arena = g; scene.add(g);
+    // 砂の地面
+    const sand = FX.canvasTex(256, 256, (c, w) => {
+      c.fillStyle = '#b39468'; c.fillRect(0, 0, w, w);
+      for (let i = 0; i < 3200; i++) { const v = rand(120, 200) | 0; c.fillStyle = `rgba(${v},${(v * 0.82) | 0},${(v * 0.6) | 0},${rand(0.08, 0.3)})`; c.fillRect(rand(0, w), rand(0, w), rand(1, 3), rand(1, 3)); }
+      c.strokeStyle = 'rgba(90,64,36,0.18)'; c.lineWidth = 2;
+      for (let i = 0; i < 9; i++) { c.beginPath(); const y = rand(0, w); c.moveTo(0, y); c.bezierCurveTo(w * 0.3, y + rand(-20, 20), w * 0.7, y + rand(-20, 20), w, y); c.stroke(); }
+    });
+    sand.wrapS = sand.wrapT = THREE.RepeatWrapping;
+    sand.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+    const sIn = sand.clone(); sIn.needsUpdate = true; sIn.repeat.set(CH_SIZE / TILE, CH_SIZE / TILE);
+    const sOut = sand.clone(); sOut.needsUpdate = true; sOut.repeat.set(1 / TILE, 1 / TILE);
+    groundTex.arena = { inner: sIn, outer: sOut };
+    // 石の模様
+    const stoneTex = FX.canvasTex(256, 128, (c, w, h) => {
+      c.fillStyle = '#8b8172'; c.fillRect(0, 0, w, 128);
+      for (let r = 0; r < 4; r++) for (let k = 0; k < 5; k++) {
+        const x = k * 64 + (r % 2) * 32, y = r * 32, v = rand(115, 150) | 0;
+        c.fillStyle = `rgb(${v},${(v * 0.95) | 0},${(v * 0.85) | 0})`; c.fillRect(x + 2, y + 2, 60, 28);
+        c.fillRect(x - 256 + 2, y + 2, 60, 28);
+      }
+      for (let i = 0; i < 900; i++) { c.fillStyle = `rgba(40,34,28,${rand(0.05, 0.2)})`; c.fillRect(rand(0, w), rand(0, 128), rand(1, 4), rand(1, 3)); }
+    });
+    stoneTex.wrapS = stoneTex.wrapT = THREE.RepeatWrapping;
+    const wallTex = stoneTex.clone(); wallTex.needsUpdate = true; wallTex.repeat.set(26, 1.4);
+    const wallMat = new THREE.MeshStandardMaterial({ map: wallTex, roughness: 0.95, side: THREE.BackSide });
+    const WR = ARENA_R + 0.8, WH = 4.6;
+    const wall = new THREE.Mesh(new THREE.CylinderGeometry(WR, WR, WH, 72, 1, true), wallMat);
+    wall.position.y = WH / 2; g.add(wall);
+    // 壁の上のふち
+    const capMat = new THREE.MeshStandardMaterial({ color: 0x9a8f7c, roughness: 0.9, flatShading: true, side: THREE.DoubleSide });
+    const cap = new THREE.Mesh(new THREE.RingGeometry(WR - 0.25, WR + 1.6, 72, 1), capMat);
+    cap.rotation.x = -Math.PI / 2; cap.position.y = WH; g.add(cap);
+    // 階段状の客席
+    const prof = [new THREE.Vector2(WR + 1.6, WH)];
+    for (let i = 0; i < 8; i++) { const r = WR + 1.6 + i * 1.7, y = WH + 0.9 + i * 1.15; prof.push(new THREE.Vector2(r, y), new THREE.Vector2(r + 1.7, y)); }
+    const top = prof[prof.length - 1];
+    prof.push(new THREE.Vector2(top.x, top.y + 2.4), new THREE.Vector2(top.x + 1.2, top.y + 2.4), new THREE.Vector2(top.x + 1.2, 0));
+    const standTex = stoneTex.clone(); standTex.needsUpdate = true; standTex.repeat.set(40, 6);
+    const stands = new THREE.Mesh(new THREE.LatheGeometry(prof, 72), new THREE.MeshStandardMaterial({ map: standTex, color: 0x9d9384, roughness: 0.95, side: THREE.DoubleSide }));
+    g.add(stands);
+    // 門（4つ）と旗（8枚）
+    const gateMat = new THREE.MeshBasicMaterial({ color: 0x07060a });
+    const frameMat = new THREE.MeshStandardMaterial({ color: 0x6e6455, roughness: 0.9, flatShading: true });
+    for (let k = 0; k < 4; k++) {
+      const a = (k / 4) * Math.PI * 2;
+      const gg = new THREE.Group(); gg.position.set(Math.cos(a) * (WR - 0.05), 0, Math.sin(a) * (WR - 0.05)); gg.lookAt(0, 0, 0); g.add(gg);
+      const hole = new THREE.Mesh(new THREE.PlaneGeometry(4.2, 3.6), gateMat); hole.position.y = 1.8; gg.add(hole);
+      const arch = new THREE.Mesh(new THREE.CircleGeometry(2.1, 20, 0, Math.PI), gateMat); arch.position.y = 3.6; arch.position.z = 0.001; gg.add(arch);
+      [-2.45, 2.45].forEach((dx) => { const col = new THREE.Mesh(new THREE.BoxGeometry(0.7, 4.6, 0.5), frameMat); col.position.set(dx, 2.3, 0.2); gg.add(col); });
+    }
+    const flagCols = ['#c0392b', '#2e86de', '#f1c40f', '#27ae60'];
+    for (let k = 0; k < 8; k++) {
+      const a = ((k + 0.5) / 8) * Math.PI * 2;
+      const tex = FX.canvasTex(64, 128, (c) => {
+        c.fillStyle = flagCols[k % 4]; c.fillRect(0, 0, 64, 112);
+        c.beginPath(); c.moveTo(0, 112); c.lineTo(32, 128); c.lineTo(64, 112); c.fill();
+        c.strokeStyle = 'rgba(255,240,200,0.8)'; c.lineWidth = 3; c.beginPath(); c.arc(32, 52, 16, 0, Math.PI * 2); c.stroke();
+        c.beginPath(); c.moveTo(32, 30); c.lineTo(32, 74); c.moveTo(10, 52); c.lineTo(54, 52); c.stroke();
+      });
+      const fl = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 3), new THREE.MeshStandardMaterial({ map: tex, transparent: true, roughness: 0.8, side: THREE.DoubleSide }));
+      fl.position.set(Math.cos(a) * (WR - 0.08), 3.1, Math.sin(a) * (WR - 0.08)); fl.lookAt(0, 3.1, 0); g.add(fl);
+    }
+    // かがり火（8つ）
+    const stand = new THREE.CylinderGeometry(0.22, 0.32, 1.3, 8), bowl = new THREE.CylinderGeometry(0.55, 0.3, 0.4, 10);
+    const ironMat = new THREE.MeshStandardMaterial({ color: 0x3a3430, roughness: 0.6, metalness: 0.5 });
+    for (let k = 0; k < 8; k++) {
+      const a = ((k + 0.25) / 8) * Math.PI * 2, x = Math.cos(a) * (ARENA_R - 0.9), z = Math.sin(a) * (ARENA_R - 0.9);
+      const s1 = new THREE.Mesh(stand, ironMat); s1.position.set(x, 0.65, z); g.add(s1);
+      const b1 = new THREE.Mesh(bowl, ironMat); b1.position.set(x, 1.45, z); g.add(b1);
+      const flame = FX.glowSprite('#ff9a3a', 2.4); flame.position.set(x, 1.95, z); g.add(flame);
+      const halo = FX.glowSprite('#ff6a1a', 6); halo.position.set(x, 2, z); g.add(halo);
+      const f = { glow: halo, flame, x, z, ph: k * 1.3 };
+      fires.push(f); lamps.push(f);
+    }
+    // 床の模様（中央の円と、外まわりの線）
+    const emb = new THREE.Mesh(new THREE.PlaneGeometry(14, 14), new THREE.MeshBasicMaterial({ map: FX.circleTex, color: 0xffb34a, transparent: true, opacity: 0.32, blending: THREE.AdditiveBlending, depthWrite: false }));
+    emb.rotation.x = -Math.PI / 2; emb.position.y = 0.05; g.add(emb); decor.arenaEmblem = emb;
+    const line = new THREE.Mesh(new THREE.RingGeometry(ARENA_R - 2.2, ARENA_R - 1.9, 96), new THREE.MeshBasicMaterial({ color: 0xffd9a0, transparent: true, opacity: 0.35, depthWrite: false }));
+    line.rotation.x = -Math.PI / 2; line.position.y = 0.04; g.add(line);
+
+    // 盾にできる地形（壊せる。対戦のたびに元どおり）
+    const tangentWall = (a, r, len, rows) => {
+      const cx = Math.cos(a) * r, cz = Math.sin(a) * r;
+      const tx = -Math.sin(a), tz = Math.cos(a);
+      const rotY = Math.atan2(-tz, tx);
+      buildWall(cx - tx * len / 2, cz - tz * len / 2, len, rows, rotY);
+    };
+    [45, 135, 225, 315].forEach((d) => tangentWall((d * Math.PI) / 180, 17, 7.5, 3));
+    for (let k = 0; k < 8; k++) { const a = ((k + 0.5) / 8) * Math.PI * 2; buildPillarAt(Math.cos(a) * 27, Math.sin(a) * 27, k, k % 2 ? '#ffb34a' : '#ff6b6b'); }
+    [[0, 1.9], [90, 1.6], [180, 1.9], [270, 1.6]].forEach(([d, r]) => { const a = (d * Math.PI) / 180; buildRock(Math.cos(a) * 9, Math.sin(a) * 9, r); });
+    [45, 135, 225, 315].forEach((d) => {
+      const a = (d * Math.PI) / 180, x = Math.cos(a) * 31, z = Math.sin(a) * 31;
+      const c1 = buildCrate(x, z); buildCrate(x + 1.25, z + 0.3); const top2 = buildCrate(x + 0.6, z + 0.15, 1.1); top2.support = [c1];
+    });
+    if (W.phys) { props.forEach((o) => { if (o.alive && !o.body) makeBody(o); }); pillars.forEach((p) => pillarBodies(p)); }
+  }
+
+  function buildCrystals() {
+    const crGeo = new THREE.OctahedronGeometry(1.4, 0);
+    for (let i = 0; i < 10; i++) {
+      const a = (i / 10) * Math.PI * 2 + 0.3, r = rand(68, 82);
+      const col = new THREE.Color().setHSL(rand(0.5, 0.82), 0.8, 0.6);
+      const m = new THREE.Mesh(crGeo, new THREE.MeshStandardMaterial({ color: col, emissive: col, emissiveIntensity: 0.7, flatShading: true, roughness: 0.3 }));
+      m.scale.set(1, 1.8, 1);
+      const y = rand(7, 14);
+      m.position.set(Math.cos(a) * r, y, Math.sin(a) * r); decorP.add(m);
+      const gl = FX.glowSprite('#' + col.getHexString(), 9); gl.position.copy(m.position); decorP.add(gl);
+      crystals.push({ mesh: m, glow: gl, base: y, ph: i * 1.7 });
+    }
+  }
+
+  // ---- ダメージ ----
+  function chip(o, from) {
+    W.stats.chips++;
+    if (!(W.phys && isDynamicProp(o))) o.shake = 0.18;
+    const c = o.mesh.position;
+    const cols = o.kind === 'crate' ? ['#8a5c30', '#d0a070'] : ['#77706a', '#c8c0b0'];
+    FX.emit(c.clone().lerp(from, 0.3), { count: 14, c1: cols[0], c2: cols[1], speed: 5, up: 3, gravity: 16, drag: 0.5, life: 0.9, size: 0.22 });
+    const k = Math.max(0, o.hp / o.maxHp);
+    if (o.kind === 'rock') {
+      // 当たった側をけずる
+      const local = o.mesh.worldToLocal(from.clone());
+      const pos = o.mesh.geometry.attributes.position;
+      const dir = local.clone().normalize();
+      for (let i = 0; i < pos.count; i++) {
+        const v = new V3(pos.getX(i), pos.getY(i), pos.getZ(i));
+        const dd = v.clone().normalize().dot(dir);
+        if (dd > 0.35) v.multiplyScalar(1 - (dd - 0.35) * 0.35);
+        pos.setXYZ(i, v.x, v.y, v.z);
+      }
+      pos.needsUpdate = true; o.mesh.geometry.computeVertexNormals();
+    } else if (!(W.phys && isDynamicProp(o))) {
+      o.mesh.scale.copy(o.home.scale).multiplyScalar(0.92 + k * 0.08);
+      o.mesh.rotation.z = o.home.rot.z + rand(-0.06, 0.06) * (1 - k);
+    }
+  }
+
+  function destroyProp(o, from) {
+    if (!o.alive) return;
+    o.alive = false; o.respawn = o.respawnTime || 25;
+    W.stats.destroyed++;
+    if (o.label) o.label.visible = false;
+    const c = o.mesh.position.clone();
+    const away = c.clone().sub(from); away.y = 0; if (away.lengthSq() < 1e-4) away.set(0, 0, 1); away.normalize();
+    if (o.kind === 'brick' && W.phys) {
+      // 物理あり: レンガはそのまま本物の物体として飛んでいき、がれきとして残る（壁ごとにあとで元に戻る）
+      PH.kick(o.body, { x: away.x * rand(4, 8), y: rand(3, 6), z: away.z * rand(4, 8) }, { x: rand(-5, 5), y: rand(-5, 5), z: rand(-5, 5) });
+      o.wall.respawnAt = clock + (o.respawnTime || 25);
+      FX.emit(c, { count: 18, c1: '#9a8a78', c2: '#d8c8b0', speed: 4, up: 2, life: 1.2, size: 0.7, alpha: 0.4, drag: 2 });
+    } else if (o.kind === 'brick') {
+      // レンガそのものが飛んでいく
+      addDebris(o.mesh, away.clone().multiplyScalar(rand(4, 9)).add(new V3(0, rand(4, 8), 0)), 6, { half: 0.38 });
+      o.mesh = o.mesh.clone(); o.mesh.visible = false;
+      FX.emit(c, { count: 18, c1: '#9a8a78', c2: '#d8c8b0', speed: 4, up: 2, life: 1.2, size: 0.7, alpha: 0.4, drag: 2 });
+    } else {
+      if (o.body) { PH.remove(o.body); o.body = null; }
+      o.mesh.visible = false;
+      const stony = o.kind === 'rock' || o.kind === 'slab';
+      const n = o.kind === 'slab' ? 12 : o.kind === 'rock' ? 8 : 6;
+      for (let k = 0; k < n; k++) {
+        let m;
+        if (stony) { m = new THREE.Mesh(chunkGeo, rockMat); m.scale.setScalar(o.size * rand(0.22, 0.4)); }
+        else { m = new THREE.Mesh(new THREE.BoxGeometry(o.size, 0.12, 0.22), woodMat); }
+        m.position.copy(c).add(o.kind === 'slab' ? new V3(rand(-2.3, 2.3), rand(-1.6, 1.6), rand(-0.2, 0.2)) : new V3(rand(-0.5, 0.5), rand(-0.3, 0.5), rand(-0.5, 0.5)).multiplyScalar(o.size));
+        const v = away.clone().multiplyScalar(rand(3, 8)).add(new V3(rand(-3, 3), rand(4, 9), rand(-3, 3)));
+        addDebris(m, v, rand(4, 7), { half: stony ? m.scale.y * 0.8 : 0.08 });
+      }
+      FX.emit(c, { count: 40, c1: o.kind === 'crate' ? '#a87444' : '#8a8578', c2: '#e0d0b8', speed: 7, up: 3, gravity: 10, life: 1, size: 0.3 });
+      FX.emit(c, { count: 16, c1: '#8a7a68', c2: '#c9b9a0', speed: 2, up: 1, life: 1.6, size: 1.4, alpha: 0.35, drag: 1.5 });
+    }
+    if (MG.Audio) MG.Audio.impact('earth', 2);
+    // 支えを失ったものは崩れ落ちる（物理ありのときは、本物の重力で自然に崩れる）
+    if (!W.phys) props.forEach((q) => {
+      if (q.alive && q.support && q.support.length && q.support.every((s) => !s.alive)) setTimeout(() => destroyProp(q, q.mesh.position.clone().add(new V3(rand(-1, 1), 1, rand(-1, 1)))), 120);
+    });
+  }
+
+  function hitPillar(p, dmg, from) {
+    if (!p.alive) return;
+    p.hp -= dmg;
+    FX.emit(new V3(p.x, 3, p.z), { count: 16, c1: '#5d6380', c2: '#a0a8c8', speed: 5, up: 3, gravity: 14, life: 1, size: 0.3 });
+    if (p.hp > 0) return;
+    p.alive = false; p.respawn = 30;
+    W.stats.destroyed++;
+    const away = new V3(p.x - from.x, 0, p.z - from.z).normalize();
+    (p.bodies || []).forEach((b) => PH.remove(b)); p.bodies = [];
+    p.parts.forEach((part, k) => {
+      const v = away.clone().multiplyScalar(2 + k * 2.2).add(new V3(rand(-1, 1), 1 + k * 0.6, rand(-1, 1)));
+      addDebris(part.m, v, 30, { half: part.half * 0.8, keep: true, spin: 0.35 });
+    });
+    p.parts = [];
+    scene.remove(p.lamp); p.glow.visible = false;
+    FX.emit(new V3(p.x, 4, p.z), { count: 60, c1: '#7a7f98', c2: '#d0d4e8', speed: 4, up: 2, life: 2, size: 1.6, alpha: 0.35, drag: 1.2 });
+    if (MG.Audio) MG.Audio.rumble(1.4);
+  }
+
+  // 破壊属性の魔法が当たった場所
+  W.blast = function (p, radius, dmg, opts) {
+    opts = opts || {};
+    for (const o of props) {
+      if (!o.alive) continue;
+      const d = distToProp(o, p);
+      if (d >= radius) continue;
+      const amount = dmg * (1 - 0.5 * Math.max(0, d) / radius);
+      o.hp -= amount;
+      if (o.hp <= 0) destroyProp(o, p); else { chip(o, p); blastPush(o, p, radius, dmg); }
+    }
+    for (const pl of pillars) {
+      if (!pl.alive) continue;
+      const d = Math.hypot(pl.x - p.x, pl.z - p.z) - 1.2;
+      if (d < radius && p.y < 9) hitPillar(pl, dmg * (1 - 0.5 * Math.max(0, d) / radius), p);
+    }
+    if (opts.crater !== false) {
+      const gy = W.heightAt(p.x, p.z);
+      if (p.y - gy < Math.max(1.5, radius * 0.6)) W.crater(p, opts.craterR || radius * 0.55);
+    }
+  };
+
+  // 弾が地形にぶつかったか
+  W.collide = function (pos, r, skip) {
+    for (const o of props) {
+      if (!o.alive || (skip && skip.has(o))) continue;
+      if (o.kind === 'slab' ? inBox(pos, slabBox(o, r)) : o.mesh.position.distanceTo(pos) < o.r + r) return o;
+    }
+    for (const pl of pillars) {
+      if (skip && skip.has(pl)) continue;
+      if (pl.alive && Math.hypot(pl.x - pos.x, pl.z - pos.z) < 1.2 + r && pos.y < 7.6) return pl;
+    }
+    return null;
+  };
+
+  // 視線の先にある地形までの距離
+  W.raycast = function (origin, dir, maxD) {
+    let best = maxD;
+    const test = (c, r) => {
+      const oc = c.clone().sub(origin); const tca = oc.dot(dir); if (tca < 0) return;
+      const d2 = oc.lengthSq() - tca * tca; if (d2 > r * r) return;
+      const t = tca - Math.sqrt(r * r - d2); if (t > 0 && t < best) best = t;
+    };
+    for (const o of props) if (o.alive) { if (o.kind === 'slab') { const t = rayBox(origin, dir, slabBox(o, 0)); if (t != null && t > 0 && t < best) best = t; } else test(o.mesh.position, o.r); }
+    for (const p of pillars) if (p.alive) for (const y of [1.2, 3.5, 5.8]) test(new V3(p.x, y, p.z), 1.3);
+    return best < maxD ? best : null;
+  };
+
+  // プレイヤーが地形にめりこまないようにする
+  W.pushOut = function (pos, r) {
+    for (const o of props) {
+      if (!o.alive) continue;
+      const c = o.mesh.position;
+      if (o.kind === 'slab') {
+        const b = slabBox(o, r);
+        if (pos.x > b.minX && pos.x < b.maxX && pos.z > b.minZ && pos.z < b.maxZ && pos.y < b.maxY) {
+          const dz = pos.z - c.z, dx = pos.x - c.x;
+          if ((b.maxZ - b.minZ) / 2 - Math.abs(dz) < (b.maxX - b.minX) / 2 - Math.abs(dx)) pos.z = dz >= 0 ? b.maxZ : b.minZ;
+          else pos.x = dx >= 0 ? b.maxX : b.minX;
+        }
+        continue;
+      }
+      if (pos.y > c.y + o.r * 0.6) continue;
+      const dx = pos.x - c.x, dz = pos.z - c.z, d = Math.hypot(dx, dz), min = o.col + r;
+      if (d < min && d > 1e-4) { pos.x = c.x + (dx / d) * min; pos.z = c.z + (dz / d) * min; }
+    }
+  };
+
+  // ---- 消滅領域: 球の内側にあるものを跡形なく消す ----
+  // 球の中心 c（Vector3）と半径 R。地形はその場で縮んで消え（破片は出ない）、地面は球の形にえぐれる
+  W.erase = function (c, R) {
+    let n = 0;
+    for (const o of props) {
+      if (!o.alive || o.vanish != null) continue;
+      if (o.mesh.position.distanceTo(c) < R) { o.vanish = 0; n++; }
+    }
+    for (const p of pillars) {
+      if (!p.alive || p.vanish != null) continue;
+      // 石柱は、球が柱の一部でも包みこめば消える
+      const dxz = Math.hypot(p.x - c.x, p.z - c.z);
+      if (dxz < R + 0.6 && c.y - R < 6) { p.vanish = 0; n++; }
+    }
+    W.carveSphere(c, R);
+    W.stats.erased += n;
+    return n;
+  };
+  W.carveSphere = function (c, R) {
+    const Rg = G_SEG + 1;
+    const x0 = Math.max(0, Math.floor((c.x - R + G_HALF) / G_STEP)), x1 = Math.min(G_SEG, Math.ceil((c.x + R + G_HALF) / G_STEP));
+    const z0 = Math.max(0, Math.floor((c.z - R + G_HALF) / G_STEP)), z1 = Math.min(G_SEG, Math.ceil((c.z + R + G_HALF) / G_STEP));
+    if (x0 > x1 || z0 > z1) return false;
+    let changed = false;
+    for (let iz = z0; iz <= z1; iz++) for (let ix = x0; ix <= x1; ix++) {
+      const x = -G_HALF + ix * G_STEP, z = -G_HALF + iz * G_STEP;
+      const d = Math.hypot(x - c.x, z - c.z);
+      if (d >= R) continue;
+      const edge = Math.max(0, Math.min(1, (G_HALF - Math.max(Math.abs(x), Math.abs(z))) / 8));
+      const bottom = c.y - Math.sqrt(R * R - d * d);
+      const i = iz * Rg + ix;
+      const target = heights[i] + (Math.min(heights[i], bottom) - heights[i]) * edge;
+      if (target < heights[i]) {
+        heights[i] = Math.max(-6, target); changed = true;
+        // 切り口はなめらかで、少しだけ青白い
+        colors[i * 3] = Math.min(colors[i * 3], 0.78); colors[i * 3 + 1] = Math.min(colors[i * 3 + 1], 0.82); colors[i * 3 + 2] = Math.min(colors[i * 3 + 2], 0.95);
+      }
+    }
+    if (!changed) return false;
+    const cx0 = Math.floor(x0 / CH_SEG), cx1 = Math.min(CH - 1, Math.floor(x1 / CH_SEG));
+    const cz0 = Math.floor(z0 / CH_SEG), cz1 = Math.min(CH - 1, Math.floor(z1 / CH_SEG));
+    for (let cz = Math.max(0, cz0 - (z0 % CH_SEG === 0 ? 1 : 0)); cz <= cz1; cz++) for (let cx = Math.max(0, cx0 - (x0 % CH_SEG === 0 ? 1 : 0)); cx <= cx1; cx++) {
+      const ch = chunks[cz * CH + cx]; detailChunk(ch); syncChunk(ch);
+    }
+    W.stats.carved++;
+    if (W.phys) PH.rebuildGroundSoon(W.heightAt, G_SIZE);
+    return true;
+  };
+  function finishVanish(o) {
+    o.vanish = null;
+    if (o.body) { PH.remove(o.body); o.body = null; }
+    o.alive = false; o.respawn = o.respawnTime || 25;
+    o.mesh.visible = false;
+    if (o.wall) o.wall.respawnAt = clock + (o.respawnTime || 25);
+    if (o.label) o.label.visible = false;
+    W.stats.destroyed++;
+    // 支えを失ったものは崩れ落ちる
+    props.forEach((q) => {
+      if (!W.phys && q.alive && q.vanish == null && q.support && q.support.length && q.support.every((s) => !s.alive)) setTimeout(() => destroyProp(q, q.mesh.position.clone().add(new V3(rand(-1, 1), 1, rand(-1, 1)))), 120);
+    });
+  }
+
+  W.resetTerrain = function () {
+    resetGround();
+    if (W.phys) PH.setGround(W.heightAt, G_SIZE);
+    for (let i = debris.length - 1; i >= 0; i--) removeDebris(i);
+    if (W.phys) props.forEach((o) => { if (isDynamicProp(o) && o.alive && o.mesh.position.distanceTo(o.home.pos) > 0.05) restoreProp(o); });
+    props.forEach((o) => { if (!o.alive || o.hp < o.maxHp) restoreProp(o); });
+    pillars.forEach((p) => { if (!p.alive) restorePillar(p); else p.hp = p.maxHp; });
+  };
+
+  function restoreProp(o) {
+    if (o.kind === 'rock') {
+      // けずれた形を作り直す
+      const r = o.size;
+      const geo = new THREE.IcosahedronGeometry(r, 1); const pos = geo.attributes.position;
+      for (let i = 0; i < pos.count; i++) { const vx = pos.getX(i), vy = pos.getY(i), vz = pos.getZ(i); const k = 0.8 + prand(vx.toFixed(3) * 1, vy.toFixed(3) * 1, vz.toFixed(3) * 1) * 0.35; pos.setXYZ(i, vx * k, vy * k * 0.8, vz * k); }
+      geo.computeVertexNormals(); o.mesh.geometry.dispose(); o.mesh.geometry = geo;
+    }
+    if (!o.mesh.parent) scene.add(o.mesh);
+    o.mesh.visible = true;
+    o.mesh.position.copy(o.home.pos); o.mesh.rotation.copy(o.home.rot); o.mesh.scale.copy(o.home.scale);
+    o.hp = o.maxHp; o.alive = true; o.grow = 0; o.vanish = null;
+    if (W.phys) {
+      o.mesh.updateMatrixWorld();
+      if (o.body && o.body.alive && isDynamicProp(o)) PH.teleport(o.body, o.home.pos, o.mesh.quaternion);
+      else { if (o.body) PH.remove(o.body); makeBody(o); }
+    }
+    if (o.label) { o.label.visible = true; o.label.scale.setScalar(0.9); }
+  }
+  function restorePillar(p) {
+    p.hp = p.maxHp; p.alive = true; p.build(); p.rise = 0;
+    if (W.phys) pillarBodies(p);
+  }
+
+  W.update = function (dt, playerPos) {
+    clock += dt;
+    if (timeK !== timeTarget) {
+      timeK += Math.sign(timeTarget - timeK) * Math.min(Math.abs(timeTarget - timeK), dt / 1.2);
+      if (Math.abs(timeK - timeTarget) < 1e-6) timeK = timeTarget;
+      applyTime(timeK);
+    }
+    if (W.phys && playerPos) PH.step(dt);
+    if (playerPos || !W.phys) updateDebris(dt);
+    if (W.phys) {
+      for (const o of props) {
+        if (!o.alive || !isDynamicProp(o) || o.vanish != null) continue;
+        if (o.mesh.position.distanceTo(o.home.pos) > 0.6) {
+          o.alive = false; o.respawn = o.respawnTime || 25; W.stats.destroyed++;
+          if (o.wall) o.wall.respawnAt = clock + (o.respawnTime || 25);
+        }
+      }
+      for (const w of walls) {
+        if (!w.respawnAt || clock < w.respawnAt) continue;
+        const near = playerPos && w.bricks.some((b) => b.home.pos.distanceTo(playerPos) < 3);
+        if (near) continue;
+        w.respawnAt = 0;
+        w.bricks.forEach((b) => { if (b.vanish == null) restoreProp(b); });
+      }
+    }
+    for (const o of props) {
+      if (!o.alive) {
+        if (W.phys && o.kind === 'brick') continue; // レンガは壁ごとに戻す
+        o.respawn -= dt;
+        if (o.respawn <= 0 && (!playerPos || o.home.pos.distanceTo(playerPos) > 3)) { restoreProp(o); o.grow = 0; }
+        continue;
+      }
+      if (o.vanish != null) {
+        o.vanish += dt;
+        const k = Math.max(0.001, 1 - o.vanish / 0.6);
+        o.mesh.scale.copy(o.home.scale).multiplyScalar(k * k);
+        if (o.label) o.label.scale.setScalar(0.9 * k);
+        if (o.vanish >= 0.6) finishVanish(o);
+        continue;
+      }
+      if (o.grow != null && o.grow < 1) { o.grow = Math.min(1, o.grow + dt * 2); o.mesh.scale.copy(o.home.scale).multiplyScalar(Math.max(0.01, o.grow)); }
+      if (o.shake > 0) {
+        o.shake -= dt;
+        o.mesh.position.copy(o.home.pos).add(new V3(rand(-1, 1), 0, rand(-1, 1)).multiplyScalar(o.shake * 0.3));
+        if (o.shake <= 0) o.mesh.position.copy(o.home.pos);
+      }
+    }
+    for (const p of pillars) {
+      if (!p.alive) { p.respawn -= dt; if (p.respawn <= 0) restorePillar(p); continue; }
+      if (p.vanish != null) {
+        p.vanish += dt;
+        const k = Math.max(0.001, 1 - p.vanish / 0.6);
+        p.parts.forEach((pt) => pt.m.scale.setScalar(k * k)); p.lamp.scale.setScalar(k); p.glow.scale.setScalar(4.5 * k);
+        if (p.vanish >= 0.6) {
+          p.vanish = null; p.alive = false; p.respawn = 30; W.stats.destroyed++;
+          (p.bodies || []).forEach((b) => PH.remove(b)); p.bodies = [];
+          p.parts.forEach((pt) => scene.remove(pt.m)); p.parts = [];
+          scene.remove(p.lamp); p.glow.visible = false; p.glow.scale.setScalar(4.5);
+        }
+        continue;
+      }
+      if (p.rise < 1) { p.rise = Math.min(1, p.rise + dt * 0.8); const off = (1 - p.rise) * -8; p.parts.forEach((pt, k) => (pt.m.position.y = (k < 3 ? 1.15 + k * 2.3 : 7.25) + off)); p.lamp.position.y = 8.4 + off; }
+      const y = (p.rise < 1 ? (1 - p.rise) * -8 : 0) + 8.4 + Math.sin(clock * 2 + p.ph) * 0.15;
+      p.lamp.position.y = y; p.glow.position.y = y;
+    }
+    for (const c of W.stage === 'practice' ? crystals : []) {
+      const y = c.base + Math.sin(clock * 0.6 + c.ph) * 0.8;
+      c.mesh.position.y = y; c.glow.position.y = y; c.mesh.rotation.y += dt * 0.4;
+    }
+    W.circle.rotation.z += dt * 0.05;
+    if (W.stage === 'arena') {
+      for (const f of fires) { const k = 1 + Math.sin(clock * 9 + f.ph) * 0.12 + Math.sin(clock * 23 + f.ph * 2) * 0.06; f.flame.scale.setScalar(2.4 * k); f.glow.scale.setScalar(6 * k); }
+      if (decor.arenaEmblem) decor.arenaEmblem.rotation.z -= dt * 0.04;
+      if (Math.random() < 0.5 && fires.length) { const f = fires[(Math.random() * fires.length) | 0]; FX.emit(new V3(f.x, 2, f.z), { count: 1, c1: '#ff7a2a', c2: '#ffd24a', speed: 0.5, up: 2.2, jitter: 0.25, life: 0.7, size: 0.28, drag: 0.4 }); }
+    }
+    if (timeK > 0.5 && playerPos && Math.random() < 0.35 * timeK) {
+      const a = rand(0, Math.PI * 2), r = rand(5, 60);
+      FX.emit(new V3(playerPos.x + Math.cos(a) * r, rand(0.3, 3), playerPos.z + Math.sin(a) * r), { count: 1, c1: '#d8ff7a', c2: '#7affd8', speed: 0.4, life: rand(2, 4), size: 0.18, drag: 0.2, alpha: 0.9 });
+    }
+  };
+
+  W.follow = function (camPos) { sky.position.copy(camPos); };
+
+  W.info = () => ({
+    props: props.length, alive: props.filter((o) => o.alive).length, debris: debris.length,
+    pillars: pillars.filter((p) => p.alive).length, mode: W.mode, timeK, stats: Object.assign({}, W.stats), stage: W.stage, bound: W.bound(),
+    minHeight: heights ? Math.min.apply(null, Array.from(heights)) : 0,
+    kinds: props.reduce((a, o) => { a[o.kind] = (a[o.kind] || 0) + 1; return a; }, {}),
+    phys: W.phys, bodies: PH.bodyCount, active: W.phys ? PH.activeCount() : 0, physDebris: debris.filter((d) => d.body).length,
+  });
+  W.propList = () => props;
+  // 動作確認用: 指定した場所に石を1つ落とす
+  W.testDrop = function (x, y, z, r) { const m = new THREE.Mesh(chunkGeo, rockMat); m.scale.setScalar(r || 0.4); m.position.set(x, y, z); addDebris(m, new V3(0, 0, 0), 20); return m; };
+  W.pillarList = () => pillars;
+
+  W.build = function (sc, rd) {
+    scene = sc; renderer = rd;
+    scene.fog = new THREE.FogExp2(0x0a1030, 0.0145);
+    decorP = new THREE.Group(); decor.practice = decorP; scene.add(decorP);
+    buildSky();
+    buildGround();
+    makeMaterials();
+    buildProps();
+    buildPillars();
+    buildCrystals();
+    hemi = new THREE.HemisphereLight(0x8c9cff, 0x1a1030, 0.75); scene.add(hemi);
+    dirLight = new THREE.DirectionalLight(0xb8c6ff, 0.75); scene.add(dirLight);
+    amb = new THREE.AmbientLight(0x30305a, 0.35); scene.add(amb);
+    applyTime(timeK);
+  };
+})();
