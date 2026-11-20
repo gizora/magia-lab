@@ -2469,6 +2469,23 @@
     const v = 1 - u;
     return a.clone().multiplyScalar(v * v * v).addScaledVector(b, 3 * v * v * u).addScaledVector(c, 3 * v * u * u).addScaledVector(d, u * u * u);
   };
+  // 千刃の門の武器（剣・槍・斧）と魔法陣の形。形と材質は、すべての武器で使い回す
+  let bladeKitC = null;
+  function bladeKit() {
+    if (bladeKitC) return bladeKitC;
+    const steel = new THREE.MeshStandardMaterial({ color: 0xe4eaf4, emissive: 0x5a7aa8, emissiveIntensity: 0.55, roughness: 0.25, metalness: 0.5, flatShading: true });
+    const gold = new THREE.MeshStandardMaterial({ color: 0xe8a422, emissive: 0x8a5200, emissiveIntensity: 0.6, roughness: 0.35, metalness: 0.4, flatShading: true });
+    const grip = new THREE.MeshStandardMaterial({ color: 0x3a2a40, emissive: 0x1a1020, emissiveIntensity: 1, roughness: 0.7 });
+    const glow = new THREE.MeshBasicMaterial({ color: 0xcfe0ff, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false });
+    // どれも +Y が切っ先（飛んでいく向き）
+    const tip = new THREE.ConeGeometry(0.075, 0.32, 4);
+    const sword = [[new THREE.BoxGeometry(0.15, 1.5, 0.035), steel, 0.25], [tip, steel, 1.16], [new THREE.BoxGeometry(0.03, 1.3, 0.05), glow, 0.2], [new THREE.BoxGeometry(0.55, 0.09, 0.12), gold, -0.55], [new THREE.BoxGeometry(0.07, 0.4, 0.07), grip, -0.8], [new THREE.OctahedronGeometry(0.07, 0), gold, -1.03]];
+    const spear = [[new THREE.CylinderGeometry(0.035, 0.035, 2.3, 6), grip, -0.35], [new THREE.ConeGeometry(0.1, 0.6, 4), steel, 1.1], [new THREE.BoxGeometry(0.3, 0.06, 0.06), gold, 0.78], [new THREE.BoxGeometry(0.02, 0.5, 0.11), glow, 1.05]];
+    const axe = [[new THREE.CylinderGeometry(0.04, 0.04, 1.6, 6), grip, -0.2], [new THREE.BoxGeometry(0.55, 0.42, 0.04), steel, 0.5], [new THREE.BoxGeometry(0.1, 0.5, 0.06), gold, 0.5], [new THREE.ConeGeometry(0.06, 0.3, 4), steel, 0.75]];
+    axe[1][0].translate(0.3, 0, 0);
+    bladeKitC = { parts: [sword, spear, axe], portalGeo: new THREE.PlaneGeometry(1.9, 1.9), coreGeo: new THREE.CircleGeometry(0.55, 24) };
+    return bladeKitC;
+  }
   // 自分の HP（練習場では MP）を回復する（世界樹・不死鳥）
   function healSelf(hp, mp, at) {
     if (M.on) {
@@ -3143,6 +3160,113 @@
         }
         return true;
       }, [g]);
+    },
+    // 千刃の門: 背後から左右の空中に鋼の魔法陣を 14 個開き、剣・槍・斧を 2.6 秒のあいだ撃ち続ける
+    blades(spec, aim) {
+      const rem = !!CTX, owner = okey(ownerKey(spec));
+      const base = casterPos().clone();
+      const f = aim.dir.clone(); f.y = 0; if (f.lengthSq() < 1e-4) f.set(0, 0, -1); f.normalize();
+      const side = new V3(-f.z, 0, f.x);
+      // ねらい: ねらった相手（いなければ視線の近くの相手）を追う。いなければ、ねらった地面
+      const focus = aim.target || nearestToRay(aim, 0.3, 80);
+      const fixed = aim.target ? aim.target.center.clone() : groundPointOf(aim, 60).setY(0.8);
+      const S = cleanSpec(spec);
+      const root = new THREE.Group(); scene.add(root);
+      const gm = bladeKit();
+      // 魔法陣: 背中側から左右へ、扇のように並べる
+      const portalMat = new THREE.MeshBasicMaterial({ map: FX.circleTex, color: 0xcfe0ff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+      const coreMat = new THREE.MeshBasicMaterial({ color: 0xfff1c0, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+      const portals = [];
+      const N = 14;
+      for (let i = 0; i < N; i++) {
+        const u = N > 1 ? i / (N - 1) : 0.5;
+        const lat = (u - 0.5) * 13 + rand(-0.4, 0.4);
+        const back = 1.6 - Math.abs(u - 0.5) * 3.2 + rand(-0.3, 0.3); // まん中ほど後ろ、はしほど横
+        const up = 2.6 + (i % 3) * 1.25 + rand(-0.3, 0.3);
+        const p = base.clone().addScaledVector(f, -back).addScaledVector(side, lat); p.y = base.y + up;
+        const g = new THREE.Group(); g.position.copy(p); root.add(g);
+        const ring = new THREE.Mesh(gm.portalGeo, portalMat); g.add(ring);
+        const core = new THREE.Mesh(gm.coreGeo, coreMat); core.position.z = 0.02; g.add(core);
+        g.lookAt(p.clone().addScaledVector(f, 10));
+        g.scale.setScalar(0.01);
+        portals.push({ g, ring, open: 0.05 + i * 0.025 + rand(0, 0.06) });
+      }
+      const weapons = [];
+      const launch = () => {
+        const pt = portals[(Math.random() * portals.length) | 0];
+        const from = pt.g.position.clone();
+        const dest = (focus && focus.alive ? focus.center.clone() : fixed.clone()).add(new V3(rand(-1.3, 1.3), rand(-0.5, 0.8), rand(-1.3, 1.3)));
+        const dir = dest.sub(from).normalize();
+        const kind = (Math.random() * 3) | 0;
+        const m = new THREE.Group();
+        gm.parts[kind].forEach(([geo, mat, y]) => { const mm = new THREE.Mesh(geo, mat); mm.position.y = y; m.add(mm); });
+        m.position.copy(from); m.quaternion.setFromUnitVectors(UP, dir); m.scale.setScalar(1.4);
+        root.add(m);
+        weapons.push({ m, pos: from.clone(), vel: dir.multiplyScalar(62), life: 2.2, stuck: 0, hit: new Set(spec.casterT ? [spec.casterT] : []) });
+        FX.emit(from, { count: 10, c1: '#ffffff', c2: '#cfe0ff', speed: 4, life: 0.25, size: 0.25, drag: 4 });
+        AU.whoosh();
+      };
+      if (!rem) popup(ahead(2.5, 0.2), '千刃の門', 'ward');
+      AU.charge(0.5); AU.playSample('cast_holy', { vol: 0.5, rate: 0.7, dur: 1.6 });
+      const FIRE0 = 0.45, FIRE1 = 3.05;
+      let t = 0, shotT = 0;
+      special((dt) => {
+        t += dt;
+        // 魔法陣が順に開き、最後にまとめて閉じる
+        const close = t > FIRE1 ? Math.max(0, 1 - (t - FIRE1) / 0.4) : 1;
+        portals.forEach((p, i) => {
+          const k = Math.min(1, Math.max(0, (t - p.open) / 0.22));
+          p.g.scale.setScalar(Math.max(0.01, (1 - Math.pow(1 - k, 3)) * close));
+          p.ring.rotation.z += dt * (i % 2 ? 2.2 : -2.2);
+        });
+        portalMat.opacity = 0.95 * close; coreMat.opacity = 0.55 * close;
+        // 連射（1 秒に約 12 本）
+        if (t >= FIRE0 && t < FIRE1) { shotT -= dt; while (shotT <= 0) { shotT += 0.085; launch(); } }
+        for (let i = weapons.length - 1; i >= 0; i--) {
+          const w = weapons[i];
+          if (w.stuck > 0) {
+            // 刺さった武器は、少しして光になって消える
+            w.stuck += dt;
+            if (w.stuck > 1.2) { const k = Math.max(0.001, 1 - (w.stuck - 1.2) / 0.3); w.m.scale.setScalar(1.4 * k); if (k <= 0.002) { root.remove(w.m); weapons.splice(i, 1); } }
+            continue;
+          }
+          w.life -= dt;
+          const prev = w.pos.clone();
+          w.pos.addScaledVector(w.vel, dt);
+          let stop = null;
+          // 的・相手・召喚獣
+          for (const tg of targets) {
+            if (!tg.alive || w.hit.has(tg) || friendly(tg, spec) || targetOwner(tg) === owner) continue;
+            const seg = w.pos.clone().sub(prev), L2 = seg.lengthSq();
+            const k = L2 > 0 ? Math.max(0, Math.min(1, tg.center.clone().sub(prev).dot(seg) / L2)) : 0;
+            if (prev.clone().addScaledVector(seg, k).distanceTo(tg.center) < tg.r + 0.55) {
+              w.hit.add(tg);
+              hitTarget(tg, 14, S, { dir: w.vel.clone().normalize() });
+              FX.emit(tg.center, { count: 14, c1: '#ffffff', c2: '#cfe0ff', speed: 6, life: 0.25, size: 0.25, drag: 4 });
+              AU.impact('metal', 1, ap(tg.center));
+              stop = 'hit'; break;
+            }
+          }
+          // 魔法の壁・地形・地面には突き刺さる
+          if (!stop) {
+            const bh = W.barrierOnSegment(prev, w.pos, 0.2, owner);
+            if (bh) { if (bh.barrier.game) damageBarrier(bh.barrier.game, 14, w.pos.clone(), spec); stop = 'hit'; }
+            else if (W.collide(w.pos, 0.15)) stop = 'stick';
+            else if (w.pos.y <= W.heightAt(w.pos.x, w.pos.z) + 0.15) { w.pos.y = W.heightAt(w.pos.x, w.pos.z) + 0.15; stop = 'stick'; }
+          }
+          if (stop === 'stick') {
+            w.stuck = 0.001; w.m.position.copy(w.pos).addScaledVector(w.vel.clone().normalize(), 0.5);
+            FX.emit(w.pos, { count: 12, c1: '#8a7a6a', c2: '#d8d0c0', speed: 4, up: 2, gravity: 12, life: 0.6, size: 0.22 });
+            AU.impact('metal', 0.6, ap(w.pos));
+            continue;
+          }
+          if (stop === 'hit' || w.life <= 0) { root.remove(w.m); weapons.splice(i, 1); continue; }
+          w.m.position.copy(w.pos);
+          if (Math.random() < 0.5) FX.emit(w.pos, { count: 1, c1: '#ffffff', c2: '#cfe0ff', speed: 0.3, life: 0.18, size: 0.18, drag: 2 });
+        }
+        if (t >= FIRE1 + 0.4 && !weapons.length) { scene.remove(root); portalMat.dispose(); coreMat.dispose(); return false; }
+        return true;
+      }, [root]);
     },
     // 賢者の石: 狙った場所に赤い石を生み、まわり 9m を黄金に変える
     philosopher(spec, aim) {
