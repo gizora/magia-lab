@@ -4275,7 +4275,7 @@
   function spawnEnemy(kind, pos, f, sc) {
     const E = RP.ENEMIES[kind]; if (!E) return null;
     const mats = [];
-    const { g: model, parts } = makeEnemyModel(kind, mats);
+    const { g: model, parts } = MG.Monsters ? MG.Monsters.build(kind, mats) : makeEnemyModel(kind, mats); // 第29版: js/monsters.js の作り込んだ見た目
     const g = new THREE.Group(); g.add(model);
     const bc = document.createElement('canvas'); bc.width = 128; bc.height = 16;
     const btex = new THREE.CanvasTexture(bc);
@@ -4411,11 +4411,7 @@
     stepSound(t, { slime: 'slime', skeleton: 'bone', mage: 'soft', boss: 'heavy', bat: 'flap' }[t.kind], E.boss ? 1.6 : 1, E.fly ? 1 : speed);
     const sw = speed > 0.2 ? Math.sin(t.walk) : 0, k = t.windup > 0 ? 1 - t.windup / (E.boss ? 0.7 : 0.4) : 0;
     t.face.rotation.y = t.yaw;
-    if (t.kind === 'slime') { const sq = 1 + Math.sin(st.time * 5 + t.phase) * 0.08 + (t.windup > 0 ? 0.25 * Math.sin(k * Math.PI) : 0); P2.body.scale.set(sq, 0.75 / sq, sq); }
-    else if (t.kind === 'skeleton') { P2.legs[0].rotation.x = sw * 0.6; P2.legs[1].rotation.x = -sw * 0.6; P2.arm.rotation.x = t.windup > 0 ? -2.2 * Math.sin(k * Math.PI) : sw * 0.3; }
-    else if (t.kind === 'bat') { const fl = Math.sin(st.time * 18 + t.phase) * 0.7; P2.wings[0].rotation.z = -fl; P2.wings[1].rotation.z = fl; }
-    else if (t.kind === 'mage') { P2.orb.rotation.y += dt * 3; P2.glow.scale.setScalar(1.6 + (t.windup > 0 ? 1.5 * k : 0) + Math.sin(st.time * 4) * 0.2); }
-    else if (P2.legs) { P2.legs[0].rotation.x = sw * 0.4; P2.legs[1].rotation.x = -sw * 0.4; const pu = t.windup > 0 ? Math.sin(k * Math.PI) : 0; P2.arms[0].rotation.x = -pu * 2.6; P2.arms[1].rotation.x = -pu * 2.6; if (P2.core) P2.core.rotation.y += dt * 2; if (P2.ring) P2.ring.rotation.z += dt; }
+    if (MG.Monsters) MG.Monsters.animate(t, { sw, k, speed, walk: t.walk, time: st.time, phase: t.phase, dt });
     t.group.position.copy(t.pos);
     updateCenter(t);
     for (const m of t.mats) {
@@ -4765,6 +4761,7 @@
     killEnemies(kind) { targets.filter((t) => t.isEnemy && t.alive && (!kind || t.kind === kind)).forEach((t) => { t.hp = 0; killTarget(t); }); },
     spawnEnemy(kind, x, z, f) { const t = spawnEnemy(kind, new V3(x, 0, z), f || 1, RP.scale(f || 1)); t.spawnT = 1; return t.id; },
     hurt: (d) => hurtPlayer(d, null, 'テスト'),
+    faceEnemies(x, z) { targets.filter((t) => t.isEnemy && t.alive).forEach((t) => { t.yaw = Math.atan2(x - t.pos.x, z - t.pos.z); t.face.rotation.y = t.yaw; }); },
     spot: () => (st.spot ? st.spot.id : null),
     interact: () => G.interact(),
     nextFloor: () => nextFloor(D.floor + 1),
