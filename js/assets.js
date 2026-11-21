@@ -85,9 +85,46 @@
     models[name] = { height: m.height, kind: m.kind, name: m.name, parts };
     return models[name];
   };
+  // 第31版: 軽い版の岩（たくさん並べる用）。近い頂点を格子ごとに 1 つにまとめて三角形を減らす（頂点の色は平均）。
+  // cells: 一番長い辺を何マスに分けるか（小さいほど粗く軽い）。面はかくかくにして、岩らしく見せる
+  const lods = {};
+  A.lowModel = function (name, cells) {
+    const key = name + ':' + cells; if (lods[key]) return lods[key];
+    const mdl = A.model(name); if (!mdl) return null;
+    const parts = mdl.parts.map((pt) => {
+      const src = pt.geo, pos = src.attributes.position, col = src.attributes.color, idx = src.index;
+      const bb = src.boundingBox, cell = Math.max(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z) / cells;
+      const ids = new Map(), vmap = new Int32Array(pos.count), sum = [], csum = [], cnt = [];
+      for (let i = 0; i < pos.count; i++) {
+        const k = Math.floor((pos.getX(i) - bb.min.x) / cell) + ',' + Math.floor((pos.getY(i) - bb.min.y) / cell) + ',' + Math.floor((pos.getZ(i) - bb.min.z) / cell);
+        let id = ids.get(k);
+        if (id == null) { id = cnt.length; ids.set(k, id); sum.push(0, 0, 0); csum.push(0, 0, 0); cnt.push(0); }
+        vmap[i] = id; sum[id * 3] += pos.getX(i); sum[id * 3 + 1] += pos.getY(i); sum[id * 3 + 2] += pos.getZ(i); cnt[id]++;
+        if (col) { csum[id * 3] += col.getX(i); csum[id * 3 + 1] += col.getY(i); csum[id * 3 + 2] += col.getZ(i); }
+      }
+      const vp = new Float32Array(cnt.length * 3), vc = new Float32Array(cnt.length * 3);
+      for (let i = 0; i < cnt.length; i++) for (let c = 0; c < 3; c++) { vp[i * 3 + c] = sum[i * 3 + c] / cnt[i]; vc[i * 3 + c] = col ? csum[i * 3 + c] / cnt[i] : 1; }
+      // 三角形: まとめたあとに 3 つの角がちがう頂点のものだけ残す。面ごとに頂点を分けて、かくかくの面にする
+      const tri = idx ? idx.array : Array.from({ length: pos.count }, (_, i) => i), out = [], oc = [];
+      for (let t = 0; t < tri.length; t += 3) {
+        const a = vmap[tri[t]], b = vmap[tri[t + 1]], c = vmap[tri[t + 2]];
+        if (a === b || b === c || a === c) continue;
+        [a, b, c].forEach((v) => { out.push(vp[v * 3], vp[v * 3 + 1], vp[v * 3 + 2]); oc.push(vc[v * 3], vc[v * 3 + 1], vc[v * 3 + 2]); });
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(out, 3));
+      if (col) geo.setAttribute('color', new THREE.Float32BufferAttribute(oc, 3));
+      geo.computeVertexNormals(); geo.computeBoundingBox(); geo.computeBoundingSphere();
+      const mat = pt.mat.clone(); mat.flatShading = true;
+      return { geo, mat, role: pt.role };
+    });
+    lods[key] = { height: mdl.height, kind: mdl.kind, name: mdl.name, parts, tris: parts.reduce((n, p) => n + p.geo.attributes.position.count / 3, 0) };
+    return lods[key];
+  };
   // 同じ木や岩をたくさん置く（InstancedMesh）。list: [{ x, y, z, s（倍率）, ry（向き）, sy（縦の倍率）, tint（葉の色の倍率） }]
-  A.instances = function (name, list, parent) {
-    const mdl = A.model(name); if (!mdl || !list.length) return [];
+  // lod を渡すと、軽い版（A.lowModel(name, lod)）を使う
+  A.instances = function (name, list, parent, lod) {
+    const mdl = lod ? A.lowModel(name, lod) : A.model(name); if (!mdl || !list.length) return [];
     const mtx = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), s = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0), col = new THREE.Color();
     return mdl.parts.map((pt) => {
       const im = new THREE.InstancedMesh(pt.geo, pt.mat, list.length);
