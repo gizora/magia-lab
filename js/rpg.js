@@ -107,8 +107,8 @@
     return function () { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
   };
 
-  // 階の形を作る: 4×4 のマスに部屋を置き、迷路のようにつなぐ。1 タイル 2m、56×56 タイル（112m 四方）
-  R.TILE = 2; R.GRID = 56; R.CELLS = 4; R.CELL = 14;
+  // 階の形を作る: 3×3 のマスに部屋を置き、迷路のようにつなぐ。1 タイル 2m、42×42 タイル（84m 四方）
+  R.TILE = 2; R.GRID = 42; R.CELLS = 3; R.CELL = 14; // 3×3 の部屋（84m 四方）
   R.makeFloor = function (floor, seed) {
     const rnd = R.rng(seed), N = R.GRID, C = R.CELLS, CS = R.CELL;
     const tiles = new Uint8Array(N * N); // 0 = 壁, 1 = 床
@@ -172,12 +172,12 @@
     const boss = R.isBossFloor(floor);
     const tilePos = (r) => [ri(r.x0, r.x0 + r.w - 1), ri(r.z0, r.z0 + r.h - 1)];
     const others = rooms.filter((r) => r !== start);
-    const nChest = 2 + Math.floor(rnd() * 3);
+    const nChest = 2 + Math.floor(rnd() * 2);
     for (let k = 0; k < nChest; k++) { const r = others[Math.floor(rnd() * others.length)]; chests.push({ room: r.id, t: tilePos(r) }); }
     const pool = R.enemyPool(floor);
     others.forEach((r) => {
       if (boss && r === stairs) { spawns.push({ type: 'boss', room: r.id, t: center(r) }); return; }
-      const n = Math.min(5, (r.small ? 0 : 1) + Math.floor(rnd() * 2.5) + Math.floor(floor / 5));
+      const n = Math.min(3, Math.floor(rnd() * (r.small ? 1.6 : 2.6)) + Math.floor(floor / 6));
       for (let k = 0; k < n; k++) spawns.push({ type: R.pick(pool, rnd), room: r.id, t: tilePos(r) });
     });
     return { floor, seed, N, tiles, rooms, start: start.id, stairs: stairs.id, portal: portal ? portal.id : stairs.id, chests, spawns, boss, center };

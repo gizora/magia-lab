@@ -38,6 +38,7 @@
   const FLY_MAX_H = 32;   // 飛翔で上がれる高さ（地面から）
   const FLY_SPEED = 1.3;  // 飛翔中の横の速さ（倍）
   const HASTE_MUL = 1.35; // 迅速の足の速さ（倍）
+  const STAMINA = { max: 100, run: 24, jump: 14, regen: 20, delay: 0.8 }; // スタミナ（第28版）: 走ると 1 秒に 24、ジャンプで 14 減り、休むと 1 秒に 20 戻る
   const JUMP_V = 8.6;     // ジャンプの勢い（約 1.85m 跳べる。木箱・2段の壁・小さめの岩に跳び乗れる）
   const ZAPPY = { lightning: 1, plasma: 1, magnet: 1 }; // 纏いで小さな稲妻が走る属性
   let lastHitFrom = null; // 今受けているダメージを撃った人（障壁の波紋を、その方向から広げるため）
@@ -54,7 +55,7 @@
 
   const st = (G.state = {
     running: false, paused: true, time: 0, score: 0, kills: 0,
-    mp: 150, mpMax: 150, mpRegen: 15, slot: 0, slots: [null, null, null, null], cds: [0, 0, 0, 0, 0], gcd: 0,
+    mp: 150, mpMax: 150, mpRegen: 15, stamina: 100, staminaMax: 100, stamT: 0, tired: false, slot: 0, slots: [null, null, null, null], cds: [0, 0, 0, 0, 0], gcd: 0,
     wand: 'novice', slotsByWand: {}, charges: {}, build: { words: [], state: 'idle', t: 0, need: false, progress: 0 },
     combo: 0, comboT: 0, challenge: null, shake: 0, recoil: 0, castGlow: 0, lastCast: null,
   });
@@ -2158,7 +2159,7 @@
       const walls = W.propsOnSegment(tip, end, ownerKey(spec));
       let allow = spec.penetrate || 0;
       const bi = walls.findIndex((w) => w.barrier || w.solid);
-      if (bi >= 0 && bi < allow) allow = bi; // 魔法の壁と、街やダンジョンの固い壁は、光線でもつらぬけない
+      if (bi >= 0 && bi < allow) allow = bi; // 魔法の壁と、村やダンジョンの固い壁は、光線でもつらぬけない
       const passed = walls.slice(0, allow);
       if (walls.length > allow) {
         len = walls[allow].t; end = tip.clone().addScaledVector(dir, len); AU.blocked(ap(end));
@@ -3441,10 +3442,10 @@
   // 声で唱えた並びを放つ。戻り値: 'ok' | 'paused' | 'cooldown' | 'mp' | 'invalid'
   st.vcd = {};
   // mode: 'draw' = 紋章を描いて名前を唱えた（省略すると、声だけの詠唱）
-  // 街の中では魔法を使えない（第27版）
+  // 村の中では魔法を使えない（第27版）
   function inTown() {
     if (W.stage !== 'town' || M.on) return false;
-    if (!st.townWarnT || st.time > st.townWarnT) { if (MG.UI) MG.UI.toast('街の中では魔法を使えません（練習場やダンジョンで使えます）'); AU.error(); st.townWarnT = st.time + 1.2; }
+    if (!st.townWarnT || st.time > st.townWarnT) { if (MG.UI) MG.UI.toast('村の中では魔法を使えません（練習場やダンジョンで使えます）'); AU.error(); st.townWarnT = st.time + 1.2; }
     return true;
   }
   G.inTown = () => W.stage === 'town' && !M.on;
@@ -3644,7 +3645,13 @@
       if (MG.UI && MG.UI.handleKey(e)) return;
       if (st.paused) return;
       if (e.code.startsWith('Digit')) { const n = +e.code.slice(5) - 1; if (n >= 0 && n < st.slots.length) G.selectSlot(n); }
-      if (e.code === 'Space') { e.preventDefault(); if (player.onGround) { player.vy = JUMP_V; player.onGround = false; } }
+      if (e.code === 'Space') {
+        e.preventDefault();
+        if (player.onGround && SUP.flyT <= 0) {
+          if (st.stamina < STAMINA.jump) { if (MG.UI) MG.UI.toast('スタミナが足りなくて跳べない'); }
+          else { player.vy = JUMP_V; player.onGround = false; st.stamina -= STAMINA.jump; st.stamT = STAMINA.delay; }
+        } else if (player.onGround) { player.vy = JUMP_V; player.onGround = false; }
+      }
       if (e.code === 'KeyF' || e.code === 'KeyQ') G.castSlot(st.slot);
     });
     window.addEventListener('keyup', (e) => { input.keys[e.code] = false; });
@@ -3728,7 +3735,7 @@
   // ======================================================================
   //  毎フレームの更新
   // ======================================================================
-  const groundKind = () => (W.stage === 'dungeon' ? 'cave' : W.stage === 'arena' ? 'sand' : 'stone');
+  const groundKind = () => (W.stage === 'dungeon' ? 'cave' : W.stage === 'arena' ? 'sand' : W.stage === 'town' ? 'dirt' : 'stone');
   // 歩く動き（walk）が半周進むたびに足音を鳴らす（敵・召喚獣・友達）
   function stepSound(t, kind, k, speed) {
     const ph = Math.floor(t.walk / Math.PI);
@@ -3752,7 +3759,12 @@
     const l = Math.hypot(fx, fz);
     const moving = l > 0.05;
     if (l > 1) { fx /= l; fz /= l; }
-    let speed = (k.ShiftLeft || k.ShiftRight ? 11 : 7);
+    // 歩く 5.2m/秒、走る 8m/秒（第28版）。走るとスタミナが減り、なくなると走れない
+    const wantRun = (k.ShiftLeft || k.ShiftRight) && moving && !dead && SUP.flyT <= 0;
+    const running = wantRun && !st.tired && st.stamina > 0;
+    if (running) { st.stamina = Math.max(0, st.stamina - STAMINA.run * dt); st.stamT = STAMINA.delay; if (st.stamina <= 0) { st.tired = true; if (MG.UI) MG.UI.toast('息が切れた…（少し休むとまた走れる）'); } }
+    else { st.stamT = Math.max(0, st.stamT - dt); if (st.stamT <= 0) st.stamina = Math.min(STAMINA.max, st.stamina + STAMINA.regen * dt); if (st.tired && st.stamina >= STAMINA.max * 0.35) st.tired = false; }
+    let speed = running ? 8 : 5.2;
     if (M.on && M.slowT > 0) speed *= M.slowHard ? 0.3 : 0.55; // 凍結・氷で動きが遅くなる
     if (dilations.length && timeK(player.pos, 'me') < 1) speed *= 0.3;    // 相手の時間遅延の球の中
     if (!dead) speed *= moveBoost();                             // 纏い・迅速・飛翔で速くなる
@@ -4033,7 +4045,7 @@
   G.isSealed = (seq) => !!seq && seq.length > DER.chain;
 
   // ======================================================================
-  //  ステージの行き来（第26版）: 街・練習場・ダンジョン・闘技場（対戦）
+  //  ステージの行き来（第26版）: 村・練習場・ダンジョン・闘技場（対戦）
   // ======================================================================
   function clearStageThings() {
     projs.slice().forEach(() => removeProj(projs.length - 1));
@@ -4055,10 +4067,10 @@
     if (MG.UI && MG.UI.onStage) MG.UI.onStage(name);
     return true;
   };
-  // 近くにある「入れる場所」（街の神殿・店・門、練習場の門、ダンジョンの階段・ポータル）
+  // 近くにある「入れる場所」（村の神殿・店・門、練習場の門、ダンジョンの階段・ポータル）
   function spotsHere() {
     if (W.stage === 'dungeon' && D.on && W.dun) {
-      const out = [{ id: 'portal', label: '帰還ポータル', x: W.dun.portal.x, z: W.dun.portal.z, r: 2.8, hint: '街へ帰る（拾った物を持ち帰る）' }];
+      const out = [{ id: 'portal', label: '帰還ポータル', x: W.dun.portal.x, z: W.dun.portal.z, r: 2.8, hint: '村へ帰る（拾った物を持ち帰る）' }];
       if (W.dun.stairsOpen) out.push({ id: 'stairs', label: '下の階', x: W.dun.stairs.x, z: W.dun.stairs.z, r: 2.6, hint: `下の階へ進む（地下 ${D.floor + 1} 階）` });
       return out;
     }
@@ -4104,7 +4116,7 @@
   function nextFloor(f) {
     if (!D.on) return false;
     clearStageThings();
-    if (W.stage !== 'dungeon') W.setStage('dungeon');
+    if (W.stage !== 'dungeon') { W.setStage('dungeon'); if (MG.UI && MG.UI.onStage) MG.UI.onStage('dungeon'); }
     const seed = (Math.random() * 1e9) | 0;
     const data = RP.makeFloor(f, seed);
     D.floor = f; D.data = data; D.run.floors = Math.max(D.run.floors, f);
@@ -4167,7 +4179,7 @@
   }
   G.usePotion = function () {
     if (!D.on || !D.alive) { if (MG.UI) MG.UI.toast('回復薬はダンジョンの中で使えます'); AU.error(); return false; }
-    if (P.potions <= 0) { if (MG.UI) MG.UI.toast('回復薬を持っていません（街の杖の店で買えます）'); AU.error(); return false; }
+    if (P.potions <= 0) { if (MG.UI) MG.UI.toast('回復薬を持っていません（村の杖の店で買えます）'); AU.error(); return false; }
     if (D.hp >= D.maxHp) { if (MG.UI) MG.UI.toast('HP は満タンです'); return false; }
     P.potions--;
     const h = Math.min(RP.POTION.heal, D.maxHp - D.hp); D.hp += h;

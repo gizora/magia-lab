@@ -512,6 +512,9 @@
       if (kind === 'stone') {
         noise({ type: 'bandpass', f0: 2200 * r, q: 1.4, dur: 0.045, vol: 0.13 * k, attack: 0.002, dest: d });
         tone({ f0: 150 * r, f1: 70, glide: 0.06, dur: 0.07, vol: 0.16 * k, dest: d });
+      } else if (kind === 'dirt') {
+        noise({ brown: true, type: 'lowpass', f0: 900 * r, dur: 0.07, vol: 0.2 * k, attack: 0.004, dest: d });
+        noise({ type: 'bandpass', f0: 2600 * r, q: 1.6, dur: 0.04, vol: 0.05 * k, delay: 0.01, dest: d });
       } else if (kind === 'cave') {
         noise({ brown: true, type: 'lowpass', f0: 1100 * r, dur: 0.08, vol: 0.32 * k, attack: 0.002, dest: d, rev: d ? 0 : 0.35 });
         noise({ type: 'bandpass', f0: 3200 * r, q: 2, dur: 0.03, vol: 0.06 * k, delay: 0.012, dest: d });

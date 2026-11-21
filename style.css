@@ -734,3 +734,11 @@ kbd { font-family: var(--sans); font-size: 11px; padding: 1px 6px; border-radius
 /* 第27版: 図鑑の封印中の魔法 */
 .bl-row.sealed { opacity: 0.38; filter: grayscale(0.7) brightness(0.75); cursor: not-allowed; }
 .bl-row.sealed .bl-seal { opacity: 1; }
+
+/* 第28版: スタミナ、ダンジョンでは使わないものを隠す */
+.st-wrap { display: flex; align-items: center; gap: 8px; width: min(440px, 100%); margin-top: -4px; }
+.st-label { font-size: 11px; font-weight: 700; color: #c8f08a; min-width: 48px; }
+.st-bar { flex: 1; height: 6px; border-radius: 999px; background: rgba(8, 10, 30, 0.7); border: 1px solid var(--line); overflow: hidden; }
+.st-fill { height: 100%; width: 100%; background: linear-gradient(90deg, #8ad83a, #e8f07a); transition: width 0.08s linear; }
+.st-bar.tired .st-fill { background: linear-gradient(90deg, #d86a3a, #f0a87a); }
+.stage-dungeon .no-dungeon { display: none !important; }

@@ -190,6 +190,8 @@
     const r = st.mp / st.mpMax;
     $('mp-fill').style.width = (r * 100).toFixed(1) + '%';
     $('mp-num').textContent = Math.floor(st.mp);
+    $('st-fill').style.width = (st.stamina / st.staminaMax * 100).toFixed(1) + '%';
+    $('st-fill').parentElement.classList.toggle('tired', !!st.tired);
     const cur = st.slots[st.slot];
     $('mp-fill').parentElement.classList.toggle('low', !!cur && isKnown(cur.seq) && st.mp < G.costFor(cur, 'slot'));
     slotEls.forEach((b, i) => {
@@ -988,7 +990,7 @@
           <div class="wc-head"><span class="wc-gem" aria-hidden="true"></span><h3>${esc(w.name)}</h3></div>
           <p class="wc-desc">${esc(w.desc)}</p>
           <div class="wc-stats">${wandStats(w)}</div>
-          <p class="wc-price">街の杖の店で買える（${(MG.RPG.WAND_PRICE[w.id] || 0).toLocaleString()} G）</p>
+          <p class="wc-price">村の杖の店で買える（${(MG.RPG.WAND_PRICE[w.id] || 0).toLocaleString()} G）</p>
           <button type="button" class="btn-secondary wc-btn" disabled>まだ持っていない</button>
         </article>`;
       }
@@ -1032,7 +1034,7 @@
   //  ゲームからの通知
   // ======================================================================
   // ======================================================================
-  //  成長・街・ダンジョンの画面（第26版）
+  //  成長・村・ダンジョンの画面（第26版）
   // ======================================================================
   const RP = MG.RPG;
   let lvHtml = '';
@@ -1159,8 +1161,8 @@
       document.body.classList.remove('stage-town', 'stage-practice', 'stage-dungeon', 'stage-arena');
       document.body.classList.add('stage-' + name);
       $('spot-prompt').hidden = true;
-      if (name === 'town') toast('街: 神殿・杖の店・ダンジョンの門・練習場の門に近づいて F キー', 3200);
-      else if (name === 'practice') toast('練習場（門に近づいて F キーで街へ戻る）', 2600);
+      if (name === 'town') toast('村: 神殿・杖の店・ダンジョンの門・練習場の門に近づいて F キー', 3200);
+      else if (name === 'practice') toast('練習場（門に近づいて F キーで村へ戻る）', 2600);
     },
     onSpot(sp) {
       const el = $('spot-prompt');
@@ -1171,7 +1173,7 @@
       $('dun-floor').textContent = `地下 ${fl} 階${boss ? '（守護者の階）' : ''}`;
       $('dun-floor').classList.toggle('boss', !!boss);
       $('dun-down').hidden = true;
-      toast(boss ? `地下 ${fl} 階: 守護者を倒すと、下の階への道が開く` : `地下 ${fl} 階: 下の階への穴と、街へ帰る帰還ポータルを探そう`, 3200);
+      toast(boss ? `地下 ${fl} 階: 守護者を倒すと、下の階への道が開く` : `地下 ${fl} 階: 下の階への穴と、村へ帰る帰還ポータルを探そう`, 3200);
       saveProgress();
     },
     onDungeonDown(name) {
