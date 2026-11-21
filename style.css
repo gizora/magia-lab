@@ -731,3 +731,6 @@ kbd { font-family: var(--sans); font-size: 11px; padding: 1px 6px; border-radius
 .stage-town .score-box, .stage-dungeon .score-box { visibility: hidden; }
 .stage-dungeon .lv-box, .stage-town .lv-box { top: 16px; width: 150px; }
 .vs-on .lv-box, .vs-on .dun-hud, .vs-on .minimap { display: none; }
+/* 第27版: 図鑑の封印中の魔法 */
+.bl-row.sealed { opacity: 0.38; filter: grayscale(0.7) brightness(0.75); cursor: not-allowed; }
+.bl-row.sealed .bl-seal { opacity: 1; }

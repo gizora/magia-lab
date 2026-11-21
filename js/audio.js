@@ -502,6 +502,39 @@
     },
     blocked(ap) { if (!ready() || !throttle('blocked', 40)) return; const d = bus(ap, 0.3); tone({ type: 'triangle', f0: 420, f1: 260, dur: 0.15, vol: 0.14, dest: d }); noise({ brown: true, type: 'lowpass', f0: 1500, f1: 200, dur: 0.2, vol: 0.35, dest: d }); },
     crumble(ap) { if (!ready() || !throttle('crumble', 80)) return; IMPACT.earth(1.0, bus(ap, 0.4)); },
+    // 足音（第27版）。kind: stone（石畳）/ cave（洞窟）/ sand（砂）/ bone（骸骨）/ slime / soft（ローブ）/ heavy（守護者・ゴーレム）/ flap（羽ばたき）
+    // ap を渡すと、その場所から聞こえる（敵・召喚獣・友達）。k は大きさ
+    step(kind, ap, k) {
+      if (!ready() || !throttle(ap ? 'stepE' : 'stepP', ap ? 45 : 110)) return;
+      k = k || 1;
+      const d = ap ? bus(ap, kind === 'cave' || kind === 'heavy' ? 0.55 : 0.2) : undefined;
+      const r = rnd(0.9, 1.1);
+      if (kind === 'stone') {
+        noise({ type: 'bandpass', f0: 2200 * r, q: 1.4, dur: 0.045, vol: 0.13 * k, attack: 0.002, dest: d });
+        tone({ f0: 150 * r, f1: 70, glide: 0.06, dur: 0.07, vol: 0.16 * k, dest: d });
+      } else if (kind === 'cave') {
+        noise({ brown: true, type: 'lowpass', f0: 1100 * r, dur: 0.08, vol: 0.32 * k, attack: 0.002, dest: d, rev: d ? 0 : 0.35 });
+        noise({ type: 'bandpass', f0: 3200 * r, q: 2, dur: 0.03, vol: 0.06 * k, delay: 0.012, dest: d });
+        tone({ f0: 110 * r, f1: 55, glide: 0.08, dur: 0.09, vol: 0.18 * k, dest: d });
+      } else if (kind === 'sand') {
+        noise({ type: 'highpass', f0: 2500 * r, dur: 0.09, vol: 0.08 * k, attack: 0.01, dest: d });
+        noise({ brown: true, type: 'lowpass', f0: 600, dur: 0.06, vol: 0.14 * k, dest: d });
+      } else if (kind === 'bone') {
+        tone({ type: 'triangle', f0: 1150 * r, f1: 900, dur: 0.035, vol: 0.07 * k, dest: d });
+        tone({ type: 'triangle', f0: 1600 * r, dur: 0.025, vol: 0.05 * k, delay: 0.03, dest: d });
+        noise({ type: 'bandpass', f0: 3000, q: 3, dur: 0.02, vol: 0.08 * k, dest: d });
+      } else if (kind === 'slime') {
+        tone({ f0: 300 * r, f1: 110, glide: 0.1, dur: 0.13, vol: 0.12 * k, vib: 18, vibDepth: 25, dest: d });
+        noise({ brown: true, type: 'lowpass', f0: 700, dur: 0.1, vol: 0.18 * k, dest: d });
+      } else if (kind === 'soft') {
+        noise({ brown: true, type: 'lowpass', f0: 800 * r, dur: 0.06, vol: 0.12 * k, dest: d });
+      } else if (kind === 'heavy') {
+        thump(d, 0.55 * k, 75 * r, 28, 0.32);
+        noise({ brown: true, type: 'lowpass', f0: 500, dur: 0.2, vol: 0.3 * k, dest: d });
+      } else if (kind === 'flap') {
+        noise({ type: 'bandpass', f0: 700 * r, f1: 300, q: 0.8, dur: 0.12, vol: 0.09 * k, attack: 0.02, dest: d });
+      }
+    },
     crit() { if (!ready()) return; tone({ f0: 1800, f1: 2600, dur: 0.18, vol: 0.12, rev: 0.4 }); tone({ f0: 2700, dur: 0.25, vol: 0.06, delay: 0.05, rev: 0.4 }); },
     destroy(ap) {
       if (!ready() || !throttle('destroy', 60)) return;

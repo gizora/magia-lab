@@ -629,21 +629,23 @@
       if (!inTab.length) { list.innerHTML = `<p class="empty-note">まだ${RANK_NAME[bookTab]}はありません。<br>魔法工房でことばを ${bookTab.slice(1)} つ並べ、練習場で放つと、ここに記録されます。</p>`; $('book-detail').innerHTML = ''; bookSel = null; return; }
       if (!shown.length) { list.innerHTML = '<p class="empty-note">条件に合う魔法がありません。絞りこみを「すべて」に戻してください。</p>'; $('book-detail').innerHTML = ''; bookSel = null; return; }
       const favs = shown.filter((e) => save.fav[e.key]), rest = shown.filter((e) => !save.fav[e.key]);
-      const toRow = (e) => ({ id: e.key, name: e.spec.name.kanji + (G.isSealed(e.seq) ? '（封印中）' : ''), fav: !!save.fav[e.key], sub: `${MG.ELEMENTS[e.spec.element].label} ・ ${MG.FORMS[e.spec.form].label}${e.spec.shape && MG.WARD_SHAPES[e.spec.shape] ? `（${MG.WARD_SHAPES[e.spec.shape].label}）` : e.spec.summonType && MG.SUMMONS[e.spec.summonType] ? `（${MG.SUMMONS[e.spec.summonType].label}）` : ''}`, right: rowRight(e), c1: e.spec.colors[0], c2: e.spec.colors[1], support: isSupport(e.spec), inSlot: (st.slots || []).some((x) => x && keyOf(x.seq) === e.key) });
+      const toRow = (e) => ({ id: e.key, sealed: G.isSealed(e.seq), name: e.spec.name.kanji, fav: !!save.fav[e.key], sub: `${MG.ELEMENTS[e.spec.element].label} ・ ${MG.FORMS[e.spec.form].label}${e.spec.shape && MG.WARD_SHAPES[e.spec.shape] ? `（${MG.WARD_SHAPES[e.spec.shape].label}）` : e.spec.summonType && MG.SUMMONS[e.spec.summonType] ? `（${MG.SUMMONS[e.spec.summonType].label}）` : ''}`, right: rowRight(e), c1: e.spec.colors[0], c2: e.spec.colors[1], support: isSupport(e.spec), inSlot: (st.slots || []).some((x) => x && keyOf(x.seq) === e.key) });
       if (favs.length) rows.push({ head: '★ お気に入り' }, ...favs.map(toRow));
       if (favs.length && rest.length) rows.push({ head: 'そのほか' });
       rows.push(...rest.map(toRow));
     } else {
       rows = MG.SECRETS.map((s) => {
         const ok = save.secrets.includes(s.id); const E = MG.ELEMENTS[s.elem];
-        return { id: 'secret:' + s.id, name: ok ? s.kanji : '？？？', sub: ok ? `禁呪 ・ ${s.seq.length}語` : `未発見 ・ ${s.seq.length}語`, right: ok ? '★' : '', c1: ok ? E.c1 : '#3c4062', c2: ok ? E.c2 : '#2a2e48', locked: !ok, fav: false };
+        return { id: 'secret:' + s.id, sealed: ok && G.isSealed(s.seq), name: ok ? s.kanji : '？？？', sub: ok ? `禁呪 ・ ${s.seq.length}語` : `未発見 ・ ${s.seq.length}語`, right: ok ? '★' : '', c1: ok ? E.c1 : '#3c4062', c2: ok ? E.c2 : '#2a2e48', locked: !ok, fav: false };
       });
     }
     const items = rows.filter((r) => !r.head);
-    if (!bookSel || !items.some((it) => it.id === bookSel)) bookSel = items[0].id;
+    // 封印中の魔法は選べない（薄暗く表示し、「封印」の札を付ける）
+    const pickable = items.filter((it) => !it.sealed);
+    if (!bookSel || !pickable.some((it) => it.id === bookSel)) bookSel = pickable.length ? pickable[0].id : null;
     list.innerHTML = `<div class="bl-head"><span>名前</span><span>${bookTab === 'secret' ? '' : '最大ダメージ'}</span></div>` + rows.map((it) => it.head ? `<div class="bl-group">${esc(it.head)}</div>` : `
-      <button type="button" class="bl-row${it.locked ? ' locked' : ''}${it.id === bookSel ? ' on' : ''}" data-id="${esc(it.id)}" style="--c1:${it.c1};--c2:${it.c2}" aria-pressed="${it.id === bookSel}">
-        <span class="bl-main"><span class="bl-name">${it.fav ? '<span class="bl-fav" aria-label="お気に入り">★</span>' : ''}${esc(it.name)}</span><span class="bl-sub">${esc(it.sub)}${it.support ? '<span class="bl-tag sup">守り・回復・移動</span>' : ''}${it.inSlot ? '<span class="bl-tag in-slot">スロット</span>' : ''}</span></span>
+      <button type="button" class="bl-row${it.locked ? ' locked' : ''}${it.sealed ? ' sealed' : ''}${it.id === bookSel ? ' on' : ''}" data-id="${esc(it.id)}" style="--c1:${it.c1};--c2:${it.c2}" aria-pressed="${it.id === bookSel}"${it.sealed ? ` disabled aria-disabled="true" title="封印中（Lv${MG.RPG.sealLevel(it.id.startsWith('secret:') ? MG.SECRETS.find((x) => 'secret:' + x.id === it.id).seq.length : it.id.split('|').length)} で解ける）"` : ''}>
+        <span class="bl-main"><span class="bl-name">${it.fav ? '<span class="bl-fav" aria-label="お気に入り">★</span>' : ''}${esc(it.name)}${it.sealed ? '<span class="bl-seal">封印</span>' : ''}</span><span class="bl-sub">${esc(it.sub)}${it.support ? '<span class="bl-tag sup">守り・回復・移動</span>' : ''}${it.inSlot ? '<span class="bl-tag in-slot">スロット</span>' : ''}</span></span>
         <span class="bl-right">${it.right}</span>
       </button>`).join('');
     renderBookDetail();
@@ -669,7 +671,7 @@
 
   function renderBookDetail() {
     const el = $('book-detail');
-    if (!bookSel) { el.innerHTML = ''; return; }
+    if (!bookSel) { el.innerHTML = '<p class="empty-note">このタブの魔法は、すべて封印されています。レベルを上げると封印が解けます。</p>'; return; }
     if (bookSel.startsWith('secret:')) {
       const s = MG.SECRETS.find((x) => 'secret:' + x.id === bookSel);
       if (!save.secrets.includes(s.id) || !save.known[keyOf(s.seq)]) {
@@ -743,6 +745,7 @@
   $('bt-sort').addEventListener('change', (e) => { bookFilter.sort = e.target.value; bookSel = null; renderBook(); });
   $('book').addEventListener('click', (e) => {
     const row = e.target.closest('.bl-row');
+    if (row && (row.disabled || row.classList.contains('sealed'))) return;
     if (row) {
       bookSel = row.dataset.id; AU.click();
       document.querySelectorAll('.bl-row').forEach((r) => { r.classList.toggle('on', r === row); r.setAttribute('aria-pressed', r === row ? 'true' : 'false'); });

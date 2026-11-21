@@ -418,6 +418,7 @@
     let dy = t.netYaw - t.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); t.yaw += dy * k;
     const sp = before.distanceTo(t.pos) / Math.max(dt, 1e-4);
     t.walk += dt * Math.min(12, sp) * 1.4;
+    if (t.alive) stepSound(t, groundKind(), 0.8, sp > 0.5 && Math.abs(t.pos.y - W.floorAt(t.pos.x, t.pos.z, t.pos.y + 0.4)) < 0.2 ? sp : 0);
     t.group.position.copy(t.pos);
     t.group.visible = t.alive;
     t.face.rotation.y = t.yaw;
@@ -514,7 +515,7 @@
     g.clearRect(0, 0, 128, 16);
     g.fillStyle = 'rgba(5,8,25,0.75)'; g.fillRect(0, 0, 128, 16);
     const r = Math.max(0, t.hp / t.maxHp);
-    g.fillStyle = r > 0.5 ? '#5dff9a' : r > 0.25 ? '#ffd24a' : '#ff5a5a';
+    g.fillStyle = t.isEnemy ? (r > 0.3 ? '#ff4a4a' : '#ff9a3a') : r > 0.5 ? '#5dff9a' : r > 0.25 ? '#ffd24a' : '#ff5a5a';
     g.fillRect(2, 2, 124 * r, 12);
     t.btex.needsUpdate = true;
     t.bar.visible = t.isPlayer ? t.alive && !t.isSelf : t.isSummon ? t.alive : t.hp < t.maxHp && t.alive;
@@ -1761,6 +1762,7 @@
     const P = t.parts, k = t.animT > 0 ? t.animT / (t.kind === 'titan' ? 0.9 : 0.45) : 0;
     t.animT = Math.max(0, t.animT - dt);
     t.walk += dt * Math.min(10, speed) * (t.kind === 'beast' ? 1.6 : t.kind === 'titan' ? 0.55 : 1.1);
+    if (t.kind === 'golem' || t.kind === 'titan' || t.kind === 'beast') stepSound(t, t.kind === 'beast' ? 'soft' : 'heavy', t.kind === 'titan' ? 1.8 : t.kind === 'golem' ? 0.9 : 0.8, speed);
     const sw = speed > 0.3 ? Math.sin(t.walk) : 0;
     t.face.rotation.y = t.yaw;
     if (t.kind === 'golem') {
@@ -3423,6 +3425,7 @@
     if (!spec) { if (MG.UI) MG.UI.toast('このスロットは空です。E キーの魔法工房で作りましょう'); AU.error(); return false; }
     if (st.cds[i] > 0 || st.gcd > 0) return false;
     if (D.on && !D.alive) return false;
+    if (inTown()) return false;
     if (spec.seq.length > DER.chain) { if (!st.sealWarnT || st.time > st.sealWarnT) { sealedMsg(spec.seq.length); st.sealWarnT = st.time + 1; } return false; }
     const ch = G.charge(i);
     if (ch.n <= 0) { if (MG.UI) MG.UI.toast(`このスロットは使い切りました（あと ${Math.ceil(MG.RECHARGE_SEC - ch.t)} 秒で1回分戻ります）。詠唱なら放てます`); AU.error(); return false; }
@@ -3438,8 +3441,16 @@
   // 声で唱えた並びを放つ。戻り値: 'ok' | 'paused' | 'cooldown' | 'mp' | 'invalid'
   st.vcd = {};
   // mode: 'draw' = 紋章を描いて名前を唱えた（省略すると、声だけの詠唱）
+  // 街の中では魔法を使えない（第27版）
+  function inTown() {
+    if (W.stage !== 'town' || M.on) return false;
+    if (!st.townWarnT || st.time > st.townWarnT) { if (MG.UI) MG.UI.toast('街の中では魔法を使えません（練習場やダンジョンで使えます）'); AU.error(); st.townWarnT = st.time + 1.2; }
+    return true;
+  }
+  G.inTown = () => W.stage === 'town' && !M.on;
   G.castSeq = function (seq, how) {
     if (!st.running || st.paused) return 'paused';
+    if (inTown()) return 'town';
     if (M.on && !M.alive) return 'paused';
     const spec = MG.buildSpell(seq);
     if (!spec) return 'invalid';
@@ -3717,6 +3728,16 @@
   // ======================================================================
   //  毎フレームの更新
   // ======================================================================
+  const groundKind = () => (W.stage === 'dungeon' ? 'cave' : W.stage === 'arena' ? 'sand' : 'stone');
+  // 歩く動き（walk）が半周進むたびに足音を鳴らす（敵・召喚獣・友達）
+  function stepSound(t, kind, k, speed) {
+    const ph = Math.floor(t.walk / Math.PI);
+    if (ph === t.stepPh) return;
+    t.stepPh = ph;
+    if (!(speed > 0.2)) return;
+    const a = ap(t.center);
+    if (a && a.vol > 0.22) AU.step(kind, a, k);
+  }
   function updatePlayer(dt) {
     const k = input.keys;
     const dead = (M.on && !M.alive) || (D.on && !D.alive);
@@ -3765,6 +3786,9 @@
       else player.onGround = false;
     }
     if (moving && player.onGround) player.walk += dt * speed * 1.4;
+    // 足音（第27版）: 歩く動きの半周ごとに 1 歩。地面の種類で音が変わる
+    const sph = Math.floor(player.walk / Math.PI);
+    if (sph !== player.stepPh) { player.stepPh = sph; if (moving && player.onGround && !dead) AU.step(groundKind(), null, speed > 9 ? 1.25 : 1); }
 
     camera.rotation.set(player.pitch, player.yaw, 0, 'YXZ');
     const bob = moving && player.onGround ? Math.sin(player.walk) * 0.045 : 0;
@@ -4243,7 +4267,7 @@
     const g = new THREE.Group(); g.add(model);
     const bc = document.createElement('canvas'); bc.width = 128; bc.height = 16;
     const btex = new THREE.CanvasTexture(bc);
-    const bar = new THREE.Sprite(new THREE.SpriteMaterial({ map: btex, depthTest: false, transparent: true }));
+    const bar = new THREE.Sprite(new THREE.SpriteMaterial({ map: btex, depthTest: false, transparent: true, fog: false }));
     bar.scale.set(E.boss ? 4 : 1.4, E.boss ? 0.3 : 0.16, 1); bar.renderOrder = 20; bar.position.y = E.boss ? 7.2 : E.cy + 1.2; g.add(bar);
     const hp = Math.round(E.hp * sc.hp);
     const t = {
@@ -4372,6 +4396,7 @@
     else { const fl = W.floorAt(t.pos.x, t.pos.z, t.pos.y + 0.4); t.vy -= 20 * dt; t.pos.y += t.vy * dt; if (t.pos.y <= fl) { t.pos.y = fl; t.vy = 0; } }
     // 見た目の動き
     t.walk += dt * Math.min(8, speed) * 1.4;
+    stepSound(t, { slime: 'slime', skeleton: 'bone', mage: 'soft', boss: 'heavy', bat: 'flap' }[t.kind], E.boss ? 1.6 : 1, E.fly ? 1 : speed);
     const sw = speed > 0.2 ? Math.sin(t.walk) : 0, k = t.windup > 0 ? 1 - t.windup / (E.boss ? 0.7 : 0.4) : 0;
     t.face.rotation.y = t.yaw;
     if (t.kind === 'slime') { const sq = 1 + Math.sin(st.time * 5 + t.phase) * 0.08 + (t.windup > 0 ? 0.25 * Math.sin(k * Math.PI) : 0); P2.body.scale.set(sq, 0.75 / sq, sq); }
