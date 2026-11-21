@@ -48,7 +48,7 @@
             E.total = names.length;
             names.forEach((n) => {
               // エフェクトの中にある効果音（Sound/*.wav）は同梱していない（音は js/audio.js で鳴らす）。読みに行って 404 にならないよう、無音の短い音に差し替える（第31版）
-              effects[n] = ctx.loadEffect('effects/' + FILES[n] + '.efk', 1, () => { E.loaded++; }, (m, url) => { E.errors.push(n + ': ' + m + ' ' + url); }, (p) => (/.(wav|ogg)$/i.test(p) ? SILENT : p));
+              effects[n] = ctx.loadEffect('effects/' + FILES[n] + '.efk', 1, () => { E.loaded++; }, (m, url) => { E.errors.push(n + ': ' + m + ' ' + url); }, (p) => (/\.(wav|ogg)$/i.test(p) ? SILENT : p));
             });
             E.ready = true;
             resolve(true);
