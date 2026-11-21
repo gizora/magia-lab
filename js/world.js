@@ -48,8 +48,8 @@
     LC(a.fog, b.fog, scene.fog.color);
     scene.fog.density = L(a.fogD, b.fogD);
     if (W.skyTextured && W.stage === 'arena' && PRESET.auroraFog) scene.fog.color.lerp(PRESET.auroraFog, k);
-    if (W.stage === 'dungeon') { scene.fog.color.setRGB(0.05, 0.04, 0.035); scene.fog.density = 0.042; }
-    LC(a.hemiSky, b.hemiSky, hemi.color); LC(a.hemiGround, b.hemiGround, hemi.groundColor); hemi.intensity = L(a.hemiI, b.hemiI) * (W.stage === 'dungeon' ? 0.6 : 1);
+    if (W.stage === 'dungeon') { scene.fog.color.setRGB(0.012, 0.01, 0.009); scene.fog.density = 0.07; } // 第32版: 薄暗く
+    LC(a.hemiSky, b.hemiSky, hemi.color); LC(a.hemiGround, b.hemiGround, hemi.groundColor); hemi.intensity = L(a.hemiI, b.hemiI) * (W.stage === 'dungeon' ? 0.16 : 1);
     if (W.stage === 'dungeon') { hemi.color.setRGB(0.75, 0.62, 0.5); hemi.groundColor.setRGB(0.15, 0.1, 0.08); }
     if (sky) sky.visible = W.stage !== 'dungeon';
     LC(a.dirC, b.dirC, dirLight.color); dirLight.intensity = L(a.dirI, b.dirI);
@@ -61,13 +61,13 @@
     if (W.skyTextured && W.stage === 'arena') moonGroup.children.forEach((c) => (c.material.opacity *= 0.35));
     LC(a.mt, b.mt, mtMat.color);
     LC(a.ground, b.ground, groundMat.color);
-    if (W.stage === 'dungeon') groundMat.color.setRGB(0.4, 0.35, 0.31); // 洞窟の床は、昼と夜で色を変えない（暗い土）
+    if (W.stage === 'dungeon') groundMat.color.setRGB(0.62, 0.58, 0.53); // ダンジョンの床は、昼と夜で色を変えない（敷石）
     outerMat.color.copy(groundMat.color);
     renderer.toneMappingExposure = L(a.exposure, b.exposure);
     const lampK = L(a.lamp, b.lamp);
     lamps.forEach((l) => { l.glow.material.opacity = lampK; });
     if (typeof townWinMats !== 'undefined') townWinMats.forEach((m) => { m.emissiveIntensity = 0.12 + 0.9 * lampK; });
-    if (W.stage === 'dungeon') { dirLight.intensity *= 0.25; amb.intensity = 0.5; amb.color.setRGB(0.32, 0.26, 0.22); }
+    if (W.stage === 'dungeon') { dirLight.intensity *= 0.04; amb.intensity = 0.14; amb.color.setRGB(0.32, 0.27, 0.24); }
     circleMat.opacity = L(a.circle, b.circle);
   }
 
@@ -1127,7 +1127,7 @@
     const dOut = t.clone(); dOut.needsUpdate = true; dOut.repeat.set(1 / 4, 1 / 4);
     groundTex.dungeon = { inner: dIn, outer: dOut };
     const AS = MG.Assets;
-    if (AS && AS.texInfo('dirt')) groundTex.dungeon = { inner: AS.tex('dirt', { rx: 5 }), outer: AS.tex('dirt', { rx: 5 / CH_SIZE }) }; // 第31版
+    if (AS && AS.texInfo('flag')) groundTex.dungeon = { inner: AS.tex('flag', { rx: 3, ry: 4 }), outer: AS.tex('flag', { rx: 3 / CH_SIZE, ry: 4 / CH_SIZE }) }; // 第32版: 石造りの床
     // 洞窟の岩肌: ごつごつした茶色い岩（筋と割れ目）
     dunTex = FX.canvasTex(256, 256, (c, w) => {
       c.fillStyle = '#5e5246'; c.fillRect(0, 0, w, w);
@@ -1138,8 +1138,39 @@
     });
     dunTex.wrapS = dunTex.wrapT = THREE.RepeatWrapping;
     wallMat = new THREE.MeshStandardMaterial({ map: dunTex, roughness: 0.95, color: 0xc0b0a0, flatShading: true });
-    if (W.dunRocks()) wallMat.color.set(0x4a4038); // 第31版: 岩のすき間から見える箱の壁は、影のように暗く
+    // 第32版: 石造りの地下迷宮。壁・天井は切り石（コンクリートブロック塀の模様。目地のくぼみを陰影でも出す）
+    if (AS && AS.texInfo('block')) {
+      const bt = AS.tex('block');
+      wallMat = new THREE.MeshStandardMaterial({ map: bt, bumpMap: bt, bumpScale: 0.9, color: 0x9a9084, roughness: 0.92 });
+      dunStone.dark = new THREE.MeshStandardMaterial({ map: bt, bumpMap: bt, bumpScale: 0.9, color: 0x5c554c, roughness: 0.95 });
+      dunStone.pillar = new THREE.MeshStandardMaterial({ map: bt, bumpMap: bt, bumpScale: 0.9, color: 0xb0a698, roughness: 0.9 });
+      dunStone.ceil = new THREE.MeshStandardMaterial({ map: bt, bumpMap: bt, bumpScale: 0.9, color: 0x4e4840, roughness: 1, side: THREE.DoubleSide });
+    } else { dunStone.dark = wallMat; dunStone.pillar = wallMat; dunStone.ceil = new THREE.MeshStandardMaterial({ map: dunTex, color: 0x6a5a4c, roughness: 1, side: THREE.DoubleSide }); }
   }
+  const dunStone = {};
+  // 箱をまとめて 1 つの形にする。模様の位置は世界の座標から決める（箱の継ぎ目で模様がずれない）。tile: 模様 1 枚の大きさ（m）
+  function stoneMesh(list, mat, tile) {
+    const pos = [], nor = [], uv = [], idx = [];
+    list.forEach(([w, h, d, x, y, z]) => {
+      const g = new THREE.BoxGeometry(w, h, d); g.translate(x, y, z);
+      const p = g.attributes.position, n = g.attributes.normal, base = pos.length / 3;
+      for (let i = 0; i < p.count; i++) {
+        const px = p.getX(i), py = p.getY(i), pz = p.getZ(i), nx = Math.abs(n.getX(i)), ny = Math.abs(n.getY(i));
+        pos.push(px, py, pz); nor.push(n.getX(i), n.getY(i), n.getZ(i));
+        if (ny > 0.5) uv.push(px / tile, pz / tile); else if (nx > 0.5) uv.push(pz / tile, py / tile); else uv.push(px / tile, py / tile);
+      }
+      for (let i = 0; i < g.index.count; i++) idx.push(base + g.index.getX(i));
+      g.dispose();
+    });
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    geo.setIndex(idx); geo.computeBoundingSphere();
+    return new THREE.Mesh(geo, mat);
+  }
+  // たいまつの明かり（近い 6 本だけが本当に照らす）と、手に持った杖のほのかな光
+  const dunLights = { pool: [], torches: [], player: null };
   // 第31版: ダンジョンの壁と床に、自然物ガチャの岩を使えるか
   W.dunRocks = () => !!(MG.Assets && MG.Assets.modelInfo('rock1') && MG.Assets.modelInfo('rock2') && MG.Assets.modelInfo('rock3'));
   const WALL_H = 5.5;
@@ -1149,7 +1180,8 @@
     signStage = 'dungeon'; W.signs.dungeon = 0;
     const R = MG.RPG;
     // 前の階を片づける
-    while (dunGroup.children.length) { const o = dunGroup.children[0]; dunGroup.remove(o); if (o.geometry && !o.isSprite) o.geometry.dispose(); if (o.material && !o.isSprite && o.material !== wallMat) o.material.dispose(); }
+    const keepMat = new Set([wallMat, dunStone.dark, dunStone.pillar, dunStone.ceil]);
+    while (dunGroup.children.length) { const o = dunGroup.children[0]; dunGroup.remove(o); if (o.geometry && !o.isSprite) o.geometry.dispose(); if (o.material && !o.isSprite && !keepMat.has(o.material)) o.material.dispose(); }
     dunAnim.length = 0;
     stageSolids.dungeon.length = 0;
     const N = d.N, T = R.TILE, isFloor = (x, z) => x >= 0 && z >= 0 && x < N && z < N && d.tiles[z * N + x] === 1;
@@ -1164,120 +1196,71 @@
         boxes.push([x, z, x1]); x = x1 + 1;
       }
     }
-    const geo = new THREE.BoxGeometry(1, 1, 1);
-    const inst = new THREE.InstancedMesh(geo, wallMat, boxes.length);
-    const mtx = new THREE.Matrix4();
-    boxes.forEach(([x0, z, x1], i) => {
+    // 第32版: 石造りの壁。天井まで届く切り石の壁に、足もとの土台と、天井との境の石を回す
+    const WALL_VIS = WALL_H + 0.7, wallBoxes = [], plinth = [], cornice = [];
+    boxes.forEach(([x0, z, x1]) => {
       const [wx0, wz] = R.tileToWorld(x0, z), [wx1] = R.tileToWorld(x1, z);
       const cx = (wx0 + wx1) / 2, len = (x1 - x0 + 1) * T;
-      const vh = WALL_H + 0.6 + rand(0, 2.2);
-      mtx.makeScale(len, vh, T); mtx.setPosition(cx, vh / 2, wz);
-      inst.setMatrixAt(i, mtx);
+      wallBoxes.push([len, WALL_VIS, T, cx, WALL_VIS / 2, wz]);
+      plinth.push([len + 0.16, 0.5, T + 0.16, cx, 0.25, wz]);
+      cornice.push([len + 0.2, 0.35, T + 0.2, cx, WALL_VIS - 0.4, wz]);
       addSolid(stageSolids.dungeon, cx, wz, len / 2, T / 2, WALL_H);
     });
-    inst.instanceMatrix.needsUpdate = true;
-    dunGroup.add(inst);
-    // 壁ぎわの岩（壁をごつごつに見せる。見た目だけ）
-    const rockGeo = new THREE.IcosahedronGeometry(1, 0);
-    { const pa = rockGeo.attributes.position; for (let i = 0; i < pa.count; i++) pa.setXYZ(i, pa.getX(i) * rand(0.8, 1.2), pa.getY(i) * rand(0.7, 1.1), pa.getZ(i) * rand(0.8, 1.2)); rockGeo.computeVertexNormals(); }
-    const edge = [];
-    for (let z = 1; z < N - 1; z++) for (let x = 1; x < N - 1; x++) {
-      if (isFloor(x, z)) continue;
-      const nb = [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([a2, b2]) => isFloor(x + a2, z + b2));
-      if (nb.length) edge.push([x, z, nb[Math.floor(Math.random() * nb.length)]]);
-    }
-    const useRock = W.dunRocks();
-    const rocks = new THREE.InstancedMesh(rockGeo, wallMat, useRock ? 1 : Math.min(700, edge.length));
-    const _q = new THREE.Quaternion(), _e = new THREE.Euler(), _s = new V3(), _p = new V3();
-    let nr = 0;
-    const rockStats = { wall: 0, pebble: 0, boulder: 0, tris: 0 };
-    if (useRock) {
-      // 第31版: 岩の長い向きを壁と平行にし、壁の面から出すぎないように置く。
-      // 壁が 1 マスしかない（向こうにも通路がある）ところや、通路の角では、岩を小さくしてはみ出さないようにする
-      const AS = MG.Assets, LOD = 10, lists = { rock1: [], rock3: [] };
-      const dim = (k) => { const p = AS.modelInfo(k).prims[0]; return { hx: (p.max[0] - p.min[0]) / 2, hz: (p.max[2] - p.min[2]) / 2, h: p.max[1] }; };
-      const D = { rock1: dim('rock1'), rock3: dim('rock3') };
-      const tint = () => new THREE.Color(rand(0.5, 0.64), rand(0.44, 0.54), rand(0.38, 0.46));
-      edge.forEach(([x, z, [nx, nz]]) => {
-        const kind = Math.random() < 0.5 ? 'rock1' : 'rock3', dm = D[kind], tx = -nz, tz = nx;
-        const thin = isFloor(x - nx, z - nz);                       // 壁の向こうも床
-        const longWall = !isFloor(x + tx, z + tz) && !isFloor(x - tx, z - tz); // 壁ぞいの両どなりも壁（角ではない）
-        let sc = rand(0.48, 0.78);
-        sc = Math.min(sc, (thin ? 1.15 : 2.2) / dm.hz, (longWall ? 2.4 : 1.05) / dm.hx);
-        const off = 1.3 - dm.hz * sc; // 岩の前の面が、当たり判定の壁より 0.3m だけ手前に出る（体の幅より小さいので、めりこんで見えない）
-        const along = longWall ? rand(-0.4, 0.4) : 0;
-        const [wx, wz] = R.tileToWorld(x, z);
-        lists[kind].push({ x: wx + nx * off + tx * along, z: wz + nz * off + tz * along, s: sc, sy: rand(4.4, 7.2) / (dm.h * sc), ry: Math.atan2(-nx, -nz) + rand(-0.2, 0.2) + (Math.random() < 0.5 ? Math.PI : 0), y: -0.25, tint: tint() });
-      });
-      Object.entries(lists).forEach(([k, l]) => { AS.instances(k, l, dunGroup, LOD); rockStats.wall += l.length; rockStats.tris += l.length * AS.lowModel(k, LOD).tris; });
-      // 床の小石（見た目だけ。足もとに散らばる）
-      const peb = [];
-      for (let k = 0; k < 170 && edge.length; k++) {
-        const [x, z, [nx, nz]] = edge[Math.floor(Math.random() * edge.length)];
-        const [wx, wz] = R.tileToWorld(x + nx, z + nz), sc = rand(0.08, 0.3);
-        peb.push({ x: wx - nx * rand(0.3, 0.9) + rand(-0.8, 0.8) * Math.abs(nz), z: wz - nz * rand(0.3, 0.9) + rand(-0.8, 0.8) * Math.abs(nx), s: sc, sy: rand(0.6, 1.1), ry: rand(0, 6.28), y: -0.06 * sc, tint: tint().multiplyScalar(1.15) });
-      }
-      AS.instances('rock2', peb, dunGroup, 7); rockStats.pebble = peb.length; rockStats.tris += peb.length * AS.lowModel('rock2', 7).tris;
-    }
-    edge.forEach(([x, z, [nx, nz]]) => {
-      if (useRock || nr >= rocks.count || Math.random() > 0.6) return;
-      const [wx, wz] = R.tileToWorld(x, z), sc = rand(0.9, 1.9);
-      _p.set(wx + nx * 0.7, sc * rand(0.2, 0.9), wz + nz * 0.7);
-      _q.setFromEuler(_e.set(rand(0, 6), rand(0, 6), rand(0, 6))); _s.set(sc, sc * rand(0.8, 1.6), sc);
-      mtx.compose(_p, _q, _s); rocks.setMatrixAt(nr++, mtx);
-    });
-    rocks.count = nr; rocks.instanceMatrix.needsUpdate = true; dunGroup.add(rocks);
-    // 天井（空は見えない）
-    const ceilTex = dunTex.clone(); ceilTex.needsUpdate = true; ceilTex.repeat.set(24, 24);
-    const ceil = new THREE.Mesh(new THREE.PlaneGeometry(N * T + 20, N * T + 20), new THREE.MeshStandardMaterial({ map: ceilTex, color: 0x6a5a4c, roughness: 1, side: THREE.DoubleSide }));
-    ceil.rotation.x = Math.PI / 2; ceil.position.y = WALL_H + 3.0; dunGroup.add(ceil);
-    // つらら石（天井から下がる）と、石筍（壁ぎわの床から生える）
-    const coneGeo = new THREE.ConeGeometry(1, 1, 6);
+    dunGroup.add(stoneMesh(wallBoxes, wallMat, 1.6));
+    dunGroup.add(stoneMesh(plinth, dunStone.dark, 1.2));
+    dunGroup.add(stoneMesh(cornice, dunStone.dark, 1.2));
+    // 天井（切り石）
+    const [ax0, az0] = R.tileToWorld(0, 0), [bx0, bz0] = R.tileToWorld(N - 1, N - 1);
+    const ceil = stoneMesh([[N * T + 20, 0.4, N * T + 20, (ax0 + bx0) / 2, WALL_VIS + 0.2, (az0 + bz0) / 2]], dunStone.ceil, 1.6);
+    dunGroup.add(ceil);
     const floorTiles = []; for (let z = 0; z < N; z++) for (let x = 0; x < N; x++) if (isFloor(x, z)) floorTiles.push([x, z]);
-    const stal = new THREE.InstancedMesh(coneGeo, wallMat, 220);
-    let ns = 0;
-    for (let k = 0; k < 160 && floorTiles.length; k++) {
-      const [x, z] = floorTiles[Math.floor(Math.random() * floorTiles.length)], [wx, wz] = R.tileToWorld(x, z);
-      const len = rand(0.8, 2.6), r = rand(0.18, 0.45);
-      _p.set(wx + rand(-0.8, 0.8), WALL_H + 3.0 - len / 2, wz + rand(-0.8, 0.8)); _q.setFromEuler(_e.set(Math.PI, 0, 0)); _s.set(r, len, r);
-      mtx.compose(_p, _q, _s); stal.setMatrixAt(ns++, mtx);
-    }
-    edge.slice(0, 400).forEach(([x, z, [nx, nz]]) => {
-      if (ns >= stal.count || Math.random() > 0.15) return;
-      const [wx, wz] = R.tileToWorld(x + nx, z + nz), len = rand(0.5, 1.4), r = rand(0.15, 0.35);
-      _p.set(wx - nx * 0.6, len / 2, wz - nz * 0.6); _q.identity(); _s.set(r, len, r);
-      mtx.compose(_p, _q, _s); stal.setMatrixAt(ns++, mtx);
-    });
-    stal.count = ns; stal.instanceMatrix.needsUpdate = true; dunGroup.add(stal);
-    // 光る水晶（洞窟の明かり）
-    const crysCols = [0x5ad8ff, 0xb07aff, 0x7affc8];
-    for (let k = 0; k < 22 && edge.length; k++) {
-      const [x, z, [nx, nz]] = edge[Math.floor(Math.random() * edge.length)], [wx, wz] = R.tileToWorld(x, z);
-      const col = crysCols[k % 3];
-      const cm = new THREE.MeshStandardMaterial({ color: col, emissive: col, emissiveIntensity: 1.1, roughness: 0.2, flatShading: true });
-      const cOff = useRock ? 1.4 : 1.0; // 岩の壁は 0.3m 手前に出ているので、水晶もその分前へ
-      const cg = new THREE.Group(); cg.position.set(wx + nx * cOff, 0, wz + nz * cOff); dunGroup.add(cg);
-      for (let j = 0; j < 4; j++) { const c = new THREE.Mesh(new THREE.OctahedronGeometry(rand(0.18, 0.35), 0), cm); c.scale.y = rand(2, 3.5); c.position.set(rand(-0.4, 0.4), rand(0.3, 0.8), rand(-0.4, 0.4)); c.rotation.set(rand(-0.4, 0.4), rand(0, 6), rand(-0.4, 0.4)); cg.add(c); }
-      const gl = FX.glowSprite('#' + new THREE.Color(col).getHexString(), 3.2); gl.position.y = 0.7; cg.add(gl);
-    }
-    // たいまつ: 部屋のふちの壁ぞいに置く
-    const torchMat = new THREE.MeshBasicMaterial({ color: 0xffa040 }), torchWood = new THREE.MeshStandardMaterial({ color: 0x4a2e1a, roughness: 0.9 });
-    let torches = 0;
+    // 部屋の壁に柱を立てる（土台と柱頭つき。壁から 0.25m 出る。見た目だけ）
+    const cols = [];
     d.rooms.forEach((r) => {
       if (r.small) return;
-      [[r.x0 - 1, r.z0 + Math.floor(r.h / 2), 0.7, 0], [r.x0 + r.w, r.z0 + Math.floor(r.h / 2), -0.7, 0], [r.x0 + Math.floor(r.w / 2), r.z0 - 1, 0, 0.7], [r.x0 + Math.floor(r.w / 2), r.z0 + r.h, 0, -0.7]].forEach(([tx, tzz, ox, oz]) => {
-        if (isFloor(tx, tzz) || torches > 26 || Math.random() < 0.4) return;
-        const [wx, wz] = R.tileToWorld(tx, tzz);
-        const tOff = useRock ? 0.74 : 0.55; // 岩の壁より前に出す
-        const p = new V3(wx + ox * (T / 0.7) * tOff, 3.2, wz + oz * (T / 0.7) * tOff);
-        // たいまつ: 壁から斜めに出た木の柄と、先の炎（第31版）
-        const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.035, 0.7, 6), torchWood); stick.position.copy(p).add(new V3(-ox * 0.2, -0.2, -oz * 0.2)); stick.rotation.set(oz ? -Math.sign(oz) * 0.45 : 0, 0, ox ? Math.sign(ox) * 0.45 : 0); dunGroup.add(stick);
-        const m = new THREE.Mesh(new THREE.ConeGeometry(0.11, 0.32, 7), torchMat); m.position.copy(p).add(new V3(0, 0.18, 0)); dunGroup.add(m);
-        const gl = FX.glowSprite('#ff9a3a', 3.2); gl.position.copy(p).add(new V3(0, 0.35, 0)); dunGroup.add(gl);
-        dunAnim.push({ torch: gl, ph: rand(0, 10) });
-        torches++;
+      const sides = [];
+      for (let x = r.x0; x < r.x0 + r.w; x += 3) { sides.push([x, r.z0 - 1, 0, 1]); sides.push([x, r.z0 + r.h, 0, -1]); }
+      for (let z = r.z0; z < r.z0 + r.h; z += 3) { sides.push([r.x0 - 1, z, 1, 0]); sides.push([r.x0 + r.w, z, -1, 0]); }
+      sides.forEach(([tx, tz2, nx, nz]) => {
+        if (isFloor(tx, tz2) || !isFloor(tx + nx, tz2 + nz)) return;
+        const [wx, wz] = R.tileToWorld(tx, tz2), cx = wx + nx * 0.8, cz = wz + nz * 0.8;
+        cols.push([0.9, WALL_VIS, 0.9, cx, WALL_VIS / 2, cz], [1.15, 0.6, 1.15, cx, 0.3, cz], [1.15, 0.45, 1.15, cx, WALL_VIS - 0.62, cz]);
       });
     });
+    if (cols.length) dunGroup.add(stoneMesh(cols, dunStone.pillar, 1.2));
+    // たいまつ: 壁の鉄の金具に、斜めに差した木の柄と炎。部屋のまわりと通路にも置く
+    const torchMat = new THREE.MeshBasicMaterial({ color: 0xffa040 }), torchWood = new THREE.MeshStandardMaterial({ color: 0x3a2414, roughness: 0.9 }), iron = new THREE.MeshStandardMaterial({ color: 0x2a2a2e, roughness: 0.5, metalness: 0.7 });
+    dunLights.torches = [];
+    const torchAt = (tx, tzz, nx, nz) => {
+      const [wx, wz] = R.tileToWorld(tx, tzz);
+      if (dunLights.torches.some((q) => Math.hypot(q.x - wx, q.z - wz) < 5)) return;
+      const p = new V3(wx + nx * 1.18, 3.0, wz + nz * 1.18);
+      const plate = new THREE.Mesh(new THREE.BoxGeometry(nz ? 0.3 : 0.06, 0.4, nx ? 0.3 : 0.06), iron); plate.position.set(wx + nx * 1.03, 2.75, wz + nz * 1.03); dunGroup.add(plate);
+      const arm = new THREE.Mesh(new THREE.BoxGeometry(nx ? 0.3 : 0.05, 0.05, nz ? 0.3 : 0.05), iron); arm.position.set(wx + nx * 1.15, 2.72, wz + nz * 1.15); dunGroup.add(arm);
+      const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.035, 0.7, 6), torchWood); stick.position.copy(p).add(new V3(-nx * 0.05, -0.22, -nz * 0.05)); stick.rotation.set(nz ? Math.sign(nz) * 0.35 : 0, 0, nx ? -Math.sign(nx) * 0.35 : 0); dunGroup.add(stick);
+      const fl = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.3, 7), torchMat); fl.position.copy(p).add(new V3(nx * 0.06, 0.16, nz * 0.06)); dunGroup.add(fl);
+      const gl = FX.glowSprite('#ff8a2a', 1.0); gl.material = gl.material.clone(); gl.material.opacity = 0.75; gl.position.copy(p).add(new V3(nx * 0.06, 0.2, nz * 0.06)); dunGroup.add(gl);
+      dunAnim.push({ torch: gl, ph: rand(0, 10) });
+      dunLights.torches.push({ x: p.x + nx * 0.4, y: p.y + 0.2, z: p.z + nz * 0.4, ph: rand(0, 10) });
+    };
+    d.rooms.forEach((r) => {
+      [[r.x0 - 1, r.z0 + Math.floor(r.h / 2), 1, 0], [r.x0 + r.w, r.z0 + Math.floor(r.h / 2), -1, 0], [r.x0 + Math.floor(r.w / 2), r.z0 - 1, 0, 1], [r.x0 + Math.floor(r.w / 2), r.z0 + r.h, 0, -1]].forEach(([tx, tzz, nx, nz]) => {
+        if (!isFloor(tx, tzz) && isFloor(tx + nx, tzz + nz)) torchAt(tx, tzz, nx, nz);
+      });
+    });
+    // 通路: 床のマスの横の壁に、間をあけて置く
+    for (let k = 0; k < 400 && dunLights.torches.length < 60; k++) {
+      const [x, z] = floorTiles[Math.floor(Math.random() * floorTiles.length)];
+      const opts = [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([a2, b2]) => !isFloor(x + a2, z + b2));
+      if (opts.length < 2) continue; // 通路（両側が壁）だけ
+      const [a2, b2] = opts[Math.floor(Math.random() * opts.length)];
+      torchAt(x + a2, z + b2, -a2, -b2);
+    }
+    if (!dunLights.pool.length) {
+      for (let i = 0; i < 6; i++) { const l = new THREE.PointLight(0xff8a3e, 0, 10, 1.8); dunLights.pool.push(l); }
+      dunLights.player = new THREE.PointLight(0xffe2b8, 0.55, 9, 1.8);
+    }
+    dunLights.pool.forEach((l) => dunGroup.add(l)); dunGroup.add(dunLights.player);
     // (x, z) のまわりで、壁からいちばん離れた床（看板を立てる場所。2.4〜3m 離す）
     const clearance = (wx, wz) => { const [tx, tz2] = R.worldToTile(wx, wz); let best = 9; for (let dz = -3; dz <= 3; dz++) for (let dx = -3; dx <= 3; dx++) if (!isFloor(tx + dx, tz2 + dz)) best = Math.min(best, Math.hypot(dx, dz)); return best; };
     const openSpot = (x, z) => {
@@ -1309,22 +1292,7 @@
     const plab = makeSignboard('帰還ポータル', { sub: '村へ帰る', w: 2.6, h: 0.95, posts: 0.9, bg: '#102a4a', border: '#7fd8ff' });
     const sp2 = openSpot(portal.x, portal.z); plab.position.set(sp2.x, 0, sp2.z); plab.rotation.y = Math.atan2(portal.x - sp2.x, portal.z - sp2.z); dunGroup.add(plab);
     dunAnim.push({ m: swirl, spin: 1.4 }, { face: pg });
-    if (useRock) {
-      const big = [], keepAway = [start, stairs, portal, sp1, sp2];
-      for (let k = 0; k < 160 && big.length < 18; k++) {
-        const [x, z] = floorTiles[Math.floor(Math.random() * floorTiles.length)];
-        let open = true; for (let dz = -1; dz <= 1 && open; dz++) for (let dx = -1; dx <= 1; dx++) if (!isFloor(x + dx, z + dz)) { open = false; break; } // 部屋の中だけ（通路はふさがない）
-        if (!open) continue;
-        let near = false; for (let dz = -2; dz <= 2 && !near; dz++) for (let dx = -2; dx <= 2; dx++) if (!isFloor(x + dx, z + dz)) { near = true; break; } // 壁ぎわ
-        if (!near) continue;
-        const [wx, wz] = R.tileToWorld(x, z);
-        if (keepAway.some((p) => Math.hypot(p.x - wx, p.z - wz) < 4.5) || big.some((b) => Math.hypot(b.x - wx, b.z - wz) < 3)) continue;
-        const sc = rand(0.55, 0.95); big.push({ x: wx, z: wz, s: sc, ry: rand(0, 6.28), y: -0.12 * sc, tint: new THREE.Color(rand(0.55, 0.68), rand(0.5, 0.58), rand(0.44, 0.5)) });
-        addSolid(stageSolids.dungeon, wx, wz, 1.0 * sc, 1.0 * sc, 1.25 * sc);
-      }
-      MG.Assets.instances('rock2', big, dunGroup, 9); rockStats.boulder = big.length; rockStats.tris += big.length * MG.Assets.lowModel('rock2', 9).tris;
-    }
-    W.dun = { signs: [sp1, sp2], data: d, start, stairs, portal, stairsOpen: !d.boss, stairsParts, portalGroup: pg, rocks: rockStats };
+    W.dun = { signs: [sp1, sp2], data: d, start, stairs, portal, stairsOpen: !d.boss, stairsParts, portalGroup: pg, torches: dunLights.torches.length, pillars: cols.length / 3 };
     W.setStairsOpen(!d.boss);
     if (W.stage === 'dungeon') solids = stageSolids.dungeon;
     return W.dun;
@@ -1907,8 +1875,13 @@
       if (a.torch) { a.torch.scale.setScalar(1.8 * (1 + Math.sin(clock * 9 + a.ph) * 0.12)); continue; }
       a.m.rotation.z += dt * a.spin; if (a.fill) a.fill.material.opacity = 0.2 + Math.sin(clock * 2) * 0.06;
     }
+    if (W.stage === 'dungeon' && playerPos && dunLights.player) {
+      dunLights.player.position.set(playerPos.x, playerPos.y + 1.6, playerPos.z);
+      const near = dunLights.torches.map((t) => [t, (t.x - playerPos.x) ** 2 + (t.z - playerPos.z) ** 2]).sort((a, b) => a[1] - b[1]);
+      dunLights.pool.forEach((l, i) => { const e = near[i]; if (!e) { l.intensity = 0; return; } const t = e[0]; l.position.set(t.x, t.y, t.z); l.intensity = 1.05 * (1 + Math.sin(clock * 9 + t.ph) * 0.08 + Math.sin(clock * 23 + t.ph * 2) * 0.05); });
+    }
     if (W.stage === 'dungeon') for (const a of dunAnim) {
-      if (a.torch) { a.torch.scale.setScalar(3.2 * (1 + Math.sin(clock * 9 + a.ph) * 0.1 + Math.sin(clock * 23 + a.ph) * 0.05)); continue; }
+      if (a.torch) { a.torch.scale.setScalar(1.0 * (1 + Math.sin(clock * 9 + a.ph) * 0.1 + Math.sin(clock * 23 + a.ph) * 0.05)); continue; }
       if (a.face) { if (playerPos) a.face.rotation.y = Math.atan2(playerPos.x - a.face.position.x, playerPos.z - a.face.position.z); continue; }
       a.m.rotation.z += dt * a.spin;
     }

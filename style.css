@@ -742,3 +742,28 @@ kbd { font-family: var(--sans); font-size: 11px; padding: 1px 6px; border-radius
 .st-fill { height: 100%; width: 100%; background: linear-gradient(90deg, #8ad83a, #e8f07a); transition: width 0.08s linear; }
 .st-bar.tired .st-fill { background: linear-gradient(90deg, #d86a3a, #f0a87a); }
 .stage-dungeon .no-dungeon { display: none !important; }
+
+/* 第32版: 画面下は HP・MP・スタミナだけ。魔法のスロットは左下、地下○階は地図の下、その回に拾った物は右下 */
+.hud-bottom { left: 50%; right: auto; transform: translateX(-50%); width: min(440px, calc(100% - 600px)); min-width: 300px; gap: 6px; }
+.hp-wrap { display: flex; align-items: center; gap: 8px; width: 100%; }
+.hp-wrap .dun-hp-num { min-width: 70px; }
+.slot-dock { position: absolute; left: 16px; bottom: max(14px, env(safe-area-inset-bottom)); width: 260px; display: flex; flex-direction: column; gap: 6px; }
+.slot-dock .slots { grid-template-columns: 1fr !important; width: 100% !important; gap: 5px; }
+.slot-dock .slot { min-height: 0; padding: 5px 10px 5px 14px; }
+.slot-dock .slot .s-name { font-size: 14px; }
+.slot-dock .slot .s-meta, .slot-dock .slot .s-charge { font-size: 10.5px; }
+.slot-dock .sup-hud { justify-content: flex-start; }
+.slot-dock .wand-chip { flex-wrap: wrap; line-height: 1.4; }
+.vs-on .sup-hud { position: static; }
+.dun-hud { position: static; transform: none; width: auto; }
+.dun-hud .dun-floor { position: absolute; right: 16px; top: 280px; width: 200px; text-align: center; font-size: 15px; font-weight: 700; padding: 4px 0; border-radius: 10px; background: rgba(6, 8, 22, 0.72); border: 1px solid var(--line); text-shadow: 0 1px 3px #000; pointer-events: none; }
+.loot-box { position: absolute; right: 16px; bottom: max(14px, env(safe-area-inset-bottom)); width: 220px; padding: 10px 12px; border-radius: 12px; background: rgba(6, 8, 22, 0.72); border: 1px solid var(--line); backdrop-filter: blur(6px); pointer-events: none; }
+.loot-title { font-size: 12px; font-weight: 800; color: var(--gold); letter-spacing: 0.08em; margin-bottom: 4px; }
+.loot-row { display: flex; justify-content: space-between; font-size: 14px; padding: 2px 0; border-bottom: 1px dotted var(--line); }
+.loot-row b { font-variant-numeric: tabular-nums; }
+.loot-note { font-size: 11px; color: var(--muted); margin-top: 6px; }
+.vs-hp { bottom: 64px; }
+.spot-prompt { bottom: 150px; }
+.spell-banner { bottom: 104px; }
+.voice-box { bottom: 92px; }
+.vs-on .spell-banner, .vs-on .voice-box { bottom: 120px; }

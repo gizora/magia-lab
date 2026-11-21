@@ -1141,13 +1141,14 @@
     updateLvBox();
     const D = G.dun;
     const dun = D.on && !G.match.on;
-    $('dun-hud').hidden = !dun; $('minimap').hidden = !dun;
+    $('dun-hud').hidden = !dun; $('minimap').hidden = !dun; $('hp-wrap').hidden = !dun;
     if (dun) {
       $('dun-hp-fill').style.width = `${Math.max(0, (D.hp / D.maxHp) * 100).toFixed(1)}%`;
       $('dun-hp-fill').parentElement.classList.toggle('low', D.hp < D.maxHp * 0.3);
       $('dun-hp-num').textContent = `${Math.max(0, Math.ceil(D.hp))} / ${D.maxHp}`;
-      $('dun-loot').textContent = `拾った ${D.run ? D.run.gold : 0} G`;
-      $('dun-pot').innerHTML = `回復薬 ×${G.prog.potions} <kbd>Q</kbd>`;
+      $('dun-loot').textContent = `${D.run ? D.run.gold : 0} G`;
+      $('dun-pot').textContent = `${D.run ? D.run.potGain : 0} 個`;
+      $('dun-pot-have').textContent = G.prog.potions;
       mapT -= dt || 0.016;
       if (mapT <= 0) { mapT = 0.2; drawMinimap(); }
     }

@@ -61,9 +61,15 @@
     <div id="lv-xp-text" class="lv-xp-text">次のレベルまで 50</div>
   </div>
   <!-- ダンジョンの中の表示（第26版） -->
+  <!-- 第32版: 地下○階は地図の下、その回に拾った物は右下 -->
   <div id="dun-hud" class="dun-hud" hidden>
-    <div class="dun-top"><span id="dun-floor" class="dun-floor">地下 1 階</span><span id="dun-loot" class="dun-loot">拾った 0 G</span><span id="dun-pot" class="dun-pot">回復薬 ×0 <kbd>Q</kbd></span></div>
-    <div class="dun-hp"><span class="dun-hp-label">HP</span><div class="dun-hp-bar"><div id="dun-hp-fill" class="dun-hp-fill"></div></div><span id="dun-hp-num" class="dun-hp-num">150</span></div>
+    <div id="dun-floor" class="dun-floor">地下 1 階</div>
+    <div id="loot-box" class="loot-box" aria-label="この回に拾った物">
+      <div class="loot-title">拾った物</div>
+      <div class="loot-row"><span>お金</span><b id="dun-loot">0 G</b></div>
+      <div class="loot-row"><span>回復薬</span><b id="dun-pot">0</b></div>
+      <div class="loot-note">回復薬は <kbd>Q</kbd> で飲む（持っている数 <b id="dun-pot-have">0</b>）</div>
+    </div>
   </div>
   <canvas id="minimap" class="minimap" width="200" height="200" hidden aria-label="ダンジョンの地図"></canvas>
   <div id="spot-prompt" class="spot-prompt" hidden></div>
@@ -77,13 +83,17 @@
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <div class="hud-bottom">
-    <div id="sup-hud" class="sup-hud" aria-live="polite"></div>
+    <div id="hp-wrap" class="hp-wrap" hidden><span class="dun-hp-label">HP</span><div class="dun-hp-bar"><div id="dun-hp-fill" class="dun-hp-fill"></div></div><span id="dun-hp-num" class="dun-hp-num">150</span></div>
     <div class="mp-wrap">
       <div class="mp-label">MP</div>
       <div class="mp-bar"><div id="mp-fill" class="mp-fill"></div></div>
       <div id="mp-num" class="mp-num">150</div>
     </div>
     <div class="st-wrap" title="スタミナ（走る・跳ぶと減る）"><div class="st-label">スタミナ</div><div class="st-bar"><div id="st-fill" class="st-fill"></div></div></div>
+  </div>
+  <!-- 第32版: 魔法のスロットは左下 -->
+  <div id="slot-dock" class="slot-dock">
+    <div id="sup-hud" class="sup-hud" aria-live="polite"></div>
     <div id="wand-chip" class="wand-chip"></div>
     <div id="slots" class="slots"></div>
   </div>

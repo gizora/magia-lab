@@ -1,4 +1,4 @@
-// ダンジョンの敵の見た目と動き（第29版で作り込み、第30版でユーザーの参考の絵に合わせて作り直した）
+// ダンジョンの敵の見た目と動き（第29版で作り込み、第30版でユーザーの参考の絵に合わせ、第32版でスライム・骸骨兵・コウモリをリアルでダークに作り直した）
 // cutaway（Nyxera0x/cutaway、MIT）の進め方を参考にした: 1 体ずつ「らしさ」のチェック項目を決め、部品を組み、
 // 同じ向きで撮った絵とくらべて直す。部品は関節ごとのグループにして、歩く・殴る・羽ばたくを動かせるようにしている。
 // 参考の絵（ゲーム素材/ のスライム・骸骨兵・コウモリ・闇の魔導士・石の守護者）は見比べるためだけに使い、ゲームには入れていない
@@ -41,203 +41,224 @@
   const tube = (pts, r, seg) => new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts.map((p) => new V3(p[0], p[1], p[2]))), seg || 16, r, 6);
 
   // ======================================================================
-  //  スライム（参考: 青いぷるぷるのスライム）
-  //  チェック項目: 青くつやのある平たいドーム／こげ茶のふち取り／白い光のつぶ／すそがたれて広がる／
-  //               困り顔（垂れた眉・黒い楕円の目・波打つ口）／口のはしのよだれ
+  //  スライム（第32版: リアルでダークに）
+  //  チェック項目: 顔のない暗い緑の粘液／表面がゆっくりうねる／中に溶けかけた頭蓋骨と骨・泡・にぶく光る核が透ける／
+  //               すそがたれて、ぬめった水たまりを作る
   // ======================================================================
   function slime(std, g, P) {
-    const gel = std({ color: 0x3f6cf0, emissive: 0x0c1c70, emissiveIntensity: 0.35, roughness: 0.1, metalness: 0, transparent: true, opacity: 0.93 });
-    const lineM = std({ color: 0x2a140a, roughness: 1, side: THREE.BackSide });
-    const ink = std({ color: 0x24120a, roughness: 0.4 });
-    const shine = std({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0.9, roughness: 0.2 });
-    const drop = std({ color: 0x7aa8ff, emissive: 0x2a4aaa, emissiveIntensity: 0.4, roughness: 0.05, transparent: true, opacity: 0.85 });
+    const gel = std({ color: 0x24401a, emissive: 0x06160a, emissiveIntensity: 0.6, roughness: 0.03, metalness: 0.2, transparent: true, opacity: 0.8, depthWrite: false });
+    const murk = std({ color: 0x18280c, roughness: 0.3, transparent: true, opacity: 0.55, depthWrite: false });
+    const boneM = std({ color: 0xb8ab84, roughness: 0.8, transparent: true, opacity: 0.9 });
+    const dark = std({ color: 0x141008, roughness: 1 });
+    const nucleus = std({ color: 0xc8e070, emissive: 0x9ac030, emissiveIntensity: 1.3, roughness: 0.4 });
+    const bub = std({ color: 0xd0f0a0, roughness: 0.05, transparent: true, opacity: 0.45, depthWrite: false });
     const body = new THREE.Group(); g.add(body); P.body = body;
-    // 体の形: 単位球の向き → 平たいドーム（すそは外へ広がり、ふちが少し波打つ）
-    const R = 0.85;
-    const dome = (dx, dy, dz) => {
-      const y = dy < 0 ? dy * R * 0.14 : dy * R * 0.98;
-      const k = Math.max(0, 0.3 - dy) / 1.3, a = Math.atan2(dz, dx);
-      const f = 0.95 + k * 0.38 + (dy < 0.25 ? Math.sin(a * 7) * 0.03 * Math.min(1, (0.25 - dy) / 0.25) : 0);
-      return new V3(dx * R * f, y + 0.12, dz * R * f);
-    };
-    const bg = new THREE.SphereGeometry(1, 44, 30), pa = bg.attributes.position;
-    for (let i = 0; i < pa.count; i++) { const v = dome(pa.getX(i), pa.getY(i), pa.getZ(i)); pa.setXYZ(i, v.x, v.y, v.z); }
+    // 体: 下が平たく広がり、上が少したるんだ粘液のかたまり（場所ごとにふくらみがちがう）
+    const bg = new THREE.SphereGeometry(0.85, 48, 32), pa = bg.attributes.position;
+    const lump = (x, y, z) => Math.sin(x * 4.1 + z * 2.3) * 0.06 + Math.sin(z * 5.3 - y * 3.1) * 0.05 + Math.sin(x * 9 + y * 7) * 0.015;
+    for (let i = 0; i < pa.count; i++) {
+      let x = pa.getX(i), y = pa.getY(i), z = pa.getZ(i);
+      const k = 1 + lump(x, y, z);
+      if (y < 0) y *= 0.16; else y *= 0.86 - Math.max(0, y - 0.55) * 0.18;
+      const sag = y < 0.12 ? 1 + (0.12 - y) * 0.5 : 1; // すそが外へたれる
+      pa.setXYZ(i, x * k * sag, y * k + 0.13, z * k * sag);
+    }
     bg.computeVertexNormals();
     P.shell = add(body, bg, gel); P.shell.renderOrder = 3;
-    add(body, bg, lineM, [0, -0.004, 0], null, [1.035, 1.03, 1.035]); // ふち取り（裏返した一回り大きい形）
-    // 表面に部品を貼る: dir の向きの表面に置き、外を向かせる
-    const onSurf = (m, dir, out, spin) => {
-      const d = new V3(dir[0], dir[1], dir[2]).normalize(), p = dome(d.x, d.y, d.z), n = p.clone().sub(new V3(0, 0.2, 0)).normalize();
-      m.position.copy(p).addScaledVector(n, out); m.lookAt(m.position.clone().add(n)); if (spin) m.rotateZ(spin); return m;
-    };
-    // 目: 黒い楕円と光の点、眉は内側が上がった困り顔
-    P.eyes = [];
-    [-1, 1].forEach((sd) => {
-      const e = new THREE.Mesh(new THREE.SphereGeometry(0.1, 16, 12), ink); e.scale.set(0.9, 1.3, 0.4); body.add(e); onSurf(e, [sd * 0.27, 0.43, 0.88], 0.012, sd * 0.15);
-      e.userData.sy = 1.3; P.eyes.push(e);
-      onSurf(add(body, new THREE.SphereGeometry(0.022, 8, 6), shine), [sd * 0.27 - 0.03, 0.49, 0.88], 0.045);
-      onSurf(add(body, new THREE.BoxGeometry(0.15, 0.022, 0.02), ink), [sd * 0.26, 0.64, 0.78], 0.01, -sd * 0.38);
-    });
-    // 口: 波打つ線（表面に沿わせる）と、右のはしからたれるよだれ
-    const mp = [];
-    for (let i = 0; i <= 12; i++) { const x = -0.17 + (i / 12) * 0.34, w = Math.sin(i * 1.6) * 0.022; const d = new V3(x, 0.27 + w, 0.95).normalize(), p = dome(d.x, d.y, d.z); const n = p.clone().sub(new V3(0, 0.2, 0)).normalize(); mp.push(p.addScaledVector(n, 0.012)); }
-    add(body, new THREE.TubeGeometry(new THREE.CatmullRomCurve3(mp), 30, 0.013, 5), ink);
-    const dp = mp[mp.length - 2];
-    P.drool = add(body, new THREE.SphereGeometry(0.034, 10, 8), drop, [dp.x, dp.y - 0.05, dp.z + 0.01], null, [1, 1.6, 1]);
-    // 光のつぶ（左上に大きめ、まわりに小さめ）
-    [[-0.45, 0.55, 0.4, 0.06], [-0.32, 0.72, 0.35, 0.035], [0.5, 0.5, 0.45, 0.03], [-0.6, 0.2, 0.55, 0.028], [0.62, 0.15, 0.5, 0.025]].forEach(([x, y, z, r]) => {
-      const m = add(body, new THREE.SphereGeometry(r, 10, 8), shine, null, null, [1.5, 0.9, 0.35]); onSurf(m, [x, y, z], 0.004, 0.5);
-    });
-    // すそのたれ（ふちのしずく）と、足もとの水たまり
-    for (let i = 0; i < 7; i++) { const a = (i / 7) * Math.PI * 2 + 0.4; const p = dome(Math.cos(a) * 0.99, -0.12, Math.sin(a) * 0.99); add(body, new THREE.SphereGeometry(rand(0.06, 0.1), 10, 8), gel, [p.x * 1.02, 0.05, p.z * 1.02], null, [1.3, 0.6, 1.3]); }
-    const pud = std({ color: 0x2a50c8, emissive: 0x0a1a6a, emissiveIntensity: 0.4, roughness: 0.05, transparent: true, opacity: 0.55, depthWrite: false });
-    P.puddle = add(g, new THREE.CircleGeometry(1.0, 32), pud, [0, 0.02, 0], [-Math.PI / 2, 0, 0]);
+    P.ooze = { pos: pa, base: Float32Array.from(pa.array), nrm: Float32Array.from(bg.attributes.normal.array) };
+    add(body, jitter(new THREE.IcosahedronGeometry(0.42, 2), 0.05), murk, [0.05, 0.4, -0.05], null, [1.2, 0.75, 1.1]).renderOrder = 2;
+    // 中身: 溶けかけた頭蓋骨（目のくぼみ・あご）と骨、にぶく光る核、泡
+    const skull = pivot(body, -0.18, 0.38, 0.12); skull.rotation.set(0.5, 0.6, 0.35); P.skull = skull;
+    add(skull, new THREE.SphereGeometry(0.13, 14, 10), boneM, null, null, [0.95, 0.9, 1.1]);
+    [-1, 1].forEach((sd) => add(skull, new THREE.SphereGeometry(0.036, 8, 6), dark, [sd * 0.045, 0.0, 0.105]));
+    add(skull, new THREE.BoxGeometry(0.12, 0.04, 0.09), boneM, [0, -0.08, 0.05]);
+    const b1 = pivot(body, 0.28, 0.3, -0.1); b1.rotation.set(0.3, 0.2, 1.3); bone(b1, 0.34, 0.025, boneM);
+    const b2 = pivot(body, 0.05, 0.22, 0.32); b2.rotation.set(1.2, 0.8, 0.4); bone(b2, 0.22, 0.02, boneM);
+    P.core = add(body, jitter(new THREE.IcosahedronGeometry(0.1, 1), 0.02), nucleus, [0.12, 0.5, -0.12]);
+    P.coreGlow = glow(body, '#9ac030', 0.7, [0.12, 0.5, -0.12]);
+    P.bubbles = [];
+    for (let i = 0; i < 10; i++) P.bubbles.push(add(body, new THREE.SphereGeometry(rand(0.018, 0.05), 8, 6), bub, [rand(-0.45, 0.45), rand(0.1, 0.6), rand(-0.4, 0.4)]));
+    // ぬめった水たまり（ふちが不ぞろい）
+    const ps = new THREE.Shape();
+    for (let i = 0; i <= 40; i++) { const a = (i / 40) * Math.PI * 2, r = 1.02 + Math.sin(a * 5) * 0.08 + Math.sin(a * 11 + 1) * 0.04; if (i === 0) ps.moveTo(Math.cos(a) * r, Math.sin(a) * r); else ps.lineTo(Math.cos(a) * r, Math.sin(a) * r); }
+    const pud = std({ color: 0x142a0c, emissive: 0x040e02, emissiveIntensity: 0.5, roughness: 0.02, metalness: 0.3, transparent: true, opacity: 0.75, depthWrite: false });
+    P.puddle = add(g, new THREE.ShapeGeometry(ps), pud, [0, 0.02, 0], [-Math.PI / 2, 0, 0]);
   }
 
   // ======================================================================
-  //  骸骨兵（参考: 剣を振り上げ、赤い盾を構えた骸骨）
-  //  チェック項目: 兜なしの頭蓋骨／黒い大きな目のくぼみと歯／あばら骨と骨盤／茶色の長靴と手袋／
-  //               金のつばの剣／下がとがった赤い盾とグレーのふち
+  //  骸骨兵（第32版: リアルでダークに）
+  //  チェック項目: 眉の骨・頬骨・鼻の穴・不ぞろいの歯のある頭蓋骨と、奥に赤い光の眼窩／背骨のとげと肩甲骨・胸骨につながるあばら骨／
+  //               腕と脚の 2 本の骨・指の骨／黄ばんで汚れた骨／さびた鉄の兜（鼻あて）・肩当て・刃こぼれした剣・板張りの丸盾・ぼろ布
   // ======================================================================
   function skeleton(std, g, P) {
-    const boneM = std({ color: 0xece4d0, roughness: 0.7, emissive: 0x2a2418, emissiveIntensity: 0.22 });
-    const dark = std({ color: 0x0c0a08, roughness: 0.9 });
-    const leather = std({ color: 0x9a6438, roughness: 0.85 });
-    const leatherD = std({ color: 0x6a4224, roughness: 0.9 });
-    const steel = std({ color: 0xb4bac4, roughness: 0.3, metalness: 0.85 });
-    const gold = std({ color: 0xd0a040, roughness: 0.35, metalness: 0.8 });
-    const red = std({ color: 0xc01818, roughness: 0.45, metalness: 0.1, emissive: 0x3a0404, emissiveIntensity: 0.4 });
-    const rim = std({ color: 0x3e3e46, roughness: 0.45, metalness: 0.7 });
-    const eyeM = std({ color: 0xff3a1a, emissive: 0xff2a0a, emissiveIntensity: 1.6 });
+    const grime = FX.canvasTex(128, 128, (c, w) => {
+      c.fillStyle = '#ffffff'; c.fillRect(0, 0, w, w);
+      for (let i = 0; i < 220; i++) { c.fillStyle = `rgba(${rand(60, 110) | 0},${rand(45, 80) | 0},${rand(25, 50) | 0},${rand(0.08, 0.3)})`; c.beginPath(); c.ellipse(rand(0, w), rand(0, w), rand(2, 12), rand(1, 6), rand(0, 3), 0, Math.PI * 2); c.fill(); }
+      c.strokeStyle = 'rgba(40,28,16,0.35)'; c.lineWidth = 1; for (let i = 0; i < 30; i++) { c.beginPath(); let x = rand(0, w), y = rand(0, w); c.moveTo(x, y); for (let k = 0; k < 3; k++) { x += rand(-12, 12); y += rand(-12, 12); c.lineTo(x, y); } c.stroke(); }
+    });
+    grime.wrapS = grime.wrapT = THREE.RepeatWrapping;
+    const boneM = std({ color: 0xcbbd98, map: grime, roughness: 0.82, emissive: 0x16120a, emissiveIntensity: 0.4 });
+    const dark = std({ color: 0x080604, roughness: 1 });
+    const rust = std({ color: 0x5a3a26, roughness: 0.75, metalness: 0.55 });
+    const ironM = std({ color: 0x4a4440, roughness: 0.55, metalness: 0.75 });
+    const steel = std({ color: 0x8a847c, roughness: 0.45, metalness: 0.8 });
+    const woodM = std({ color: 0x4a3420, roughness: 0.9 });
+    const cloth = std({ color: 0x2a221c, roughness: 1, side: THREE.DoubleSide });
+    const eyeM = std({ color: 0xff3a1a, emissive: 0xff2a0a, emissiveIntensity: 2.4 });
     const body = new THREE.Group(); g.add(body); P.body = body;
-    // 骨盤（左右の羽のような骨）
-    add(body, new THREE.TorusGeometry(0.13, 0.045, 6, 12), boneM, [0, 0.98, 0], [Math.PI / 2, 0, 0], [1.25, 0.85, 1]);
-    [-1, 1].forEach((sd) => add(body, new THREE.SphereGeometry(0.1, 10, 8), boneM, [sd * 0.12, 1.02, 0], [0, 0, sd * 0.4], [1.2, 0.8, 0.45]));
-    // 背骨（8 つの骨）
-    for (let i = 0; i < 8; i++) add(body, new THREE.CylinderGeometry(0.04, 0.045, 0.06, 7), boneM, [0, 1.05 + i * 0.07, -0.04 + Math.sin(i * 0.4) * 0.02]);
-    // あばら骨（左右 6 本ずつ、前へ曲がる）
-    for (let i = 0; i < 6; i++) {
-      const r = 0.175 - Math.abs(i - 1.8) * 0.016, y = 1.52 - i * 0.065;
-      [-1, 1].forEach((sd) => { add(body, new THREE.TorusGeometry(r, 0.016, 5, 12, Math.PI * 0.82), boneM, [0, y, -0.03], [Math.PI / 2 + 0.22, 0, sd > 0 ? -0.3 : Math.PI + 0.3]); });
+    // 骨盤（腸骨の翼・仙骨）
+    [-1, 1].forEach((sd) => add(body, new THREE.SphereGeometry(0.11, 12, 10), boneM, [sd * 0.12, 1.03, -0.01], [0.2, sd * 0.5, sd * 0.45], [1.15, 0.85, 0.38]));
+    add(body, new THREE.ConeGeometry(0.06, 0.16, 6), boneM, [0, 0.96, -0.05], [Math.PI, 0, 0]);
+    add(body, new THREE.TorusGeometry(0.1, 0.03, 6, 12, Math.PI), boneM, [0, 0.93, 0.04], [Math.PI / 2 + 0.3, 0, 0]);
+    // 背骨（椎骨と、後ろへ出るとげ）
+    for (let i = 0; i < 10; i++) { const y = 1.05 + i * 0.06, z = -0.05 + Math.sin(i * 0.35) * 0.025; add(body, new THREE.CylinderGeometry(0.035, 0.04, 0.045, 8), boneM, [0, y, z]); add(body, new THREE.BoxGeometry(0.018, 0.03, 0.06), boneM, [0, y, z - 0.05], [0.4, 0, 0]); }
+    // あばら骨（7 本ずつ、下へ傾いて胸骨につながる）と胸骨・鎖骨・肩甲骨
+    for (let i = 0; i < 7; i++) {
+      const r = 0.165 - Math.abs(i - 2.2) * 0.014, y = 1.55 - i * 0.056;
+      [-1, 1].forEach((sd) => { add(body, new THREE.TorusGeometry(r, 0.013, 5, 14, Math.PI * (i > 4 ? 0.7 : 0.88)), boneM, [0, y, -0.03], [Math.PI / 2 + 0.38, 0, sd > 0 ? -0.25 : Math.PI + 0.25]); });
     }
-    add(body, new THREE.BoxGeometry(0.05, 0.32, 0.03), boneM, [0, 1.37, 0.15]);
-    add(body, new THREE.CylinderGeometry(0.022, 0.022, 0.5, 6), boneM, [0, 1.6, 0], [0, 0, Math.PI / 2]); // 鎖骨
-    // 頭: 丸い頭蓋骨・大きな黒い目のくぼみ（奥にかすかな赤い光）・鼻の穴・歯・動くあご
-    const head = pivot(body, 0, 1.68, 0); P.head = head;
-    add(head, new THREE.SphereGeometry(0.18, 20, 16), boneM, [0, 0.13, 0], null, [0.98, 1.05, 1.1]);
-    add(head, new THREE.BoxGeometry(0.22, 0.09, 0.18), boneM, [0, 0.02, 0.05]);
-    [-1, 1].forEach((sd) => { add(head, new THREE.SphereGeometry(0.06, 12, 10), dark, [sd * 0.068, 0.12, 0.148], null, [1, 1.05, 0.7]); add(head, new THREE.SphereGeometry(0.012, 6, 5), eyeM, [sd * 0.068, 0.115, 0.175]); glow(head, '#ff3a1a', 0.08, [sd * 0.068, 0.115, 0.19]); });
-    add(head, new THREE.ConeGeometry(0.022, 0.05, 3), dark, [0, 0.055, 0.19], [Math.PI, 0, 0]);
-    for (let i = 0; i < 7; i++) add(head, new THREE.BoxGeometry(0.017, 0.03, 0.012), boneM, [-0.054 + i * 0.018, -0.008, 0.155]);
-    const jaw = pivot(head, 0, 0.0, -0.04); P.jaw = jaw;
-    add(jaw, new THREE.BoxGeometry(0.18, 0.05, 0.16), boneM, [0, -0.035, 0.09]);
-    for (let i = 0; i < 7; i++) add(jaw, new THREE.BoxGeometry(0.017, 0.026, 0.012), boneM, [-0.054 + i * 0.018, -0.004, 0.17]);
-    // 腕（肩・ひじの関節）
+    add(body, new THREE.BoxGeometry(0.045, 0.26, 0.025), boneM, [0, 1.42, 0.13], [0.1, 0, 0]);
+    [-1, 1].forEach((sd) => { add(body, new THREE.CylinderGeometry(0.014, 0.016, 0.24, 6), boneM, [sd * 0.12, 1.6, 0.06], [0.2, 0, Math.PI / 2 - sd * 0.12]); add(body, new THREE.ConeGeometry(0.1, 0.2, 3), boneM, [sd * 0.13, 1.5, -0.12], [Math.PI, sd * 0.4, 0], [1, 1, 0.25]); });
+    for (let i = 0; i < 4; i++) add(body, new THREE.CylinderGeometry(0.026, 0.028, 0.03, 7), boneM, [0, 1.65 + i * 0.04, -0.02]); // 首の骨
+    // 頭: 頭蓋骨・眉の骨・頬骨・深い眼窩（奥に赤い光）・鼻の穴・上あごの不ぞろいな歯・動く下あご
+    const head = pivot(body, 0, 1.8, 0); P.head = head;
+    add(head, new THREE.SphereGeometry(0.15, 22, 18), boneM, [0, 0.07, -0.01], null, [0.92, 1.0, 1.12]);
+    add(head, new THREE.BoxGeometry(0.2, 0.035, 0.05), boneM, [0, 0.07, 0.12], [0.2, 0, 0]); // 眉の骨
+    [-1, 1].forEach((sd) => {
+      add(head, new THREE.SphereGeometry(0.038, 12, 10), dark, [sd * 0.05, 0.025, 0.122], null, [1.05, 0.9, 0.8]);
+      add(head, new THREE.SphereGeometry(0.009, 6, 5), eyeM, [sd * 0.052, 0.022, 0.13]); glow(head, '#ff2a0a', 0.07, [sd * 0.052, 0.022, 0.15]);
+      add(head, new THREE.CapsuleGeometry ? new THREE.CapsuleGeometry(0.018, 0.07, 4, 8) : new THREE.CylinderGeometry(0.018, 0.018, 0.09, 8), boneM, [sd * 0.085, -0.02, 0.07], [0, 0, Math.PI / 2 + sd * 0.15]); // 頬骨
+    });
+    add(head, new THREE.ConeGeometry(0.022, 0.05, 3), dark, [0, -0.015, 0.142], [Math.PI, 0, 0]);
+    add(head, new THREE.BoxGeometry(0.13, 0.05, 0.09), boneM, [0, -0.06, 0.07]);
+    for (let i = 0; i < 8; i++) add(head, new THREE.BoxGeometry(0.013, rand(0.018, 0.028), 0.01), boneM, [-0.05 + i * 0.0143, -0.09, 0.112 - Math.abs(i - 3.5) * 0.006], [0, 0, rand(-0.15, 0.15)]);
+    const jaw = pivot(head, 0, -0.08, -0.03); P.jaw = jaw;
+    add(jaw, new THREE.TorusGeometry(0.065, 0.016, 5, 12, Math.PI), boneM, [0, -0.025, 0.08], [Math.PI / 2, 0, 0]);
+    [-1, 1].forEach((sd) => add(jaw, new THREE.BoxGeometry(0.016, 0.07, 0.03), boneM, [sd * 0.064, 0.01, 0.07]));
+    for (let i = 0; i < 7; i++) add(jaw, new THREE.BoxGeometry(0.012, 0.02, 0.01), boneM, [-0.043 + i * 0.0143, -0.005, 0.14 - Math.abs(i - 3) * 0.006]);
+    // さびた鉄の兜（鼻あて付き）
+    add(head, new THREE.SphereGeometry(0.17, 18, 10, 0, Math.PI * 2, 0, Math.PI * 0.48), rust, [0, 0.09, -0.01], null, [0.98, 1.05, 1.12]);
+    add(head, new THREE.TorusGeometry(0.168, 0.012, 5, 22), ironM, [0, 0.1, -0.01], [Math.PI / 2, 0, 0], [1, 1.12, 1]);
+    add(head, new THREE.BoxGeometry(0.03, 0.13, 0.02), ironM, [0, 0.04, 0.18]);
+    // 腕: 上腕骨、前腕の 2 本の骨、指の骨
     const arm = (sd) => {
-      const sh = pivot(body, sd * 0.25, 1.58, 0); bone(sh, 0.3, 0.025, boneM);
-      const el = pivot(sh, 0, -0.3, 0); bone(el, 0.28, 0.022, boneM);
-      const hand = pivot(el, 0, -0.3, 0);
+      const sh = pivot(body, sd * 0.24, 1.58, -0.02); bone(sh, 0.3, 0.024, boneM);
+      const el = pivot(sh, 0, -0.3, 0);
+      [-1, 1].forEach((k) => { add(el, new THREE.CylinderGeometry(0.012, 0.014, 0.27, 6), boneM, [k * 0.014, -0.14, 0]); });
+      add(el, new THREE.SphereGeometry(0.026, 8, 6), boneM);
+      const hand = pivot(el, 0, -0.29, 0);
+      add(hand, new THREE.BoxGeometry(0.05, 0.04, 0.025), boneM);
+      for (let i = 0; i < 4; i++) { add(hand, new THREE.CylinderGeometry(0.006, 0.007, 0.04, 4), boneM, [-0.018 + i * 0.012, -0.04, 0.005]); add(hand, new THREE.CylinderGeometry(0.005, 0.006, 0.03, 4), boneM, [-0.018 + i * 0.012, -0.075, 0.015], [0.5, 0, 0]); }
+      add(hand, new THREE.CylinderGeometry(0.006, 0.007, 0.04, 4), boneM, [sd * -0.032, -0.02, 0.012], [0, 0, sd * 0.6]);
       return { sh, el, hand };
     };
     P.arms = [arm(1), arm(-1)];
-    // 右手: 茶色の手袋で剣を握る（金のつばと柄頭、まっすぐな刃）
-    add(P.arms[0].hand, new THREE.BoxGeometry(0.085, 0.09, 0.07), leather, [0, -0.02, 0.01]);
-    add(P.arms[0].hand, new THREE.CylinderGeometry(0.05, 0.045, 0.06, 8), leatherD, [0, 0.04, 0]);
-    // 左手: 骨の指
-    add(P.arms[1].hand, new THREE.BoxGeometry(0.06, 0.06, 0.03), boneM);
-    for (let i = 0; i < 3; i++) add(P.arms[1].hand, new THREE.CylinderGeometry(0.008, 0.008, 0.06, 4), boneM, [-0.02 + i * 0.02, -0.05, 0.01]);
-    const sw = pivot(P.arms[0].hand, 0, -0.03, 0.02); sw.rotation.x = Math.PI / 2 + 0.35; // 剣先を前へ（少し上向き）
-    add(sw, new THREE.CylinderGeometry(0.022, 0.022, 0.17, 8), leatherD, [0, -0.03, 0]);
-    add(sw, new THREE.SphereGeometry(0.035, 10, 8), gold, [0, -0.13, 0]);
-    add(sw, new THREE.BoxGeometry(0.26, 0.035, 0.05), gold, [0, 0.07, 0]);
-    [-1, 1].forEach((sd) => add(sw, new THREE.SphereGeometry(0.025, 8, 6), gold, [sd * 0.13, 0.07, 0]));
-    add(sw, new THREE.BoxGeometry(0.06, 0.88, 0.012), steel, [0, 0.53, 0]);
-    add(sw, new THREE.BoxGeometry(0.012, 0.8, 0.014), std({ color: 0x6a707a, roughness: 0.4, metalness: 0.8 }), [0, 0.5, 0]);
-    add(sw, new THREE.ConeGeometry(0.0305, 0.11, 4), steel, [0, 1.025, 0], [0, Math.PI / 4, 0], [1, 1, 0.22]);
-    // 盾: 上がまっすぐで下がとがった赤い盾。グレーの金属のふち
-    const shieldShape = (k) => { const s = new THREE.Shape(); s.moveTo(-0.26 * k, 0.3 * k); s.lineTo(0.26 * k, 0.3 * k); s.quadraticCurveTo(0.28 * k, -0.06 * k, 0, -0.44 * k); s.quadraticCurveTo(-0.28 * k, -0.06 * k, -0.26 * k, 0.3 * k); return s; };
-    const shield = pivot(P.arms[1].hand, -0.16, 0.0, 0.13); shield.rotation.set(1.6, -0.75, 0); P.shield = shield; // 腕を前に出したとき、盾の面が前を向く（外へ少しひらく）
-    const face = new THREE.ExtrudeGeometry(shieldShape(1), { depth: 0.03, bevelEnabled: true, bevelThickness: 0.012, bevelSize: 0.01, bevelSegments: 2, curveSegments: 10 });
-    add(shield, face, red, [0, 0, 0.012]);
-    add(shield, new THREE.ExtrudeGeometry(shieldShape(1.1), { depth: 0.03, bevelEnabled: false, curveSegments: 10 }), rim, [0, -0.01, -0.005]);
-    add(shield, new THREE.BoxGeometry(0.05, 0.12, 0.05), leatherD, [0, 0, -0.03]);
-    // 脚（股・ひざ）と、茶色の長靴
+    // 左肩のさびた肩当て
+    add(body, new THREE.SphereGeometry(0.1, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.5), rust, [-0.25, 1.6, -0.01], [0, 0, 0.35], [1.2, 0.8, 1.1]);
+    // 右手の剣: 刃こぼれしたさびた刃（ぎざぎざ）、黒ずんだ柄
+    const sw = pivot(P.arms[0].hand, 0, -0.05, 0.02); sw.rotation.x = Math.PI / 2 + 0.35;
+    add(sw, new THREE.CylinderGeometry(0.018, 0.018, 0.16, 8), woodM, [0, -0.02, 0]);
+    add(sw, new THREE.SphereGeometry(0.03, 8, 6), ironM, [0, -0.11, 0]);
+    add(sw, new THREE.BoxGeometry(0.22, 0.03, 0.04), ironM, [0, 0.07, 0]);
+    const bs = new THREE.Shape(); bs.moveTo(-0.028, 0); const n = 14; for (let i = 1; i <= n; i++) bs.lineTo(-0.028 + (Math.random() < 0.3 ? 0.008 : 0), (i / n) * 0.82);
+    bs.lineTo(0, 0.92); for (let i = n; i >= 1; i--) bs.lineTo(0.028 - (Math.random() < 0.3 ? 0.009 : 0), (i / n) * 0.82); bs.lineTo(0.028, 0); bs.closePath();
+    add(sw, new THREE.ExtrudeGeometry(bs, { depth: 0.008, bevelEnabled: false }), steel, [0, 0.085, -0.004]);
+    add(sw, new THREE.BoxGeometry(0.03, 0.5, 0.0095), rust, [0.004, 0.3, 0]);
+    // 左手の丸盾: 板を張った木の盾に、鉄のふちと中心の突起。割れ目
+    const shield = pivot(P.arms[1].hand, -0.14, 0.0, 0.12); shield.rotation.set(1.6, -0.7, 0); P.shield = shield;
+    for (let i = 0; i < 5; i++) { const w = 0.1, x = -0.2 + i * w, h = 2 * Math.sqrt(Math.max(0, 0.25 * 0.25 - x * x)); if (i === 3) continue; add(shield, new THREE.BoxGeometry(w - 0.006, Math.max(0.12, h), 0.025), woodM, [x + 0.0, 0, 0]); }
+    add(shield, new THREE.BoxGeometry(0.06, 0.32, 0.025), woodM, [0.12, 0.05, 0], [0, 0, 0.08]); // 割れて短い板
+    add(shield, new THREE.TorusGeometry(0.255, 0.016, 6, 26), ironM);
+    add(shield, new THREE.SphereGeometry(0.06, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2), ironM, [0, 0, 0.012], [Math.PI / 2, 0, 0]);
+    // 脚: 大腿骨、ひざの皿、すねの 2 本の骨、足の骨
     const leg = (sd) => {
-      const hip = pivot(body, sd * 0.11, 0.95, 0); bone(hip, 0.42, 0.03, boneM);
-      const knee = pivot(hip, 0, -0.42, 0); bone(knee, 0.2, 0.026, boneM);
-      add(knee, new THREE.CylinderGeometry(0.065, 0.07, 0.26, 10), leather, [0, -0.32, 0.005]);
-      add(knee, new THREE.TorusGeometry(0.067, 0.014, 5, 12), leatherD, [0, -0.19, 0.005], [Math.PI / 2, 0, 0]);
-      add(knee, new THREE.BoxGeometry(0.12, 0.08, 0.24), leather, [0, -0.44, 0.06]);
-      add(knee, new THREE.BoxGeometry(0.125, 0.025, 0.25), leatherD, [0, -0.475, 0.06]);
+      const hip = pivot(body, sd * 0.1, 0.97, 0); bone(hip, 0.42, 0.028, boneM);
+      const knee = pivot(hip, 0, -0.42, 0);
+      add(knee, new THREE.SphereGeometry(0.025, 8, 6), boneM, [0, 0, 0.03], null, [1, 1, 0.6]);
+      [-1, 1].forEach((k) => add(knee, new THREE.CylinderGeometry(k > 0 ? 0.017 : 0.01, k > 0 ? 0.02 : 0.012, 0.42, 6), boneM, [k * 0.018, -0.21, 0]));
+      add(knee, new THREE.BoxGeometry(0.06, 0.03, 0.08), boneM, [0, -0.44, 0.015]);
+      for (let i = 0; i < 4; i++) add(knee, new THREE.CylinderGeometry(0.006, 0.007, 0.07, 4), boneM, [-0.022 + i * 0.015, -0.455, 0.08], [Math.PI / 2, 0, 0]);
       return { hip, knee };
     };
     P.legs = [leg(1), leg(-1)];
+    // ぼろ布（腰と背中）
+    const rag = (w, h, p, r) => { const geo = new THREE.PlaneGeometry(w, h, 4, 5); const ga = geo.attributes.position; for (let i = 0; i < ga.count; i++) { const y = ga.getY(i); if (y < -h * 0.3) ga.setY(i, y - Math.random() * 0.08); ga.setZ(i, ga.getZ(i) + rand(-0.015, 0.015)); } geo.computeVertexNormals(); return add(body, geo, cloth, p, r); };
+    rag(0.3, 0.34, [0, 0.83, 0.1], [0.15, 0, 0]); rag(0.32, 0.36, [0, 0.83, -0.11], [-0.15, 0, 0]);
   }
 
   // ======================================================================
-  //  影コウモリ（参考: 大きな耳のふわふわのコウモリ）
-  //  チェック項目: ベージュのふわふわの丸い体／茶色の顔／内側がピンクの大きな耳／黒くつやのある目／
-  //               口を開けて牙／灰色の膜の翼と赤茶の指の骨／ピンクの小さな足
+  //  影コウモリ（第32版: リアルでダークに。吸血コウモリ）
+  //  チェック項目: 黒茶の毛（腹は少し明るい）／鼻の葉としわのある大きな耳／赤みのある黒い目／赤い歯ぐきと長い牙／
+  //               血管の透ける膜の翼・つめのある親指・指の骨／つめのある足と、脚のあいだの膜
   // ======================================================================
   function bat(std, g, P) {
-    const fur = std({ color: 0xe8d8b0, roughness: 1, flatShading: true });
-    const furD = std({ color: 0xc8ac80, roughness: 1, flatShading: true });
-    const faceM = std({ color: 0x7a4628, roughness: 0.9 });
-    const pink = std({ color: 0xf0a2a6, roughness: 0.7 });
-    const memb = std({ color: 0x3c3c46, roughness: 0.8, transparent: true, opacity: 0.96, side: THREE.DoubleSide });
-    const finger = std({ color: 0xa86c5c, roughness: 0.7 });
-    const eyeM = std({ color: 0x080606, roughness: 0.08 });
-    const shine = std({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0.8 });
-    const mouthM = std({ color: 0x5a141e, roughness: 0.8 });
-    const fang = std({ color: 0xffffff, roughness: 0.3 });
-    const fluff = (parent, r, n, c, sy) => {
-      add(parent, jitter(new THREE.IcosahedronGeometry(r, 2), r * 0.08), fur, c, null, sy);
-      for (let i = 0; i < n; i++) {
-        const u = rand(-0.95, 0.95), a = rand(0, Math.PI * 2), q = Math.sqrt(1 - u * u), d = new V3(Math.cos(a) * q, u, Math.sin(a) * q);
-        const t = add(parent, new THREE.ConeGeometry(r * 0.22, r * 0.45, 4), i % 3 ? fur : furD, [c[0] + d.x * r * 0.92, c[1] + d.y * r * 0.92 * (sy ? sy[1] : 1), c[2] + d.z * r * 0.92]);
-        t.quaternion.setFromUnitVectors(new V3(0, 1, 0), d);
-      }
-    };
-    const body = new THREE.Group(); g.add(body); P.body = body;
-    fluff(body, 0.27, 30, [0, -0.02, -0.04], [0.95, 1.05, 1.05]);
-    const head = pivot(body, 0, 0.22, 0.17); P.head = head;
-    fluff(head, 0.17, 16, [0, 0, 0]);
-    add(head, new THREE.SphereGeometry(0.12, 16, 12), faceM, [0, -0.015, 0.1], null, [1.2, 0.9, 0.55]);
-    [-1, 1].forEach((sd) => {
-      // 大きな耳（外は毛、内はピンク）
-      add(head, new THREE.ConeGeometry(0.095, 0.34, 6), furD, [sd * 0.11, 0.21, -0.01], [0, 0, -sd * 0.42], [1, 1, 0.42]);
-      add(head, new THREE.ConeGeometry(0.065, 0.27, 6), pink, [sd * 0.105, 0.2, 0.012], [0, 0, -sd * 0.42], [1, 1, 0.3]);
-      // 目（黒くつやがある）と光の点
-      add(head, new THREE.SphereGeometry(0.034, 12, 10), eyeM, [sd * 0.058, 0.025, 0.155]);
-      add(head, new THREE.SphereGeometry(0.01, 6, 5), shine, [sd * 0.058 - 0.01, 0.038, 0.186]);
-      // 上の牙（下向き）と下の牙（上向き）
-      add(head, new THREE.ConeGeometry(0.012, 0.05, 4), fang, [sd * 0.03, -0.055, 0.175], [Math.PI, 0, 0]);
-      add(head, new THREE.ConeGeometry(0.008, 0.03, 4), fang, [sd * 0.024, -0.105, 0.165]);
+    const fur = std({ color: 0x2a201a, roughness: 1, flatShading: true });
+    const furL = std({ color: 0x4a3a2c, roughness: 1, flatShading: true });
+    const skin = std({ color: 0x3e302e, roughness: 0.75 });
+    const nose = std({ color: 0x5a4442, roughness: 0.6 });
+    const veinTex = FX.canvasTex(256, 256, (c, w) => {
+      c.fillStyle = '#ffffff'; c.fillRect(0, 0, w, w);
+      c.strokeStyle = 'rgba(120,30,30,0.55)';
+      for (let i = 0; i < 14; i++) { c.lineWidth = rand(0.6, 1.8); c.beginPath(); let x = rand(0, w), y = rand(0, w); c.moveTo(x, y); for (let k = 0; k < 6; k++) { x += rand(-30, 30); y += rand(-30, 30); c.lineTo(x, y); } c.stroke(); }
+      for (let i = 0; i < 400; i++) { c.fillStyle = `rgba(0,0,0,${rand(0.03, 0.12)})`; c.fillRect(rand(0, w), rand(0, w), rand(1, 3), rand(1, 3)); }
     });
-    add(head, new THREE.SphereGeometry(0.02, 8, 6), pink, [0, -0.02, 0.195], null, [1.3, 0.8, 1]);
-    P.mouth = add(head, new THREE.SphereGeometry(0.05, 12, 8), mouthM, [0, -0.08, 0.15], null, [1.1, 0.75, 0.5]);
-    // 翼: 腕の骨（2 本）と指の骨（3 本）、そのあいだの膜。外側は折れる
+    veinTex.wrapS = veinTex.wrapT = THREE.RepeatWrapping; veinTex.repeat.set(2, 2);
+    const memb = std({ color: 0x4a3434, map: veinTex, emissive: 0x1a0606, emissiveIntensity: 0.4, roughness: 0.7, transparent: true, opacity: 0.88, side: THREE.DoubleSide });
+    const fingerM = std({ color: 0x2e2422, roughness: 0.6 });
+    const eyeM = std({ color: 0x0a0404, roughness: 0.05, emissive: 0x3a0404, emissiveIntensity: 0.8 });
+    const gum = std({ color: 0x6a1820, roughness: 0.6 });
+    const fang = std({ color: 0xf0eadc, roughness: 0.3 });
+    const claw = std({ color: 0x141010, roughness: 0.4 });
+    const tufts = (parent, r, n, c, mat2) => { for (let i = 0; i < n; i++) { const u = rand(-0.9, 0.95), a = rand(0, Math.PI * 2), q = Math.sqrt(1 - u * u), d = new V3(Math.cos(a) * q, u, Math.sin(a) * q); const t = add(parent, new THREE.ConeGeometry(r * 0.16, r * 0.42, 4), i % 4 === 0 ? mat2 : fur, [c[0] + d.x * r * 0.9, c[1] + d.y * r * 0.9, c[2] + d.z * r * 0.9]); t.quaternion.setFromUnitVectors(new V3(0, 1, 0), d.add(new V3(0, -0.4, -0.3)).normalize()); } };
+    const body = new THREE.Group(); g.add(body); P.body = body;
+    add(body, jitter(new THREE.IcosahedronGeometry(0.22, 2), 0.02), fur, [0, -0.02, -0.06], null, [0.85, 1.25, 0.9]);
+    add(body, jitter(new THREE.IcosahedronGeometry(0.16, 1), 0.015), furL, [0, -0.04, 0.06], null, [0.9, 1.3, 0.6]); // 腹
+    tufts(body, 0.24, 36, [0, -0.02, -0.06], furL);
+    const head = pivot(body, 0, 0.24, 0.1); P.head = head;
+    add(head, jitter(new THREE.IcosahedronGeometry(0.13, 2), 0.01), fur, null, null, [1, 0.95, 1.05]);
+    tufts(head, 0.13, 14, [0, 0, -0.02], fur);
+    add(head, new THREE.ConeGeometry(0.065, 0.12, 8), fur, [0, -0.025, 0.12], [Math.PI / 2, 0, 0], [1, 1, 0.8]); // 鼻づら
+    add(head, new THREE.ConeGeometry(0.035, 0.07, 3), nose, [0, 0.02, 0.17], [-0.3, 0, 0], [1.2, 1, 0.35]); // 鼻の葉
+    [-1, 1].forEach((sd) => {
+      add(head, new THREE.SphereGeometry(0.012, 6, 5), dark0(std), [sd * 0.014, -0.012, 0.18]); // 鼻の穴
+      // 大きな耳（しわのすじ入り）
+      const ear = pivot(head, sd * 0.08, 0.1, -0.01); ear.rotation.set(-0.2, sd * 0.3, -sd * 0.38);
+      add(ear, new THREE.ConeGeometry(0.075, 0.26, 7, 1, true), skin, [0, 0.11, 0], null, [1, 1, 0.45]);
+      for (let k = 0; k < 4; k++) add(ear, new THREE.BoxGeometry(0.06 - k * 0.01, 0.006, 0.006), fingerM, [0, 0.04 + k * 0.045, 0.02]);
+      // 目（黒く、赤みの反射）
+      add(head, new THREE.SphereGeometry(0.02, 10, 8), eyeM, [sd * 0.05, 0.035, 0.105]);
+      glow(head, '#ff2020', 0.06, [sd * 0.05, 0.035, 0.125]);
+      // 牙（上は長く、下は短い）
+      add(head, new THREE.ConeGeometry(0.01, 0.055, 5), fang, [sd * 0.022, -0.075, 0.15], [Math.PI + 0.15, 0, 0]);
+      add(head, new THREE.ConeGeometry(0.006, 0.025, 4), fang, [sd * 0.018, -0.105, 0.14], [-0.15, 0, 0]);
+    });
+    P.mouth = add(head, new THREE.SphereGeometry(0.042, 12, 8), gum, [0, -0.085, 0.12], null, [1.05, 0.7, 0.8]);
+    // 翼: 腕の骨・つめのある親指・3 本の長い指、そのあいだの血管の透ける膜（ふちは波形）
     const wing = (sd) => {
-      const root = pivot(body, sd * 0.18, 0.06, 0);
+      const root = pivot(body, sd * 0.15, 0.08, -0.02);
       const armB = pivot(root, 0, 0, 0); armB.rotation.z = -sd * Math.PI / 2;
-      add(armB, new THREE.CylinderGeometry(0.02, 0.026, 0.42, 6), finger, [0, -0.21, 0]);
-      const outer = pivot(armB, 0, -0.42, 0); P['outer' + sd] = outer;
-      add(outer, new THREE.CylinderGeometry(0.014, 0.02, 0.4, 6), finger, [0, -0.2, 0]);
-      add(outer, new THREE.SphereGeometry(0.026, 8, 6), finger);
-      const tips = [[0.12, -0.78], [0.47, -0.64], [0.66, -0.32]];
-      tips.forEach(([z, y]) => { const len = Math.hypot(z, y); const f = new THREE.Mesh(new THREE.CylinderGeometry(0.007, 0.012, len, 5), finger); f.position.set(0, -0.4 + y / 2, z / 2); f.rotation.x = Math.atan2(z, -y); outer.add(f); });
-      add(outer, new THREE.ConeGeometry(0.014, 0.07, 4), finger, [0, -0.36, -0.05], [-0.8, 0, 0]); // 親指のつめ
-      const inner = new THREE.Shape(); inner.moveTo(0, 0); inner.lineTo(0, -0.42); inner.lineTo(0.44, -0.46); inner.quadraticCurveTo(0.3, -0.22, 0.4, 0.02); inner.lineTo(0, 0);
-      const mi = new THREE.Mesh(new THREE.ShapeGeometry(inner, 6), memb); mi.rotation.y = -Math.PI / 2; armB.add(mi);
-      const os = new THREE.Shape(); os.moveTo(0, 0); os.lineTo(0, -0.4);
-      tips.forEach(([z, y], i) => { os.lineTo(z, -0.4 + y); if (i < tips.length - 1) os.quadraticCurveTo((z + tips[i + 1][0]) / 2 - 0.06, -0.4 + (y + tips[i + 1][1]) / 2 + 0.13, tips[i + 1][0], -0.4 + tips[i + 1][1]); });
-      os.quadraticCurveTo(0.44, -0.25, 0.44, -0.02); os.lineTo(0, 0);
-      const mo = new THREE.Mesh(new THREE.ShapeGeometry(os, 6), memb); mo.rotation.y = -Math.PI / 2; outer.add(mo);
+      add(armB, new THREE.CylinderGeometry(0.016, 0.022, 0.5, 6), fingerM, [0, -0.25, 0]);
+      const outer = pivot(armB, 0, -0.5, 0); P['outer' + sd] = outer;
+      add(outer, new THREE.CylinderGeometry(0.011, 0.016, 0.46, 6), fingerM, [0, -0.23, 0]);
+      add(outer, new THREE.SphereGeometry(0.022, 8, 6), fingerM);
+      add(outer, new THREE.ConeGeometry(0.01, 0.06, 4), claw, [0, -0.47, 0.04], [0.8, 0, 0]); // 親指のつめ
+      const tips = [[0.16, -0.92], [0.55, -0.78], [0.78, -0.4]];
+      tips.forEach(([z, y]) => { const len = Math.hypot(z, y); const f = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.01, len, 5), fingerM); f.position.set(0, -0.46 + y / 2, z / 2); f.rotation.x = Math.atan2(z, -y); outer.add(f); });
+      const inner = new THREE.Shape(); inner.moveTo(0, 0); inner.lineTo(0, -0.5); inner.lineTo(0.5, -0.56); inner.quadraticCurveTo(0.34, -0.26, 0.46, 0.02); inner.lineTo(0, 0);
+      const mi = new THREE.Mesh(new THREE.ShapeGeometry(inner, 8), memb); mi.rotation.y = -Math.PI / 2; armB.add(mi);
+      const os = new THREE.Shape(); os.moveTo(0, 0); os.lineTo(0, -0.46);
+      tips.forEach(([z, y], i) => { os.lineTo(z, -0.46 + y); if (i < tips.length - 1) os.quadraticCurveTo((z + tips[i + 1][0]) / 2 - 0.1, -0.46 + (y + tips[i + 1][1]) / 2 + 0.16, tips[i + 1][0], -0.46 + tips[i + 1][1]); });
+      os.quadraticCurveTo(0.5, -0.28, 0.5, -0.02); os.lineTo(0, 0);
+      const mo = new THREE.Mesh(new THREE.ShapeGeometry(os, 8), memb); mo.rotation.y = -Math.PI / 2; outer.add(mo);
       return { root, armB, outer };
     };
     P.wings = [wing(1), wing(-1)];
-    [-1, 1].forEach((sd) => { add(body, new THREE.CylinderGeometry(0.018, 0.022, 0.12, 5), pink, [sd * 0.09, -0.29, -0.04], [0.3, 0, 0]); for (let i = 0; i < 3; i++) add(body, new THREE.ConeGeometry(0.008, 0.04, 4), pink, [sd * 0.09 + (i - 1) * 0.014, -0.36, -0.02], [Math.PI - 0.4, 0, 0]); });
+    // 脚とつめ、脚のあいだの膜
+    [-1, 1].forEach((sd) => { add(body, new THREE.CylinderGeometry(0.012, 0.016, 0.14, 5), skin, [sd * 0.07, -0.3, -0.08], [0.4, 0, sd * 0.2]); for (let i = 0; i < 4; i++) add(body, new THREE.ConeGeometry(0.006, 0.035, 4), claw, [sd * 0.08 + (i - 1.5) * 0.01, -0.38, -0.05], [Math.PI - 0.6, 0, 0]); });
+    const tail = new THREE.Shape(); tail.moveTo(-0.1, 0); tail.lineTo(0.1, 0); tail.quadraticCurveTo(0.03, -0.12, 0, -0.18); tail.quadraticCurveTo(-0.03, -0.12, -0.1, 0);
+    add(body, new THREE.ShapeGeometry(tail, 6), memb, [0, -0.3, -0.12], [0.6, 0, 0]);
   }
+  function dark0(std) { return std({ color: 0x050303, roughness: 1 }); }
 
   // ======================================================================
   //  闇の魔導士（参考: 紫とピンクの光をまとう、フードの魔導士）
@@ -455,15 +476,24 @@
     const P = t.parts, sw = o.sw, k = o.k, tm = o.time + o.phase;
     const strike = k > 0 ? Math.sin(k * Math.PI) : 0;
     if (t.kind === 'slime') {
-      // ぷるぷる・跳ねる。ためで縦にのびて、ぱっと広がる
+      // ぶるぶる・跳ねる。ためで縦にのびて、ぱっと広がる
       const hop = o.speed > 0.2 ? Math.abs(Math.sin(o.walk * 0.9)) : 0;
-      const sq = 1 + Math.sin(tm * 5) * 0.05 - hop * 0.12 + strike * 0.3;
+      const sq = 1 + Math.sin(tm * 3) * 0.04 - hop * 0.1 + strike * 0.28;
       P.body.scale.set(1 / Math.sqrt(sq), sq, 1 / Math.sqrt(sq));
-      P.body.position.y = hop * 0.25;
-      const blink = Math.sin(tm * 1.3) > 0.993 ? 0.15 : 1; // まばたき
-      P.eyes.forEach((e) => (e.scale.y = e.userData.sy * blink));
-      P.drool.scale.y = 1.6 + Math.sin(tm * 2.2) * 0.5; P.drool.position.y += Math.cos(tm * 2.2) * 0.0005;
-      P.puddle.scale.setScalar(1 + strike * 0.3);
+      P.body.position.y = hop * 0.18;
+      // 表面がゆっくりうねる（頂点を法線の向きに少しずつ動かす）
+      const O = P.ooze, arr = O.pos.array;
+      for (let n = 0; n < arr.length; n += 3) {
+        const bx = O.base[n], by = O.base[n + 1], bz = O.base[n + 2];
+        const w = (Math.sin(tm * 2.1 + bx * 5 + bz * 3) * 0.024 + Math.sin(tm * 3.4 + by * 8 + bx * 2) * 0.014) * (by > 0.1 ? 1 : 0.3);
+        arr[n] = bx + O.nrm[n] * w; arr[n + 1] = by + O.nrm[n + 1] * w; arr[n + 2] = bz + O.nrm[n + 2] * w;
+      }
+      O.pos.needsUpdate = true;
+      P.core.rotation.y += o.dt * 0.8; P.core.position.y = 0.5 + Math.sin(tm * 1.3) * 0.04;
+      P.coreGlow.scale.setScalar(0.7 * (1 + Math.sin(tm * 2.5) * 0.2 + strike * 0.6));
+      P.skull.rotation.y += o.dt * 0.15;
+      P.bubbles.forEach((bb, n) => { bb.position.y += o.dt * (0.06 + n * 0.012); if (bb.position.y > 0.62) bb.position.y = 0.1; });
+      P.puddle.scale.setScalar(1 + strike * 0.25 + Math.sin(tm * 1.5) * 0.02);
     } else if (t.kind === 'skeleton') {
       P.legs[0].hip.rotation.x = sw * 0.55; P.legs[1].hip.rotation.x = -sw * 0.55;
       P.legs[0].knee.rotation.x = Math.max(0, -sw) * 0.7; P.legs[1].knee.rotation.x = Math.max(0, sw) * 0.7;
