@@ -46,7 +46,8 @@
     skyMat.uniforms.uSun.value = 1 - k;
     LC(a.fog, b.fog, scene.fog.color);
     scene.fog.density = L(a.fogD, b.fogD);
-    LC(a.hemiSky, b.hemiSky, hemi.color); LC(a.hemiGround, b.hemiGround, hemi.groundColor); hemi.intensity = L(a.hemiI, b.hemiI);
+    if (W.stage === 'dungeon') { scene.fog.color.multiplyScalar(0.35); scene.fog.density = 0.034; }
+    LC(a.hemiSky, b.hemiSky, hemi.color); LC(a.hemiGround, b.hemiGround, hemi.groundColor); hemi.intensity = L(a.hemiI, b.hemiI) * (W.stage === 'dungeon' ? 0.75 : 1);
     LC(a.dirC, b.dirC, dirLight.color); dirLight.intensity = L(a.dirI, b.dirI);
     dirLight.position.copy(SUN_POS).lerp(MOON_POS, k).normalize().multiplyScalar(50);
     LC(a.ambC, b.ambC, amb.color); amb.intensity = L(a.ambI, b.ambI);
@@ -586,17 +587,18 @@
       for (const y of [1.2, 3.5, 5.8]) { const t = raySphere(a, d, new V3(p.x, y, p.z), 1.3); if (t != null && (best == null || t < best)) best = t; }
       if (best != null && best <= len) out.push({ prop: p, t: best, pillar: true });
     }
+    for (const so of solids) { const t = solidRay(a, d, so); if (t != null && t <= len) out.push({ prop: so, t, solid: true }); }
     return out.sort((x, y) => x.t - y.t);
   };
   // 壁をつらぬいたときの見た目（ダメージなし）
   W.scratch = function (o, from) {
-    if (!o || !o.mesh) return;
+    if (!o || !o.mesh || o.solid) return;
     o.shake = 0.12;
     FX.emit(from, { count: 22, c1: '#77706a', c2: '#d8d0c0', speed: 6, up: 2, gravity: 14, drag: 0.6, life: 0.9, size: 0.22 });
     FX.emit(from, { count: 10, c1: '#8a7a68', c2: '#c9b9a0', speed: 1.5, life: 1.2, size: 1.1, alpha: 0.35, drag: 1.5 });
   };
   W.damageProp = function (o, dmg, from) {
-    if (!o || !o.alive || o.parts) return;
+    if (!o || !o.alive || o.parts || o.solid) return;
     o.hp -= dmg;
     if (o.hp <= 0) destroyProp(o, from); else chip(o, from);
   };
@@ -633,7 +635,7 @@
   const ARENA_R = 40;          // 闘技場の壁の内側の半径
   W.ARENA_R = ARENA_R;
   W.stage = 'practice';
-  W.bound = () => (W.stage === 'arena' ? ARENA_R - 1.2 : ARENA); // 動ける範囲（半径）
+  W.bound = () => (W.stage === 'arena' ? ARENA_R - 1.2 : W.stage === 'dungeon' ? 200 : ARENA); // 動ける範囲（半径。ダンジョンは壁で囲まれている）
   const stash = {};            // しまってあるステージの、壊せる地形・柱・壁
   const decor = {};            // ステージごとの飾り
   const groundTex = {};        // ステージごとの地面の模様
@@ -663,17 +665,290 @@
     groundMat.map = t.inner; outerMat.map = t.outer;
     groundMat.needsUpdate = true; outerMat.needsUpdate = true;
   }
-  // ステージを切り替える（'arena' / 'practice'）。地形は元どおりにする
+  // ======================================================================
+  //  固い壁（第26版）: 街の建物とダンジョンの壁。壊れず、プレイヤー・弾・光線・ねらいを止める。
+  //  向きのそろった箱 { x, z, hx, hz, y0, y1, solid: true }。ステージごとに一覧を持つ
+  // ======================================================================
+  const stageSolids = { town: [], dungeon: [] };
+  let solids = [];
+  W.solidList = () => solids;
+  function addSolid(list, x, z, hx, hz, y1, y0) {
+    const s = { x, z, hx, hz, y0: y0 || 0, y1, solid: true, alive: true, kind: 'solid' };
+    list.push(s);
+    return s;
+  }
+  const solidBox = (s, pad) => ({ minX: s.x - s.hx - pad, maxX: s.x + s.hx + pad, minY: s.y0 - pad, maxY: s.y1 + pad, minZ: s.z - s.hz - pad, maxZ: s.z + s.hz + pad });
+  function solidRay(o, d, s) {
+    // 箱と半直線の交わり（入る点までの距離）
+    const b = solidBox(s, 0); let t0 = -Infinity, t1 = Infinity;
+    for (const [oo, dd, mn, mx] of [[o.x, d.x, b.minX, b.maxX], [o.y, d.y, b.minY, b.maxY], [o.z, d.z, b.minZ, b.maxZ]]) {
+      if (Math.abs(dd) < 1e-9) { if (oo < mn || oo > mx) return null; continue; }
+      let a = (mn - oo) / dd, c = (mx - oo) / dd; if (a > c) [a, c] = [c, a];
+      t0 = Math.max(t0, a); t1 = Math.min(t1, c); if (t0 > t1) return null;
+    }
+    if (t1 < 0) return null;
+    return Math.max(0, t0);
+  }
+  // 2 点の間に固い壁があるか（敵の見通しなど）。あればその距離
+  W.solidOnSegment = function (a, b) {
+    const d = b.clone().sub(a), len = d.length(); if (len < 1e-6) return null; d.multiplyScalar(1 / len);
+    let best = null;
+    for (const s of solids) { const t = solidRay(a, d, s); if (t != null && t <= len && (best == null || t < best)) best = t; }
+    return best;
+  };
+
+  // ======================================================================
+  //  街（第26版）: 神殿・杖の店・ダンジョンの門・練習場の門と、噴水の広場
+  // ======================================================================
+  W.SPOTS = {
+    town: [
+      { id: 'temple', label: '神殿', x: 0, z: -25, r: 4.5, hint: '神殿に入る（レベルと能力を見る）' },
+      { id: 'shop', label: '杖の店', x: 23.5, z: -4, r: 4.5, hint: '杖の店に入る' },
+      { id: 'dungeon', label: 'ダンジョン', x: -24, z: -4, r: 4.5, hint: 'ダンジョンに挑む' },
+      { id: 'practice', label: '練習場', x: 0, z: 30, r: 4.5, hint: '練習場へ行く' },
+    ],
+    practice: [{ id: 'town', label: '街', x: 0, z: 46, r: 4.5, hint: '街へ戻る' }],
+  };
+  W.TOWN_SPAWN = [0, 12, 0];
+  W.TEMPLE_SPAWN = [0, -20, Math.PI];
+  W.PRACTICE_SPAWN = [0, 40, 0];
+  const townAnim = [];
+  function buildTown() {
+    const g = new THREE.Group(); decor.town = g; scene.add(g);
+    const S = stageSolids.town;
+    // 石畳
+    const cob = FX.canvasTex(256, 256, (c, w) => {
+      c.fillStyle = '#7a6f62'; c.fillRect(0, 0, w, w);
+      for (let i = 0; i < 70; i++) {
+        const x = rand(0, w), y = rand(0, w), r = rand(10, 22), v = rand(110, 170) | 0;
+        c.fillStyle = `rgb(${v},${(v * 0.92) | 0},${(v * 0.82) | 0})`; c.beginPath(); c.ellipse(x, y, r, r * rand(0.7, 1), rand(0, 3), 0, Math.PI * 2); c.fill();
+        c.strokeStyle = 'rgba(40,30,20,0.6)'; c.lineWidth = 2; c.stroke();
+      }
+    });
+    cob.wrapS = cob.wrapT = THREE.RepeatWrapping; cob.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+    const cIn = cob.clone(); cIn.needsUpdate = true; cIn.repeat.set(CH_SIZE / TILE, CH_SIZE / TILE);
+    const cOut = cob.clone(); cOut.needsUpdate = true; cOut.repeat.set(1 / TILE, 1 / TILE);
+    groundTex.town = { inner: cIn, outer: cOut };
+    const stone = new THREE.MeshStandardMaterial({ color: 0xd8d2c4, roughness: 0.85, flatShading: true });
+    const stoneD = new THREE.MeshStandardMaterial({ color: 0x8f8678, roughness: 0.9, flatShading: true });
+    const roofM = new THREE.MeshStandardMaterial({ color: 0x8a3a2e, roughness: 0.8, flatShading: true });
+    const roofB = new THREE.MeshStandardMaterial({ color: 0x2e4a7a, roughness: 0.8, flatShading: true });
+    const wood = woodMat;
+    const goldM = new THREE.MeshStandardMaterial({ color: 0xe8b04a, emissive: 0x8a5a10, emissiveIntensity: 0.5, roughness: 0.4, metalness: 0.4 });
+    const box = (w, h, d, m, x, y, z, parent) => { const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); o.position.set(x, y, z); (parent || g).add(o); return o; };
+    const cyl = (r0, r1, h, m, x, y, z, seg) => { const o = new THREE.Mesh(new THREE.CylinderGeometry(r0, r1, h, seg || 12), m); o.position.set(x, y, z); g.add(o); return o; };
+    const sign = (text, x, y, z, w) => { const s = labelSprite(text, w || 6, (w || 6) * 0.28, { size: 72 }); s.position.set(x, y, z); g.add(s); return s; };
+    const portal = (x, y, z, col, rotY, R) => {
+      const m = new THREE.Mesh(new THREE.CircleGeometry(R, 40), new THREE.MeshBasicMaterial({ map: FX.circleTex, color: col, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+      m.position.set(x, y, z); m.rotation.y = rotY; g.add(m);
+      const fill = new THREE.Mesh(new THREE.CircleGeometry(R * 0.96, 40), new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.25, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+      fill.position.copy(m.position); fill.rotation.y = rotY; g.add(fill);
+      const gl = FX.glowSprite('#' + new THREE.Color(col).getHexString(), R * 3); gl.position.set(x, y, z); g.add(gl);
+      townAnim.push({ m, spin: 0.8, fill });
+      return m;
+    };
+    // ---- 噴水 ----
+    cyl(3.4, 3.6, 0.8, stoneD, 0, 0.4, 0, 24);
+    const water = new THREE.Mesh(new THREE.CircleGeometry(3.05, 32), new THREE.MeshStandardMaterial({ color: 0x3a8adf, emissive: 0x1a5aaf, emissiveIntensity: 0.6, roughness: 0.15, transparent: true, opacity: 0.85 }));
+    water.rotation.x = -Math.PI / 2; water.position.y = 0.72; g.add(water);
+    cyl(0.4, 0.55, 2.4, stone, 0, 1.6, 0); cyl(1.3, 0.5, 0.35, stone, 0, 2.9, 0, 16);
+    const fglow = FX.glowSprite('#7fd8ff', 5); fglow.position.set(0, 3.4, 0); g.add(fglow);
+    townAnim.push({ fountain: true, x: 0, z: 0 });
+    addSolid(S, 0, 0, 3.0, 3.0, 0.8);
+    // ---- 神殿（北）: 段・柱・三角の屋根・光る祭壇 ----
+    const tz = -34;
+    box(18, 0.5, 13, stone, 0, 0.25, tz); box(16, 0.5, 11, stone, 0, 0.75, tz); box(14, 0.5, 9, stone, 0, 1.25, tz);
+    addSolid(S, 0, tz, 9, 6.5, 0.5);
+    for (let i = 0; i < 6; i++) { const x = -6 + i * 2.4; cyl(0.45, 0.5, 6.2, stone, x, 4.6, tz + 3.6); addSolid(S, x, tz + 3.6, 0.5, 0.5, 7.8); }
+    box(14, 6.2, 0.8, stoneD, 0, 4.6, tz - 3.8); addSolid(S, 0, tz - 3.8, 7, 0.45, 7.8);
+    [-1, 1].forEach((sd) => { box(0.8, 6.2, 7.6, stoneD, sd * 6.6, 4.6, tz); addSolid(S, sd * 6.6, tz, 0.45, 3.8, 7.8); });
+    box(15, 0.6, 9.6, stone, 0, 8, tz);
+    const roof = new THREE.Mesh(new THREE.ConeGeometry(1, 3, 4), stone); roof.rotation.y = Math.PI / 4; roof.scale.set(10.6, 1, 6.8); roof.position.set(0, 9.8, tz); g.add(roof);
+    const altar = box(2.4, 1.2, 1.4, goldM, 0, 2.1, tz - 1.6);
+    const aglow = FX.glowSprite('#ffe9a0', 6); aglow.position.set(0, 3.4, tz - 1.6); g.add(aglow);
+    const sigil = new THREE.Mesh(new THREE.PlaneGeometry(6, 6), new THREE.MeshBasicMaterial({ map: FX.circleTex, color: 0xffd36b, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false }));
+    sigil.rotation.x = -Math.PI / 2; sigil.position.set(0, 1.52, tz + 0.5); g.add(sigil); townAnim.push({ m: sigil, spin: 0.3, flat: true });
+    sign('神殿', 0, 7.2, tz + 4.6, 4.4);
+    void altar;
+    // ---- 杖の店（東） ----
+    const sx = 32, sz = -4;
+    box(10, 5.2, 9, new THREE.MeshStandardMaterial({ color: 0xe9dcc0, roughness: 0.9 }), sx, 2.6, sz);
+    addSolid(S, sx, sz, 5, 4.5, 5.2);
+    const sroof = new THREE.Mesh(new THREE.ConeGeometry(7.6, 3.6, 4), roofB); sroof.rotation.y = Math.PI / 4; sroof.position.set(sx, 7, sz); g.add(sroof);
+    box(0.2, 3, 2.2, wood, sx - 5.05, 1.5, sz);
+    box(0.3, 1.2, 3.2, wood, sx - 5.3, 4.4, sz);
+    const wandSign = box(0.1, 0.12, 2.4, goldM, sx - 5.5, 4.4, sz); wandSign.rotation.x = 0.6;
+    [-2.6, 2.6].forEach((dz) => { const win = box(0.12, 1.4, 1.4, new THREE.MeshBasicMaterial({ color: 0xffd38a }), sx - 5.06, 2.8, sz + dz); void win; });
+    sign('杖の店', sx - 6, 6.2, sz, 5);
+    // ---- ダンジョンの門（西）: 石のアーチと、紫の渦 ----
+    const dx = -31, dz0 = -4;
+    [-1, 1].forEach((sd) => { box(1.4, 7, 1.4, stoneD, dx, 3.5, dz0 + sd * 3.4); addSolid(S, dx, dz0 + sd * 3.4, 0.7, 0.7, 7); });
+    box(1.6, 1.2, 8.2, stoneD, dx, 7.5, dz0);
+    box(1, 0.6, 8.6, goldM, dx, 8.3, dz0);
+    portal(dx, 3.5, dz0, 0xb06bff, Math.PI / 2, 3);
+    sign('ダンジョン', dx + 1.2, 9.6, dz0, 6);
+    // ---- 練習場の門（南） ----
+    const pz = 37;
+    [-1, 1].forEach((sd) => { box(1.2, 6, 1.2, stone, sd * 3.2, 3, pz); addSolid(S, sd * 3.2, pz, 0.6, 0.6, 6); });
+    box(7.8, 1, 1.4, stone, 0, 6.4, pz);
+    portal(0, 3, pz, 0x4fa8ff, 0, 2.6);
+    sign('練習場', 0, 8.2, pz - 0.8, 5);
+    // ---- まわりの家と街灯 ----
+    const houses = [[-20, 22, 0.2], [20, 22, -0.2], [-40, 12, 1.4], [40, 14, -1.4], [-38, -24, 0.9], [38, -24, -0.9], [-18, -44, 0.1], [18, -44, -0.1], [-46, -6, 1.57]];
+    houses.forEach(([x, z, ry], i) => {
+      const w = 6 + (i % 3), d = 5 + (i % 2) * 1.5, h = 4 + (i % 2);
+      const hg = new THREE.Group(); hg.position.set(x, 0, z); hg.rotation.y = ry; g.add(hg);
+      box(w, h, d, new THREE.MeshStandardMaterial({ color: [0xe6d6b8, 0xd8c6a6, 0xcfd6e0][i % 3], roughness: 0.9 }), 0, h / 2, 0, hg);
+      const rf = new THREE.Mesh(new THREE.ConeGeometry(Math.max(w, d) * 0.78, 2.6, 4), i % 2 ? roofM : roofB); rf.rotation.y = Math.PI / 4; rf.scale.set(w / Math.max(w, d), 1, d / Math.max(w, d)); rf.position.y = h + 1.3; hg.add(rf);
+      box(0.15, 2, 1.2, wood, 0, 1, d / 2 + 0.05, hg).rotation.y = Math.PI / 2;
+      box(1, 1, 0.12, new THREE.MeshBasicMaterial({ color: 0xffd38a }), w * 0.28, h * 0.6, d / 2 + 0.06, hg);
+      // 回転した家の当たり判定は、回転を考えた外接の箱でおおよそ合わせる
+      const c = Math.abs(Math.cos(ry)), s2 = Math.abs(Math.sin(ry));
+      addSolid(S, x, z, (w / 2) * c + (d / 2) * s2, (w / 2) * s2 + (d / 2) * c, h);
+    });
+    const lampAt = (x, z) => {
+      cyl(0.12, 0.16, 4, new THREE.MeshStandardMaterial({ color: 0x2a2a34, roughness: 0.6, metalness: 0.4 }), x, 2, z, 8);
+      const head = box(0.5, 0.6, 0.5, new THREE.MeshBasicMaterial({ color: 0xffd38a }), x, 4.2, z); void head;
+      const gl = FX.glowSprite('#ffc860', 3.6); gl.position.set(x, 4.2, z); g.add(gl);
+      addSolid(S, x, z, 0.2, 0.2, 4);
+    };
+    [[-8, 8], [8, 8], [-8, -12], [8, -12], [-15, -4], [15, -4], [-6, 24], [6, 24]].forEach(([x, z]) => lampAt(x, z));
+    g.visible = false;
+  }
+
+  // ======================================================================
+  //  ダンジョン（第26版）: 迷路の階。壁は固い壁、床は暗い石。階段・帰還ポータルの飾りもここで作る
+  // ======================================================================
+  let dunTex = null, wallMat = null, dunGroup = null;
+  const dunAnim = [];
+  W.dun = null;
+  function ensureDungeonDecor() {
+    if (decor.dungeon) return;
+    dunGroup = new THREE.Group(); decor.dungeon = dunGroup; scene.add(dunGroup); dunGroup.visible = false;
+    const t = FX.canvasTex(256, 256, (c, w) => {
+      c.fillStyle = '#34303c'; c.fillRect(0, 0, w, w);
+      for (let i = 0; i < 1800; i++) { const v = rand(30, 80) | 0; c.fillStyle = `rgba(${v},${v - 4},${v + 10},${rand(0.1, 0.4)})`; c.fillRect(rand(0, w), rand(0, w), rand(1, 4), rand(1, 4)); }
+      c.strokeStyle = 'rgba(10,8,16,0.9)'; c.lineWidth = 4;
+      for (let k = 0; k <= 4; k++) { c.beginPath(); c.moveTo(0, k * 64); c.lineTo(w, k * 64); c.stroke(); c.beginPath(); c.moveTo(k * 64, 0); c.lineTo(k * 64, w); c.stroke(); }
+    });
+    t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+    const dIn = t.clone(); dIn.needsUpdate = true; dIn.repeat.set(CH_SIZE / 4, CH_SIZE / 4);
+    const dOut = t.clone(); dOut.needsUpdate = true; dOut.repeat.set(1 / 4, 1 / 4);
+    groundTex.dungeon = { inner: dIn, outer: dOut };
+    dunTex = FX.canvasTex(256, 256, (c, w) => {
+      c.fillStyle = '#5a5262'; c.fillRect(0, 0, w, w);
+      for (let r = 0; r < 8; r++) for (let k = 0; k < 4; k++) {
+        const x = k * 64 + (r % 2) * 32, y = r * 32, v = rand(70, 110) | 0;
+        c.fillStyle = `rgb(${v},${v - 6},${v + 8})`; c.fillRect(x + 2, y + 2, 60, 28);
+      }
+      for (let i = 0; i < 900; i++) { c.fillStyle = `rgba(0,0,0,${rand(0.05, 0.2)})`; c.fillRect(rand(0, w), rand(0, w), rand(1, 3), rand(1, 3)); }
+    });
+    dunTex.wrapS = dunTex.wrapT = THREE.RepeatWrapping;
+    wallMat = new THREE.MeshStandardMaterial({ map: dunTex, roughness: 0.9, color: 0xb8b0c8 });
+  }
+  const WALL_H = 5.5;
+  // 階を組み立てる（d: MG.RPG.makeFloor の結果）。戻り値: 入口・階段・ポータルの位置
+  W.buildDungeon = function (d) {
+    ensureDungeonDecor();
+    const R = MG.RPG;
+    // 前の階を片づける
+    while (dunGroup.children.length) { const o = dunGroup.children[0]; dunGroup.remove(o); if (o.geometry && !o.isSprite) o.geometry.dispose(); if (o.material && !o.isSprite && o.material !== wallMat) o.material.dispose(); }
+    dunAnim.length = 0;
+    stageSolids.dungeon.length = 0;
+    const N = d.N, T = R.TILE, isFloor = (x, z) => x >= 0 && z >= 0 && x < N && z < N && d.tiles[z * N + x] === 1;
+    // 床に接している壁のタイルだけを、横に続く分まとめて 1 つの箱にする
+    const need = (x, z) => !isFloor(x, z) && [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]].some(([a, b]) => isFloor(x + a, z + b));
+    const boxes = [];
+    for (let z = 0; z < N; z++) {
+      let x = 0;
+      while (x < N) {
+        if (!need(x, z)) { x++; continue; }
+        let x1 = x; while (x1 + 1 < N && need(x1 + 1, z)) x1++;
+        boxes.push([x, z, x1]); x = x1 + 1;
+      }
+    }
+    const geo = new THREE.BoxGeometry(1, 1, 1);
+    const inst = new THREE.InstancedMesh(geo, wallMat, boxes.length);
+    const mtx = new THREE.Matrix4();
+    boxes.forEach(([x0, z, x1], i) => {
+      const [wx0, wz] = R.tileToWorld(x0, z), [wx1] = R.tileToWorld(x1, z);
+      const cx = (wx0 + wx1) / 2, len = (x1 - x0 + 1) * T;
+      mtx.makeScale(len, WALL_H, T); mtx.setPosition(cx, WALL_H / 2, wz);
+      inst.setMatrixAt(i, mtx);
+      addSolid(stageSolids.dungeon, cx, wz, len / 2, T / 2, WALL_H);
+    });
+    inst.instanceMatrix.needsUpdate = true;
+    dunGroup.add(inst);
+    // 壁の上のふち（明るい石）
+    const capMat = new THREE.MeshStandardMaterial({ color: 0x8a8098, roughness: 0.8 });
+    const caps = new THREE.InstancedMesh(geo, capMat, boxes.length);
+    boxes.forEach(([x0, z, x1], i) => { const [wx0, wz] = R.tileToWorld(x0, z), [wx1] = R.tileToWorld(x1, z); mtx.makeScale((x1 - x0 + 1) * T + 0.2, 0.3, T + 0.2); mtx.setPosition((wx0 + wx1) / 2, WALL_H + 0.15, wz); caps.setMatrixAt(i, mtx); });
+    caps.instanceMatrix.needsUpdate = true; dunGroup.add(caps);
+    // たいまつ: 部屋のふちの壁ぞいに置く
+    const torchMat = new THREE.MeshBasicMaterial({ color: 0xffb050 });
+    let torches = 0;
+    d.rooms.forEach((r) => {
+      if (r.small) return;
+      [[r.x0 - 1, r.z0 + Math.floor(r.h / 2), 0.7, 0], [r.x0 + r.w, r.z0 + Math.floor(r.h / 2), -0.7, 0], [r.x0 + Math.floor(r.w / 2), r.z0 - 1, 0, 0.7], [r.x0 + Math.floor(r.w / 2), r.z0 + r.h, 0, -0.7]].forEach(([tx, tzz, ox, oz]) => {
+        if (isFloor(tx, tzz) || torches > 44) return;
+        const [wx, wz] = R.tileToWorld(tx, tzz);
+        const p = new V3(wx + ox * (T / 0.7) * 0.55, 3.2, wz + oz * (T / 0.7) * 0.55);
+        const m = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.5, 0.25), torchMat); m.position.copy(p); dunGroup.add(m);
+        const gl = FX.glowSprite('#ff9a3a', 3.2); gl.position.copy(p).add(new V3(0, 0.35, 0)); dunGroup.add(gl);
+        dunAnim.push({ torch: gl, ph: rand(0, 10) });
+        torches++;
+      });
+    });
+    // 入口・階段・帰還ポータル
+    const at = (id) => { const [tx, tzz] = d.center(d.rooms[id]); const [x, z] = R.tileToWorld(tx, tzz); return new V3(x, 0, z); };
+    const start = at(d.start), stairs = at(d.stairs), portal = at(d.portal);
+    const flat = (p, col, s, op) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(s, s), new THREE.MeshBasicMaterial({ map: FX.circleTex, color: col, transparent: true, opacity: op, blending: THREE.AdditiveBlending, depthWrite: false })); m.rotation.x = -Math.PI / 2; m.position.set(p.x, 0.06, p.z); dunGroup.add(m); return m; };
+    const s0 = flat(start, 0x7fd8ff, 4, 0.35); dunAnim.push({ m: s0, spin: 0.2 });
+    // 階段: 地面に開いた光る穴（下へ続く）
+    const st1 = flat(stairs, 0xffb84a, 5, 0.9), hole = new THREE.Mesh(new THREE.CircleGeometry(1.7, 32), new THREE.MeshBasicMaterial({ color: 0x05030a }));
+    hole.rotation.x = -Math.PI / 2; hole.position.set(stairs.x, 0.07, stairs.z); dunGroup.add(hole);
+    const sbeam = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 1.6, 6, 24, 1, true), new THREE.MeshBasicMaterial({ color: 0xffb84a, transparent: true, opacity: 0.18, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+    sbeam.position.set(stairs.x, 3, stairs.z); dunGroup.add(sbeam);
+    const slab = labelSprite('下の階へ', 3.6, 1, { size: 60 }); slab.position.set(stairs.x, 3.6, stairs.z); dunGroup.add(slab);
+    dunAnim.push({ m: st1, spin: -0.6 });
+    const stairsParts = [st1, hole, sbeam, slab];
+    // 帰還ポータル: 立った青い渦
+    const pg = new THREE.Group(); pg.position.set(portal.x, 0, portal.z); dunGroup.add(pg);
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(1.8, 0.16, 8, 40), new THREE.MeshStandardMaterial({ color: 0xbfe6ff, emissive: 0x4fa8ff, emissiveIntensity: 1.2 }));
+    ring.position.y = 2.2; pg.add(ring);
+    const swirl = new THREE.Mesh(new THREE.CircleGeometry(1.7, 40), new THREE.MeshBasicMaterial({ map: FX.circleTex, color: 0x4fa8ff, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+    swirl.position.y = 2.2; pg.add(swirl);
+    const pgl = FX.glowSprite('#4fa8ff', 6); pgl.position.y = 2.2; pg.add(pgl);
+    const plab = labelSprite('帰還ポータル', 4.2, 1.1, { size: 56, border: '#7fd8ff' }); plab.position.y = 4.9; pg.add(plab);
+    dunAnim.push({ m: swirl, spin: 1.4 }, { face: pg });
+    W.dun = { data: d, start, stairs, portal, stairsOpen: !d.boss, stairsParts, portalGroup: pg };
+    W.setStairsOpen(!d.boss);
+    if (W.stage === 'dungeon') solids = stageSolids.dungeon;
+    return W.dun;
+  };
+  // ボスの階では、ボスを倒すまで階段が閉じている
+  W.setStairsOpen = function (v) {
+    if (!W.dun) return;
+    W.dun.stairsOpen = !!v;
+    W.dun.stairsParts.forEach((o) => { o.visible = !!v; });
+  };
+
+  // ステージを切り替える（'practice' / 'arena' / 'town' / 'dungeon'）。地形は元どおりにする
+  const STAGES = ['practice', 'arena', 'town', 'dungeon'];
   W.setStage = function (name) {
-    name = name === 'arena' ? 'arena' : 'practice';
+    name = STAGES.includes(name) ? name : 'practice';
     if (name === W.stage) return false;
     stashStage(W.stage);
     decor[W.stage].visible = false;
     W.stage = name;
     if (name === 'arena' && !decor.arena) buildArena();
+    else if (name === 'town' && !decor.town) { buildTown(); stash.town = { props: [], pillars: [], walls: [] }; unstashStage('town'); }
+    else if (name === 'dungeon' && !stash.dungeon) { ensureDungeonDecor(); }
     else unstashStage(name);
+    solids = stageSolids[name] || [];
     decor[name].visible = true;
     applyGround(name);
+    applyTime(timeK);
     W.resetTerrain();
     return true;
   };
@@ -910,6 +1185,7 @@
       if (skip && skip.has(pl)) continue;
       if (pl.alive && Math.hypot(pl.x - pos.x, pl.z - pos.z) < 1.2 + r && pos.y < 7.6) return pl;
     }
+    for (const so of solids) if (inBox(pos, solidBox(so, r))) return so;
     return null;
   };
 
@@ -924,6 +1200,7 @@
     };
     for (const o of props) if (o.alive) { if (o.kind === 'slab') { const t = rayBox(origin, dir, slabBox(o, 0)); if (t != null && t > 0 && t < best) best = t; } else test(o.mesh.position, o.r); }
     for (const p of pillars) if (p.alive) for (const y of [1.2, 3.5, 5.8]) test(new V3(p.x, y, p.z), 1.3);
+    for (const so of solids) { const t = solidRay(origin, dir, so); if (t != null && t > 0 && t < best) best = t; }
     return best < maxD ? best : null;
   };
 
@@ -978,6 +1255,7 @@
     }
     for (const b of solidBarriers()) testBox(b, b.half);
     for (const p of pillars) if (p.alive && p.vanish == null && p.parts.length && Math.hypot(p.x - x, p.z - z) < 1.25 + pad * 0.5) tryTop(pillarTop(p));
+    for (const so of solids) if (Math.abs(x - so.x) <= so.hx + pad && Math.abs(z - so.z) <= so.hz + pad) tryTop(so.y1);
     return best;
   };
 
@@ -1011,6 +1289,12 @@
       if (!p.alive || p.vanish != null || !p.parts.length || pos.y >= pillarTop(p) - 0.05) continue;
       const dx = pos.x - p.x, dz = pos.z - p.z, d = Math.hypot(dx, dz), min = 1.15 + r;
       if (d < min && d > 1e-4) { pos.x = p.x + (dx / d) * min; pos.z = p.z + (dz / d) * min; }
+    }
+    for (const so of solids) {
+      if (pos.y >= so.y1 - 0.05 || pos.y + 1.7 < so.y0) continue;
+      const lx = pos.x - so.x, lz = pos.z - so.z, ex = so.hx + r, ez = so.hz + r;
+      if (Math.abs(lx) >= ex || Math.abs(lz) >= ez) continue;
+      if (ex - Math.abs(lx) < ez - Math.abs(lz)) pos.x = so.x + (lx >= 0 ? ex : -ex); else pos.z = so.z + (lz >= 0 ? ez : -ez);
     }
   };
 
@@ -1216,6 +1500,15 @@
       c.mesh.position.y = y; c.glow.position.y = y; c.mesh.rotation.y += dt * 0.4;
     }
     W.circle.rotation.z += dt * 0.05;
+    if (W.stage === 'town') for (const a of townAnim) {
+      if (a.fountain) { if (Math.random() < 0.7) FX.emit(new V3(a.x + rand(-0.3, 0.3), 3.1, a.z + rand(-0.3, 0.3)), { count: 1, c1: '#bfe6ff', c2: '#4fa8ff', speed: 2.2, up: 2, gravity: 9, life: 0.9, size: 0.22 }); continue; }
+      a.m.rotation.z += dt * a.spin; if (a.fill) a.fill.material.opacity = 0.2 + Math.sin(clock * 2) * 0.06;
+    }
+    if (W.stage === 'dungeon') for (const a of dunAnim) {
+      if (a.torch) { a.torch.scale.setScalar(3.2 * (1 + Math.sin(clock * 9 + a.ph) * 0.1 + Math.sin(clock * 23 + a.ph) * 0.05)); continue; }
+      if (a.face) { if (playerPos) a.face.rotation.y = Math.atan2(playerPos.x - a.face.position.x, playerPos.z - a.face.position.z); continue; }
+      a.m.rotation.z += dt * a.spin;
+    }
     if (W.stage === 'arena') {
       for (const f of fires) { const k = 1 + Math.sin(clock * 9 + f.ph) * 0.12 + Math.sin(clock * 23 + f.ph * 2) * 0.06; f.flame.scale.setScalar(2.4 * k); f.glow.scale.setScalar(6 * k); }
       if (decor.arenaEmblem) decor.arenaEmblem.rotation.z -= dt * 0.04;
@@ -1232,7 +1525,7 @@
   W.info = () => ({
     barriers: barriers.filter((b) => b.alive).map((b) => ({ shape: b.shape, owner: b.owner, x: Math.round(b.mesh.position.x * 100) / 100, y: Math.round(b.mesh.position.y * 100) / 100, z: Math.round(b.mesh.position.z * 100) / 100 })),
     props: props.length, alive: props.filter((o) => o.alive).length, debris: debris.length,
-    pillars: pillars.filter((p) => p.alive).length, mode: W.mode, timeK, stats: Object.assign({}, W.stats), stage: W.stage, bound: W.bound(),
+    pillars: pillars.filter((p) => p.alive).length, mode: W.mode, timeK, stats: Object.assign({}, W.stats), stage: W.stage, bound: W.bound(), solids: solids.length,
     minHeight: heights ? Math.min.apply(null, Array.from(heights)) : 0,
     kinds: props.reduce((a, o) => { a[o.kind] = (a[o.kind] || 0) + 1; return a; }, {}),
     phys: W.phys, bodies: PH.bodyCount, active: W.phys ? PH.activeCount() : 0, physDebris: debris.filter((d) => d.body).length,

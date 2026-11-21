@@ -53,6 +53,8 @@
     save.voiceOn = save.voiceOn !== false;
     save.bgm = typeof save.bgm === 'number' ? Math.max(0, Math.min(1, save.bgm)) : 0.6;
     save.bgmOn = save.bgmOn !== false;
+    // 成長（第26版）: はじめて遊ぶ人と、前の版から続ける人は、Lv1・${MG.RPG.START_GOLD} G から
+    if (!save.rpg || typeof save.rpg !== 'object') save.rpg = { gold: MG.RPG.START_GOLD };
   }
   let importing = false; // 読み込んだデータを書いたあとは、ページを開き直すまで今のデータで上書きしない
   function persist() { if (importing) return; try { localStorage.setItem(KEY, JSON.stringify(save)); } catch (e) { /* 保存できなくても続ける */ } }
@@ -60,7 +62,7 @@
   // ---- セーブデータの書き出し・読み込み（公開サイトや別のパソコンへ移すため） ----
   // ブラウザは開いた場所（index.html を直接・start.bat・公開サイト）ごとに保存を分けるので、ファイルで持ち運べるようにする
   const EXPORT_APP = 'magia-lab';
-  const IMPORT_KEYS = ['slots', 'wandSlots', 'wand', 'known', 'secrets', 'fav', 'best', 'sound', 'sens', 'seen', 'time', 'shake', 'pad', 'voiceOn', 'bgm', 'bgmOn', 'vsName'];
+  const IMPORT_KEYS = ['slots', 'wandSlots', 'wand', 'known', 'secrets', 'fav', 'best', 'sound', 'sens', 'seen', 'time', 'shake', 'pad', 'voiceOn', 'bgm', 'bgmOn', 'vsName', 'rpg'];
   function exportText() {
     const data = {}; IMPORT_KEYS.forEach((k) => { if (save[k] !== undefined) data[k] = save[k]; });
     return JSON.stringify({ app: EXPORT_APP, format: 1, exported: new Date().toISOString(), data });
@@ -120,6 +122,8 @@
     if (id === 'book') renderBook();
     if (id === 'menu') renderMenu();
     if (id === 'wands') renderWands();
+    if (id === 'temple') renderTemple();
+    if (id === 'shop') renderShop();
     if (id === 'versus' && MG.VS) MG.VS.render();
     if (id === 'voice-consent') $('voice-file-note').hidden = location.protocol !== 'file:';
     const f = el.querySelector('[data-autofocus]') || el.querySelector('button:not([disabled])');
@@ -166,7 +170,9 @@
       b.classList.toggle('unknown', !!s && !known);
       b.classList.toggle('active', i === st.slot);
       b.querySelector('.s-name').textContent = !s ? '（空き）' : known ? s.name.kanji : '？？？';
-      b.querySelector('.s-meta').textContent = !s ? '工房で登録' : known ? `MP ${G.costFor(s, 'slot')} ・ ${MG.ELEMENTS[s.element].label}の${s.secret ? '禁呪' : MG.FORMS[s.form].label}` : '未発動 ・ 放つと判明';
+      const sealed = !!s && G.isSealed(s.seq);
+      b.classList.toggle('sealed', sealed);
+      b.querySelector('.s-meta').textContent = !s ? '工房で登録' : sealed ? `封印中（Lv${MG.RPG.sealLevel(s.seq.length)} で解ける）` : known ? `MP ${G.costFor(s, 'slot')} ・ ${MG.ELEMENTS[s.element].label}の${s.secret ? '禁呪' : MG.FORMS[s.form].label}` : '未発動 ・ 放つと判明';
       b.style.setProperty('--c1', s ? (known ? s.colors[0] : '#8a8fb8') : '#556');
       b.setAttribute('aria-label', `スロット${i + 1}: ${!s ? '空き' : known ? s.name.kanji : 'まだ放っていない魔法'}`);
       b.setAttribute('aria-pressed', i === st.slot ? 'true' : 'false');
@@ -388,10 +394,11 @@
   }
 
   function renderCrafter(popIndex) {
+    const chain = G.chainMax();
     MG.WORDS.forEach((w) => {
       const used = seq.includes(w.id);
       const c = chipEls[w.id];
-      c.disabled = used || seq.length >= 4;
+      c.disabled = used || seq.length >= chain;
       c.classList.toggle('used', used);
     });
     const wrap = $('seq');
@@ -419,6 +426,11 @@
         b.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/plain', 's:' + i); });
         b.addEventListener('focus', () => showInfo(id));
         if (popIndex === i) b.classList.add('pop-in');
+      } else if (i >= chain) {
+        b.className = 'seq-slot empty sealed';
+        b.innerHTML = `<span class="q-pos">${i + 1} ${roleNames[i]}</span><span class="q-word" aria-hidden="true">封</span><span class="q-role">Lv${MG.RPG.sealLevel(i + 1)} で解ける</span>`;
+        b.setAttribute('aria-label', `${i + 1}番目: 封印中（Lv${MG.RPG.sealLevel(i + 1)} で解ける）`);
+        b.tabIndex = -1;
       } else {
         b.innerHTML = `<span class="q-pos">${i + 1} ${roleNames[i]}</span><span class="q-word" aria-hidden="true">・</span><span class="q-role">${i < 2 ? '必要' : 'なくてもよい'}</span>`;
         b.setAttribute('aria-label', `${i + 1}番目（${roleNames[i]}）: 空き`);
@@ -538,6 +550,7 @@
     const target = s || seq;
     if (target.length < 2) return;
     if (st.wand === 'bare' || i >= st.slots.length) { toast('素手のときはスロットに入れられません。杖を持ってください（T キー）'); AU.error(); return; }
+    if (G.isSealed(target)) { toast(`${target.length}語の魔法は、まだ封印されています（Lv${MG.RPG.sealLevel(target.length)} で解ける）`); AU.error(); return; }
     G.setSlot(i, target);
     save.wandSlots[st.wand][i] = target.slice();
     if (st.wand === 'novice') save.slots[i] = target.slice();
@@ -616,7 +629,7 @@
       if (!inTab.length) { list.innerHTML = `<p class="empty-note">まだ${RANK_NAME[bookTab]}はありません。<br>魔法工房でことばを ${bookTab.slice(1)} つ並べ、練習場で放つと、ここに記録されます。</p>`; $('book-detail').innerHTML = ''; bookSel = null; return; }
       if (!shown.length) { list.innerHTML = '<p class="empty-note">条件に合う魔法がありません。絞りこみを「すべて」に戻してください。</p>'; $('book-detail').innerHTML = ''; bookSel = null; return; }
       const favs = shown.filter((e) => save.fav[e.key]), rest = shown.filter((e) => !save.fav[e.key]);
-      const toRow = (e) => ({ id: e.key, name: e.spec.name.kanji, fav: !!save.fav[e.key], sub: `${MG.ELEMENTS[e.spec.element].label} ・ ${MG.FORMS[e.spec.form].label}${e.spec.shape && MG.WARD_SHAPES[e.spec.shape] ? `（${MG.WARD_SHAPES[e.spec.shape].label}）` : e.spec.summonType && MG.SUMMONS[e.spec.summonType] ? `（${MG.SUMMONS[e.spec.summonType].label}）` : ''}`, right: rowRight(e), c1: e.spec.colors[0], c2: e.spec.colors[1], support: isSupport(e.spec), inSlot: (st.slots || []).some((x) => x && keyOf(x.seq) === e.key) });
+      const toRow = (e) => ({ id: e.key, name: e.spec.name.kanji + (G.isSealed(e.seq) ? '（封印中）' : ''), fav: !!save.fav[e.key], sub: `${MG.ELEMENTS[e.spec.element].label} ・ ${MG.FORMS[e.spec.form].label}${e.spec.shape && MG.WARD_SHAPES[e.spec.shape] ? `（${MG.WARD_SHAPES[e.spec.shape].label}）` : e.spec.summonType && MG.SUMMONS[e.spec.summonType] ? `（${MG.SUMMONS[e.spec.summonType].label}）` : ''}`, right: rowRight(e), c1: e.spec.colors[0], c2: e.spec.colors[1], support: isSupport(e.spec), inSlot: (st.slots || []).some((x) => x && keyOf(x.seq) === e.key) });
       if (favs.length) rows.push({ head: '★ お気に入り' }, ...favs.map(toRow));
       if (favs.length && rest.length) rows.push({ head: 'そのほか' });
       rows.push(...rest.map(toRow));
@@ -967,6 +980,15 @@
     const all = MG.WANDS.concat([MG.BARE]);
     $('wand-list').innerHTML = all.map((w) => {
       const on = st.wand === w.id;
+      if (!G.ownsWand(w.id)) {
+        return `<article class="wand-card locked" style="--gem:${w.gem || '#bfe6ff'}">
+          <div class="wc-head"><span class="wc-gem" aria-hidden="true"></span><h3>${esc(w.name)}</h3></div>
+          <p class="wc-desc">${esc(w.desc)}</p>
+          <div class="wc-stats">${wandStats(w)}</div>
+          <p class="wc-price">街の杖の店で買える（${(MG.RPG.WAND_PRICE[w.id] || 0).toLocaleString()} G）</p>
+          <button type="button" class="btn-secondary wc-btn" disabled>まだ持っていない</button>
+        </article>`;
+      }
       return `<article class="wand-card${on ? ' on' : ''}" style="--gem:${w.gem || '#bfe6ff'}">
         <div class="wc-head"><span class="wc-gem" aria-hidden="true"></span><h3>${esc(w.name)}</h3>${on ? '<span class="wc-on">持っている</span>' : ''}</div>
         <p class="wc-desc">${esc(w.desc)}</p>
@@ -1006,10 +1028,167 @@
   // ======================================================================
   //  ゲームからの通知
   // ======================================================================
+  // ======================================================================
+  //  成長・街・ダンジョンの画面（第26版）
+  // ======================================================================
+  const RP = MG.RPG;
+  let lvHtml = '';
+  function updateLvBox() {
+    const p = G.prog.prog, need = RP.xpNeed(p.level), max = p.level >= RP.MAX_LV;
+    const key = `${p.level}|${p.xp}|${G.prog.gold}`;
+    if (key === lvHtml) return;
+    lvHtml = key;
+    $('lv-num').textContent = p.level;
+    $('lv-gold').textContent = `${G.prog.gold.toLocaleString()} G`;
+    $('lv-xp-fill').style.width = max ? '100%' : `${Math.min(100, (p.xp / need) * 100).toFixed(1)}%`;
+    $('lv-xp-text').textContent = max ? '最大レベル' : `次のレベルまで ${need - p.xp}`;
+  }
+  function saveProgress() { save.rpg = G.getProgress(); persistSoon(); }
+  let luTimer = 0;
+  const luQueue = [];
+  function showLevelUp(u) {
+    luQueue.push(u);
+    if (luQueue.length > 1) return;
+    const next = () => {
+      const x = luQueue[0]; if (!x) return;
+      const el = $('levelup'), S = RP.STATS[x.stat];
+      const der = G.derived();
+      el.innerHTML = `<div class="lu-title">LEVEL UP!</div><div class="lu-sub">Lv <b>${x.level}</b> ・ 最大MP <b>+${RP.MP_PER_LV}</b> ・ ${esc(S.label)} <b>${S.fmt(S.per)}</b></div>${x.unlock ? `<div class="lu-unlock">封印が解けた！ ことばを ${x.unlock} 語までつなげられる</div>` : ''}`;
+      el.classList.add('show');
+      AU.secret();
+      clearTimeout(luTimer);
+      luTimer = setTimeout(() => { el.classList.remove('show'); luQueue.shift(); setTimeout(next, 350); }, x.unlock ? 3600 : 2400);
+      void der;
+    };
+    next();
+  }
+  function renderTemple() {
+    const p = G.prog.prog, d = G.derived(), need = RP.xpNeed(p.level);
+    const stat = (label, val, extra) => `<div class="tp-stat"><span>${esc(label)}</span><b>${val}${extra ? `<small>${extra}</small>` : ''}</b></div>`;
+    const s = p.stats;
+    $('temple-body').innerHTML = `
+      <div class="tp-level"><div class="tp-lv">Lv ${p.level}</div><div class="tp-xp">経験値 ${p.xp} / ${need}<div class="tp-bar"><span style="width:${Math.min(100, (p.xp / need) * 100)}%"></span></div></div></div>
+      <div class="tp-grid">
+        ${stat('最大HP', d.maxHp, s.hp ? RP.STATS.hp.fmt(s.hp * RP.STATS.hp.per) : '')}
+        ${stat('最大MP', d.mpMax, s.mp ? RP.STATS.mp.fmt(s.mp * RP.STATS.mp.per) : '')}
+        ${stat('MPの回復', d.mpRegen + '/秒', s.regen ? RP.STATS.regen.fmt(s.regen) : '')}
+        ${stat('魔法の威力', '×' + d.power.toFixed(2), s.power ? RP.STATS.power.fmt(s.power * RP.STATS.power.per) : '')}
+        ${stat('足の速さ', '×' + d.speed.toFixed(2), s.speed ? RP.STATS.speed.fmt(s.speed * RP.STATS.speed.per) : '')}
+        ${stat('待ち時間', '×' + d.cdMul.toFixed(2), s.cd ? RP.STATS.cd.fmt(s.cd * RP.STATS.cd.per) : '')}
+      </div>
+      <h3 class="tp-h">ことばの封印</h3>
+      <div class="tp-seals">
+        <div class="ok">2 語の魔法: 使える</div>
+        <div class="${d.chain >= 3 ? 'ok' : 'lock'}">3 語の魔法: ${d.chain >= 3 ? '使える' : `封印中（Lv${RP.CHAIN_LV[3]} で解ける）`}</div>
+        <div class="${d.chain >= 4 ? 'ok' : 'lock'}">4 語の魔法: ${d.chain >= 4 ? '使える' : `封印中（Lv${RP.CHAIN_LV[4]} で解ける）`}</div>
+      </div>
+      <h3 class="tp-h">記録</h3>
+      <div class="tp-grid">${stat('いちばん深く潜った階', G.prog.bestFloor ? `地下 ${G.prog.bestFloor} 階` : 'まだ挑んでいない')}${stat('お金', G.prog.gold.toLocaleString() + ' G')}</div>
+      <p class="panel-lead" style="padding:12px 0 0">能力は友達との対戦にも反映されます。ダンジョンで倒れると、その回に拾った物とその回の経験値を失って、ここで蘇ります。</p>`;
+  }
+  function renderShop() {
+    $('shop-gold').textContent = `${G.prog.gold.toLocaleString()} G`;
+    const items = MG.WANDS.filter((w) => w.id !== 'novice').map((w) => {
+      const owned = G.ownsWand(w.id), price = RP.WAND_PRICE[w.id] || 0, can = G.prog.gold >= price;
+      return `<div class="shop-item" style="--gem:${w.gem}"><span class="si-gem" aria-hidden="true"></span><div class="si-main"><div class="si-name">${esc(w.name)}</div><div class="si-desc">${esc(w.desc)}</div></div>
+        <span class="si-price">${owned ? '' : price.toLocaleString() + ' G'}</span>
+        <button type="button" class="${owned ? 'btn-secondary' : 'btn-primary'}" data-buy="${w.id}" ${owned || !can ? 'disabled' : ''}>${owned ? '持っている' : can ? '買う' : 'お金が足りない'}</button></div>`;
+    });
+    const pp = RP.POTION;
+    items.push(`<div class="shop-item" style="--gem:#9dffb0"><span class="si-gem" aria-hidden="true"></span><div class="si-main"><div class="si-name">回復薬（持っている数 ${G.prog.potions} / ${pp.max}）</div><div class="si-desc">ダンジョンの中で Q キーを押すと、HP が ${pp.heal} 回復する</div></div>
+      <span class="si-price">${pp.price} G</span><button type="button" class="btn-primary" data-buy="potion" ${G.prog.gold < pp.price || G.prog.potions >= pp.max ? 'disabled' : ''}>${G.prog.potions >= pp.max ? 'これ以上持てない' : '買う'}</button></div>`);
+    $('shop-list').innerHTML = items.join('');
+  }
+  $('shop-list').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-buy]'); if (!b || b.disabled) return;
+    const id = b.dataset.buy;
+    const r = id === 'potion' ? G.buyPotion() : G.buyWand(id);
+    if (r === 'ok') { AU.register(); toast(id === 'potion' ? '回復薬を買いました' : `${MG.WAND_MAP[id].name}を買いました（T キーで持ちかえ）`); }
+    else { AU.error(); toast(r === 'gold' ? 'お金が足りません' : r === 'full' ? 'これ以上持てません' : 'すでに持っています'); }
+    saveProgress(); renderShop();
+    const again = document.querySelector(`[data-buy="${id}"]`); if (again && !again.disabled) again.focus();
+  });
+  // ダンジョンの地図（見たところだけ）
+  let mapT = 0;
+  function drawMinimap() {
+    const cv = $('minimap'), D = G.dun;
+    if (!D.on || !D.data || !D.explored) return;
+    const g = cv.getContext('2d'), N = D.data.N, k = cv.width / N;
+    g.clearRect(0, 0, cv.width, cv.height);
+    g.fillStyle = 'rgba(160,170,210,0.55)';
+    for (let z = 0; z < N; z++) for (let x = 0; x < N; x++) if (D.explored[z * N + x] && D.data.tiles[z * N + x]) g.fillRect(x * k, z * k, k + 0.4, k + 0.4);
+    const dot = (wx, wz, col, r, need) => {
+      const [tx, tz] = RP.worldToTile(wx, wz);
+      if (need && !D.explored[tz * N + tx]) return;
+      g.fillStyle = col; g.beginPath(); g.arc((tx + 0.5) * k, (tz + 0.5) * k, r, 0, Math.PI * 2); g.fill();
+    };
+    const wd = W.dun;
+    if (wd) { if (wd.stairsOpen) dot(wd.stairs.x, wd.stairs.z, '#ffb84a', 5, true); dot(wd.portal.x, wd.portal.z, '#4fa8ff', 5, true); }
+    D.chests.forEach((c) => { if (!c.open) dot(c.x, c.z, '#ffe39a', 3, true); });
+    (G.enemyDots ? G.enemyDots() : []).forEach((e) => dot(e.x, e.z, e.boss ? '#ff5a3a' : '#ff7a7a', e.boss ? 5 : 2.5, true));
+    // 自分（向きの三角）
+    const p = G.playerPos(), yaw = G.playerYaw();
+    const [tx, tz] = RP.worldToTile(p.x, p.z), cx = (tx + 0.5) * k, cz = (tz + 0.5) * k;
+    g.save(); g.translate(cx, cz); g.rotate(-yaw); g.fillStyle = '#ffffff';
+    g.beginPath(); g.moveTo(0, -7); g.lineTo(5, 5); g.lineTo(-5, 5); g.closePath(); g.fill(); g.restore();
+  }
+  function updateRpgHud(dt) {
+    updateLvBox();
+    const D = G.dun;
+    const dun = D.on && !G.match.on;
+    $('dun-hud').hidden = !dun; $('minimap').hidden = !dun;
+    if (dun) {
+      $('dun-hp-fill').style.width = `${Math.max(0, (D.hp / D.maxHp) * 100).toFixed(1)}%`;
+      $('dun-hp-fill').parentElement.classList.toggle('low', D.hp < D.maxHp * 0.3);
+      $('dun-hp-num').textContent = `${Math.max(0, Math.ceil(D.hp))} / ${D.maxHp}`;
+      $('dun-loot').textContent = `拾った ${D.run ? D.run.gold : 0} G`;
+      $('dun-pot').innerHTML = `回復薬 ×${G.prog.potions} <kbd>Q</kbd>`;
+      mapT -= dt || 0.016;
+      if (mapT <= 0) { mapT = 0.2; drawMinimap(); }
+    }
+  }
+
   MG.UI = {
     toast,
+    onProgress() { saveProgress(); updateLvBox(); if (current === 'shop') renderShop(); if (current === 'temple') renderTemple(); renderSlots(); if (current === 'crafter') renderCrafter(); },
+    onLevelUp(u) { showLevelUp(u); saveProgress(); renderSlots(); },
+    onStage(name) {
+      document.body.classList.remove('stage-town', 'stage-practice', 'stage-dungeon', 'stage-arena');
+      document.body.classList.add('stage-' + name);
+      $('spot-prompt').hidden = true;
+      if (name === 'town') toast('街: 神殿・杖の店・ダンジョンの門・練習場の門に近づいて F キー', 3200);
+      else if (name === 'practice') toast('練習場（門に近づいて F キーで街へ戻る）', 2600);
+    },
+    onSpot(sp) {
+      const el = $('spot-prompt');
+      el.hidden = !sp;
+      if (sp) el.innerHTML = `<kbd>F</kbd><b>${esc(sp.label)}</b>${esc(sp.hint)}`;
+    },
+    onFloor(fl, boss) {
+      $('dun-floor').textContent = `地下 ${fl} 階${boss ? '（守護者の階）' : ''}`;
+      $('dun-floor').classList.toggle('boss', !!boss);
+      $('dun-down').hidden = true;
+      toast(boss ? `地下 ${fl} 階: 守護者を倒すと、下の階への道が開く` : `地下 ${fl} 階: 下の階への穴と、街へ帰る帰還ポータルを探そう`, 3200);
+      saveProgress();
+    },
+    onDungeonDown(name) {
+      const el = $('dun-down');
+      el.innerHTML = `<div class="dd-title">倒れた…</div><div class="dd-sub">${name ? esc(name) + 'にやられた。' : ''}拾った物と、この回の経験値を失って、神殿で蘇ります</div>`;
+      el.hidden = false;
+    },
+    onDungeonEnd(sum) {
+      $('dun-down').hidden = true;
+      const won = sum.how === 'portal';
+      $('dun-result-h').textContent = won ? '帰還' : '神殿で蘇った';
+      const lv = sum.level !== sum.startLevel ? `Lv ${sum.startLevel} → ${sum.level}` : `Lv ${sum.level}`;
+      $('dun-result-body').innerHTML = won
+        ? `<div class="dr-big">地下 ${sum.floor} 階から帰ってきた</div><div class="dr-gain">持ち帰ったお金: ${sum.gold} G</div><div>手に入れた経験値: ${sum.xp}（${lv}）</div><div>倒した敵: ${sum.kills} 体</div>`
+        : `<div class="dr-big">地下 ${sum.floor} 階で倒れた</div><div class="dr-lost">失ったお金: ${sum.gold} G・回復薬 ${sum.potions} 個</div><div class="dr-lost">失った経験値: ${sum.xp}（レベルは Lv ${sum.level} に戻った）</div><div>倒した敵: ${sum.kills} 体</div>`;
+      saveProgress();
+      open('dun-result');
+    },
     sens: () => save.sens || 1,
-    updateHud,
+    updateHud() { updateHud(); updateRpgHud(); },
     onCast(spec, via, rec, cast) {
       const key = keyOf(spec.seq);
       lastCastMode = cast && cast.castMode;
@@ -1072,12 +1251,15 @@
         if ((e.code === 'KeyE' && current === 'crafter') || (e.code === 'KeyG' && current === 'book')) { close(); return true; }
         return false;
       }
+      // F: 入れる場所の近くでは入る（ほかでは今までどおり放つ）。Q: ダンジョンでは回復薬（ほかでは放つ）
+      if (e.code === 'KeyF' && G.interact()) return true;
+      if (e.code === 'KeyQ' && G.dun.on) { G.usePotion(); return true; }
       if (e.code === 'KeyE') { open('crafter'); return true; }
       if (e.code === 'KeyG') { open('book'); return true; }
       if (e.code === 'KeyM') { setSound(!AU.enabled); return true; }
       if (e.code === 'KeyV') { voiceToggle(); return true; }
       if (e.code === 'KeyT') { open('wands'); return true; }
-      if (e.code === 'KeyN') { setTime(save.time === 'day' ? 'night' : 'day'); toast(save.time === 'day' ? '昼の練習場' : '夜の練習場'); return true; }
+      if (e.code === 'KeyN') { setTime(save.time === 'day' ? 'night' : 'day'); toast(save.time === 'day' ? '昼にしました' : '夜にしました'); return true; }
       return false;
     },
     isOpen: () => current,
@@ -1093,11 +1275,12 @@
   H.setScale(save.shake);
   H.setPadEnabled(save.pad);
   const ok = G.init($('world'));
+  G.setProgress(save.rpg);
   buildPalette();
   buildSlots();
   showInfo(null);
   MG.WANDS.forEach((w) => save.wandSlots[w.id].forEach((s, i) => G.setSlot(i, s, w.id)));
-  G.setWand(save.wand);
+  if (!G.setWand(save.wand)) { save.wand = 'novice'; G.setWand('novice'); }
   if (ok) setTime(save.time, true);
   G.selectSlot(0);
   renderSlots();

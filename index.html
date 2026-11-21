@@ -54,6 +54,22 @@
     </div>
   </div>
 
+  <!-- レベル・経験値・お金（第26版） -->
+  <div id="lv-box" class="lv-box" aria-live="polite">
+    <div class="lv-row"><span class="lv-badge">Lv <b id="lv-num">1</b></span><span id="lv-gold" class="lv-gold">0 G</span></div>
+    <div class="lv-xp" title="経験値"><div id="lv-xp-fill" class="lv-xp-fill"></div></div>
+    <div id="lv-xp-text" class="lv-xp-text">次のレベルまで 50</div>
+  </div>
+  <!-- ダンジョンの中の表示（第26版） -->
+  <div id="dun-hud" class="dun-hud" hidden>
+    <div class="dun-top"><span id="dun-floor" class="dun-floor">地下 1 階</span><span id="dun-loot" class="dun-loot">拾った 0 G</span><span id="dun-pot" class="dun-pot">回復薬 ×0 <kbd>Q</kbd></span></div>
+    <div class="dun-hp"><span class="dun-hp-label">HP</span><div class="dun-hp-bar"><div id="dun-hp-fill" class="dun-hp-fill"></div></div><span id="dun-hp-num" class="dun-hp-num">150</span></div>
+  </div>
+  <canvas id="minimap" class="minimap" width="200" height="200" hidden aria-label="ダンジョンの地図"></canvas>
+  <div id="spot-prompt" class="spot-prompt" hidden></div>
+  <div id="levelup" class="levelup" aria-live="assertive"></div>
+  <div id="dun-down" class="dun-down" role="status" hidden></div>
+
   <div id="lock-hint" class="lock-hint" hidden>画面をクリックすると視点を動かせます</div>
   <div id="spell-banner" class="spell-banner" aria-live="polite"></div>
   <div id="reveal" class="reveal" aria-live="assertive"></div>
@@ -206,7 +222,7 @@
       <button type="button" class="btn-close" data-close aria-label="閉じる">×</button>
     </header>
     <div class="menu-body">
-      <button type="button" class="btn-primary" data-close>練習場に戻る</button>
+      <button type="button" class="btn-primary" data-close>ゲームに戻る</button>
       <button type="button" id="btn-challenge" class="btn-secondary">60秒チャレンジ <small id="best-score"></small></button>
       <button type="button" id="menu-craft" class="btn-secondary">魔法工房</button>
       <button type="button" id="menu-book" class="btn-secondary">魔法図鑑</button>
@@ -301,7 +317,7 @@
         <li><b>素手のとき</b>: スロットは使えず、<b>詠唱と紋章</b>で放つ。詠唱は厳しく、<b>名前を一字一句そのまま</b>唱えないと発動しない。MP は 1.6 倍かかるが、<b>効果は 50% アップ</b>。</li>
       </ul>
       <div id="wand-list" class="wand-list"></div>
-      <button type="button" class="btn-primary btn-try" data-close>練習場に戻る</button>
+      <button type="button" class="btn-primary btn-try" data-close>ゲームに戻る</button>
     </div>
   </div>
 </section>
@@ -432,7 +448,7 @@
       <div class="vs-foot">
         <button type="button" id="vs-back" class="btn-small" hidden>最初の画面にもどる</button>
         <button type="button" id="vs-leave" class="btn-small" hidden>部屋を出る</button>
-        <button type="button" class="btn-small" data-close>練習場に戻る</button>
+        <button type="button" class="btn-small" data-close>ゲームに戻る</button>
       </div>
     </div>
   </div>
@@ -448,12 +464,39 @@
       <button type="button" id="vs-again" class="btn-primary">同じメンバーでもう一度</button>
       <p id="vs-wait-host" class="vs-wait-host">部屋を作った人が、もう一度始めるのを待っています</p>
       <button type="button" id="vs-to-lobby" class="btn-secondary">ロビーに戻る</button>
-      <button type="button" id="vs-quit" class="btn-secondary">部屋を出て練習場に戻る</button>
+      <button type="button" id="vs-quit" class="btn-secondary">部屋を出て街に戻る</button>
     </div>
   </div>
 </section>
 
 <!-- ===== チャレンジの結果 ===== -->
+<!-- ===== 神殿（第26版） ===== -->
+<section id="temple" class="overlay panel-overlay" role="dialog" aria-modal="true" aria-labelledby="temple-h" hidden>
+  <div class="panel panel-temple">
+    <div class="panel-head"><h2 id="temple-h">神殿</h2><button type="button" class="btn-close" data-close aria-label="閉じる">×</button></div>
+    <p class="panel-lead">ここは、ダンジョンで倒れた魔法使いが蘇る場所。レベルが上がるたびに MP が増え、能力が 1 つランダムに上がります。</p>
+    <div id="temple-body" class="temple-body"></div>
+  </div>
+</section>
+
+<!-- ===== 杖の店（第26版） ===== -->
+<section id="shop" class="overlay panel-overlay" role="dialog" aria-modal="true" aria-labelledby="shop-h" hidden>
+  <div class="panel panel-shop">
+    <div class="panel-head"><h2 id="shop-h">杖の店</h2><span id="shop-gold" class="shop-gold">0 G</span><button type="button" class="btn-close" data-close aria-label="閉じる">×</button></div>
+    <p class="panel-lead">お金はダンジョンの敵や宝箱で手に入ります（帰還ポータルで持ち帰ったものだけ）。買った杖は T キーで持ちかえられます。</p>
+    <div id="shop-list" class="shop-list"></div>
+  </div>
+</section>
+
+<!-- ===== ダンジョンの結果（第26版） ===== -->
+<section id="dun-result" class="overlay panel-overlay" role="dialog" aria-modal="true" aria-labelledby="dun-result-h" hidden>
+  <div class="panel result dun-result-panel">
+    <h2 id="dun-result-h">帰還</h2>
+    <div id="dun-result-body" class="dun-result-body"></div>
+    <div class="result-btns"><button type="button" class="btn-primary" data-close data-autofocus>街に戻る</button></div>
+  </div>
+</section>
+
 <section id="result" class="overlay panel-overlay" role="dialog" aria-modal="true" aria-labelledby="result-h" hidden>
   <div class="panel result">
     <h2 id="result-h">チャレンジ終了</h2>
@@ -469,6 +512,7 @@
 
 <script src="vendor/three.min.js"></script>
 <script src="js/words.js"></script>
+<script src="js/rpg.js"></script>
 <script src="js/sfx-data.js"></script>
 <script src="js/audio.js"></script>
 <script src="js/fx.js"></script>
