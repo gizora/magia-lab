@@ -4761,6 +4761,13 @@
     killEnemies(kind) { targets.filter((t) => t.isEnemy && t.alive && (!kind || t.kind === kind)).forEach((t) => { t.hp = 0; killTarget(t); }); },
     spawnEnemy(kind, x, z, f) { const t = spawnEnemy(kind, new V3(x, 0, z), f || 1, RP.scale(f || 1)); t.spawnT = 1; return t.id; },
     hurt: (d) => hurtPlayer(d, null, 'テスト'),
+    scene: () => scene, // 動作確認用（第30版）
+    // 動作確認用（第30版）: 敵の見た目だけを並べる。list = [[種類, x, z, 向き, 大きさ], ...]。空で呼ぶと片づける
+    showMonsters(list) {
+      (G._show || []).forEach((m) => scene.remove(m.g)); G._show = [];
+      (list || []).forEach(([kind, x, z, ry, sc]) => { const m = MG.Monsters.build(kind, []); m.kind = kind; m.g.position.set(x, kind === 'bat' ? 1.6 : W.floorAt(x, z, 1), z); m.g.rotation.y = ry || 0; m.g.scale.setScalar(sc || 1); scene.add(m.g); MG.Monsters.animate({ kind, parts: m.parts }, { sw: 0.3, k: 0, speed: 0, walk: 0, time: 0.3, phase: 0, dt: 0.016 }); G._show.push(m); });
+      return G._show.length;
+    },
     faceEnemies(x, z) { targets.filter((t) => t.isEnemy && t.alive).forEach((t) => { t.yaw = Math.atan2(x - t.pos.x, z - t.pos.z); t.face.rotation.y = t.yaw; }); },
     spot: () => (st.spot ? st.spot.id : null),
     interact: () => G.interact(),

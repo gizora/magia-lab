@@ -43,9 +43,11 @@
     LC(a.top, b.top, skyMat.uniforms.uTop.value);
     LC(a.mid, b.mid, skyMat.uniforms.uMid.value);
     LC(a.hor, b.hor, skyMat.uniforms.uHor.value);
-    skyMat.uniforms.uSun.value = 1 - k;
+    skyMat.uniforms.uSun.value = W.skyTextured ? 0 : 1 - k;
+    if (W.skyTextured) { skyMat.uniforms.uK.value = k; skyMat.uniforms.uTexB.value = W.stage === 'arena' ? skyTex.aurora : skyTex.night; }
     LC(a.fog, b.fog, scene.fog.color);
     scene.fog.density = L(a.fogD, b.fogD);
+    if (W.skyTextured && W.stage === 'arena' && PRESET.auroraFog) scene.fog.color.lerp(PRESET.auroraFog, k);
     if (W.stage === 'dungeon') { scene.fog.color.setRGB(0.05, 0.04, 0.035); scene.fog.density = 0.042; }
     LC(a.hemiSky, b.hemiSky, hemi.color); LC(a.hemiGround, b.hemiGround, hemi.groundColor); hemi.intensity = L(a.hemiI, b.hemiI) * (W.stage === 'dungeon' ? 0.6 : 1);
     if (W.stage === 'dungeon') { hemi.color.setRGB(0.75, 0.62, 0.5); hemi.groundColor.setRGB(0.15, 0.1, 0.08); }
@@ -53,9 +55,10 @@
     LC(a.dirC, b.dirC, dirLight.color); dirLight.intensity = L(a.dirI, b.dirI);
     dirLight.position.copy(SUN_POS).lerp(MOON_POS, k).normalize().multiplyScalar(50);
     LC(a.ambC, b.ambC, amb.color); amb.intensity = L(a.ambI, b.ambI);
-    starsMat.opacity = Math.max(0, k * 1.4 - 0.4);
+    starsMat.opacity = Math.max(0, k * 1.4 - 0.4) * (W.skyTextured ? 0.25 : 1);
     moonGroup.children.forEach((c) => (c.material.opacity = Math.max(0, k * 1.3 - 0.3)));
-    sunGroup.children.forEach((c) => (c.material.opacity = Math.max(0, (1 - k) * 1.3 - 0.3)));
+    sunGroup.children.forEach((c) => (c.material.opacity = W.skyTextured ? 0 : Math.max(0, (1 - k) * 1.3 - 0.3)));
+    if (W.skyTextured && W.stage === 'arena') moonGroup.children.forEach((c) => (c.material.opacity *= 0.35));
     LC(a.mt, b.mt, mtMat.color);
     LC(a.ground, b.ground, groundMat.color); outerMat.color.copy(groundMat.color);
     renderer.toneMappingExposure = L(a.exposure, b.exposure);
@@ -79,14 +82,25 @@
   function buildSky() {
     skyMat = new THREE.ShaderMaterial({
       side: THREE.BackSide, depthWrite: false, fog: false,
-      uniforms: { uTop: { value: new THREE.Color() }, uMid: { value: new THREE.Color() }, uHor: { value: new THREE.Color() }, uSun: { value: 0 }, uSunDir: { value: SUN_POS.clone().normalize() } },
+      uniforms: { uTop: { value: new THREE.Color() }, uMid: { value: new THREE.Color() }, uHor: { value: new THREE.Color() }, uSun: { value: 0 }, uSunDir: { value: SUN_POS.clone().normalize() },
+        uTexA: { value: null }, uTexB: { value: null }, uHasTex: { value: 0 }, uK: { value: 1 }, uBelow: { value: 0.1 }, uRot: { value: 0 } },
       vertexShader: 'varying vec3 vP; void main(){ vP = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
-      fragmentShader: `uniform vec3 uTop, uMid, uHor, uSunDir; uniform float uSun; varying vec3 vP;
+      fragmentShader: `uniform vec3 uTop, uMid, uHor, uSunDir; uniform float uSun, uHasTex, uK, uBelow, uRot; uniform sampler2D uTexA, uTexB; varying vec3 vP;
         void main(){
           float h = vP.y;
           vec3 c = mix(uHor, uMid, smoothstep(0.0, 0.22, h));
           c = mix(c, uTop, smoothstep(0.22, 0.85, h));
           if (h < 0.0) c = mix(uHor * 0.7, uHor * 0.25, smoothstep(0.0, -0.15, h));
+          if (uHasTex > 0.5) {
+            // 第30版: 空ガチャのパノラマ（上半分）。高さの角度から画像の縦の位置、向きから横の位置を決める
+            float el = asin(clamp(h, -1.0, 1.0));
+            float v = 1.0 - (1.5707963 - el) / (1.5707963 + uBelow);
+            float u = fract(atan(vP.z, vP.x) / 6.2831853 + 0.5 + uRot);
+            vec2 uv = vec2(u, clamp(v, 0.004, 0.999));
+            vec3 tc = mix(texture2D(uTexA, uv).rgb, texture2D(uTexB, uv).rgb, uK);
+            tc = mix(tc, uHor * 0.55, smoothstep(-0.02, -0.1, h));
+            c = tc;
+          }
           float s = max(dot(vP, uSunDir), 0.0);
           c += uSun * (vec3(1.0, 0.9, 0.7) * pow(s, 24.0) * 0.6 + vec3(1.0, 0.95, 0.85) * pow(s, 300.0));
           gl_FragColor = vec4(c, 1.0); }`,
@@ -146,7 +160,29 @@
     const mt = new THREE.Mesh(new THREE.CylinderGeometry(230, 230, 50, 64, 1, true), mtMat);
     mt.position.y = 14; mt.renderOrder = -8;
     sky.add(mt);
+    // 第30版: 空ガチャの空（昼・夜・オーロラ）。昼の画像の太陽が、光の来る向き（SUN_POS）に重なるように回す
+    const A = MG.Assets;
+    if (A && A.skyInfo('day') && A.skyInfo('night')) {
+      skyTex.day = A.sky('day'); skyTex.night = A.sky('night'); skyTex.aurora = A.sky('aurora') || skyTex.night;
+      const U = skyMat.uniforms;
+      U.uTexA.value = skyTex.day; U.uTexB.value = skyTex.night; U.uHasTex.value = 1;
+      U.uBelow.value = (A.skyInfo('day').below || 5.6) * Math.PI / 180;
+      U.uRot.value = -Math.atan2(SUN_POS.z, SUN_POS.x) / (Math.PI * 2);
+      // 昼の空は夕方に近い金色の雲なので、光と霧もそれに合わせる
+      const hz = A.skyInfo('day').horizon;
+      const hc = new THREE.Color(hz[0], hz[1], hz[2]);
+      PRESET.day.fog = hc.clone().lerp(C('#d8c8a8'), 0.45);
+      PRESET.day.hor = hc.clone();
+      PRESET.day.ground = C('#c4beb2'); PRESET.day.dirC = C('#ffe2b4'); PRESET.day.hemiSky = C('#e6e2ff'); PRESET.day.mt = C('#5a6478');
+      const az = A.skyInfo('aurora');
+      if (az) PRESET.auroraFog = new THREE.Color(az.horizon[0], az.horizon[1], az.horizon[2]).multiplyScalar(0.55);
+      W.skyTextured = true;
+    }
   }
+  const skyTex = {};
+  W.skyTextured = false;
+  // 動作確認用: 今の空（夜に混ぜている画像が 夜空 か オーロラ か）
+  W.skyState = () => ({ textured: W.skyTextured, night: !W.skyTextured ? '' : skyMat.uniforms.uTexB.value === skyTex.aurora ? 'aurora' : 'night', k: skyMat.uniforms.uK.value, loaded: !!(skyTex.day && skyTex.day.image && skyTex.day.image.complete && skyTex.day.image.naturalWidth > 0) });
 
   // ======================================================================
   //  へこむ地面
@@ -222,6 +258,11 @@
     circle.rotation.x = -Math.PI / 2; circle.position.set(0, 0.04, 17);
     decorP.add(circle);
     groundTex.practice = { inner, outer };
+    const AS = MG.Assets;
+    if (AS && AS.texInfo('flag')) {
+      groundTex.practice = { inner: AS.tex('flag', { rx: 3, ry: 4 }), outer: AS.tex('flag', { rx: 3 / CH_SIZE, ry: 4 / CH_SIZE }) };
+      groundMat.map = groundTex.practice.inner; outerMat.map = groundTex.practice.outer;
+    }
     W.circle = circle;
   }
 
@@ -292,7 +333,7 @@
   //  壊れるかけら
   // ======================================================================
   const chunkGeo = new THREE.IcosahedronGeometry(1, 0);
-  let rockMat, brickMat, woodMat, pillarMat;
+  let rockMat, brickMat, woodMat, pillarMat, propRockMat;
   const PH = MG.Phys;
   W.phys = false;
   // three.js の形から、物理の形を選んで動く物体を作る
@@ -355,6 +396,20 @@
     });
     woodMat = new THREE.MeshStandardMaterial({ map: woodTex, roughness: 0.8 });
     pillarMat = new THREE.MeshStandardMaterial({ color: 0x5d6380, roughness: 0.9, flatShading: true });
+    propRockMat = rockMat;
+    const AS = MG.Assets;
+    // 第30版: 石壁の 1 つ（1.46×0.72m）に、切り石の模様（1 枚 1.6m 四方）がほぼ実寸で乗るようにする
+    if (AS && AS.texInfo('block')) brickMat = new THREE.MeshStandardMaterial({ map: AS.tex('block', { rx: 0.92, ry: 0.45 }), color: 0xe6dccb, roughness: 0.9 });
+    if (AS && AS.modelInfo('rock2')) propRockMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, color: 0xd8d2c8 });
+  }
+  // 壊せる岩の形: 自然物ガチャの丸い岩（なければ、でこぼこの多面体）。中心が原点で、半径 r ほど
+  function rockGeometry(r, st) {
+    const AS = MG.Assets;
+    if (AS && AS.modelInfo('rock2')) return AS.rockGeometry('rock2', r * 1.05, st || [1, 1.25, 1]);
+    const geo = new THREE.IcosahedronGeometry(r, 1); const pos = geo.attributes.position;
+    for (let i = 0; i < pos.count; i++) { const vx = pos.getX(i), vy = pos.getY(i), vz = pos.getZ(i); const k = 0.8 + prand(vx.toFixed(3) * 1, vy.toFixed(3) * 1, vz.toFixed(3) * 1) * 0.35; pos.setXYZ(i, vx * k, vy * k * 0.8, vz * k); }
+    geo.computeVertexNormals();
+    return geo;
   }
 
   // 地形1つ分の物体を作る（レンガ・木箱は眠った状態の動く物体、岩・薄い壁は動かない物体）
@@ -428,18 +483,11 @@
   }
 
   function buildRock(x, z, r) {
-    const geo = new THREE.IcosahedronGeometry(r, 1);
-    const pos = geo.attributes.position;
-    for (let i = 0; i < pos.count; i++) {
-      const vx = pos.getX(i), vy = pos.getY(i), vz = pos.getZ(i);
-      const k = 0.8 + prand(vx.toFixed(3) * 1, vy.toFixed(3) * 1, vz.toFixed(3) * 1) * 0.35;
-      pos.setXYZ(i, vx * k, vy * k * 0.8, vz * k);
-    }
-    geo.computeVertexNormals();
-    const m = new THREE.Mesh(geo, rockMat);
+    const st = [0.9 + prand(x, z, 1) * 0.25, 1.1 + prand(x, z, 2) * 0.35, 0.9 + prand(x, z, 3) * 0.25];
+    const m = new THREE.Mesh(rockGeometry(r, st), propRockMat);
     m.position.set(x, r * 0.55, z);
     m.rotation.y = rand(0, Math.PI * 2);
-    addProp({ mesh: m, kind: 'rock', hp: 55 * r, r: r * 0.9, col: r * 0.85, size: r });
+    addProp({ mesh: m, kind: 'rock', hp: 55 * r, r: r * 0.9, col: r * 0.85, size: r, stretch: st });
   }
 
   function buildCrate(x, z, y, s) {
@@ -784,6 +832,13 @@
     roofTexC.wrapS = roofTexC.wrapT = THREE.RepeatWrapping;
     return roofTexC;
   }
+  // 第30版: 箱の 6 面それぞれに、面の大きさ（m）÷ 模様 1 枚の大きさ（tw×th m）だけ模様をくり返す
+  function tileBox(geo, w, h, d, tw, th) {
+    const uv = geo.attributes.uv, faces = [[d, h], [d, h], [w, d], [w, d], [w, h], [w, h]];
+    for (let f = 0; f < 6; f++) for (let k = 0; k < 4; k++) { const i = f * 4 + k; uv.setXY(i, uv.getX(i) * faces[f][0] / tw, uv.getY(i) * faces[f][1] / th); }
+    return geo;
+  }
+  function tileCyl(geo, r, h, tw, th) { const uv = geo.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * Math.max(1, Math.round(2 * Math.PI * r / tw)), uv.getY(i) * h / th); return geo; }
   // 三角の屋根（切妻）: 幅 w・奥行き d・高さ h。棟は奥行きの向き
   function gableRoof(w, d, h, mat) {
     const sh = new THREE.Shape(); sh.moveTo(-w / 2 - 0.4, 0); sh.lineTo(w / 2 + 0.4, 0); sh.lineTo(0, h); sh.closePath();
@@ -791,6 +846,39 @@
     geo.translate(0, 0, -(d + 0.8) / 2);
     const uv = geo.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * 0.25, uv.getY(i) * 0.25);
     return new THREE.Mesh(geo, mat);
+  }
+  // 第30版: 森の木（イチョウ・シラカバ）をまわりに、村の中にも数本。ツツジ・ツバキの低木と丸い岩も置く
+  // S: 固い壁の一覧（村だけ。練習場は null）/ near: 中の木の場所 / skip(x, z): 置かない場所 / 戻り値: 置いた木の数
+  function plantTrees(g, S, rr, near, skip, ring) {
+    const AS = MG.Assets, big = { tree1: [], tree2: [] }, bush = { tree3: [], tree4: [] }, rocks = [];
+    ring = ring || [47, 32, 95];
+    const leafTint = () => new THREE.Color(0.82 + rr() * 0.3, 0.88 + rr() * 0.22, 0.78 + rr() * 0.22);
+    const tree = (x, z, h) => { const kind = rr() < 0.55 ? 'tree2' : 'tree1'; big[kind].push({ x, z, s: h / AS.modelInfo(kind).height, ry: rr() * 6.28, tint: leafTint(), y: -0.1 }); if (S) addSolid(S, x, z, 0.4, 0.4, 7); };
+    for (let i = 0; i < ring[2]; i++) {
+      const a = rr() * Math.PI * 2, r = ring[0] + rr() * ring[1], x = Math.cos(a) * r, z = Math.sin(a) * r;
+      if (skip && skip(x, z)) continue;
+      tree(x, z, 9 + rr() * 6);
+    }
+    near.forEach(([x, z]) => tree(x, z, 8 + rr() * 2.5));
+    if (S) {
+      // 広場のふち（道のあいだ）にツツジ、礼拝堂の前と練習場の門の左右・杖の店の前にツバキ、柵ぞいにツツジ
+      for (let k = 0; k < 8; k++) { const a = ((k + 0.5) / 8) * Math.PI * 2; bush.tree3.push({ x: Math.cos(a) * 10.9, z: -4 + Math.sin(a) * 10.9, s: 1.15 + rr() * 0.3, ry: rr() * 6.28, tint: leafTint() }); }
+      [[-4.6, -26.2], [-6.4, -26.4], [6.4, -26.4], [-5, 35.6], [5, 35.6], [27.2, -9.6], [27.2, 2.2]].forEach(([x, z]) => { bush.tree4.push({ x, z, s: 0.85 + rr() * 0.25, ry: rr() * 6.28, tint: leafTint() }); addSolid(S, x, z, 0.6, 0.6, 2.4); });
+      [-9, -14, -19, -25, 9, 14, 25].forEach((x) => bush.tree3.push({ x, z: 35.8, s: 1 + rr() * 0.4, ry: rr() * 6.28, tint: leafTint() }));
+      bush.tree3.forEach((b) => addSolid(S, b.x, b.z, 0.55, 0.55, 1.2));
+    }
+    // 丸い岩（森のはし）
+    for (let i = 0; i < 16; i++) {
+      const a = rr() * Math.PI * 2, r = ring[0] - 6 + rr() * 12, x = Math.cos(a) * r, z = Math.sin(a) * r;
+      if ((skip && skip(x, z)) || (S && x < -32 && Math.abs(z + 4) < 16)) continue;
+      const sc = 0.8 + rr() * 1.2; rocks.push({ x, z, s: sc, ry: rr() * 6.28, y: -0.15 * sc });
+      if (S) addSolid(S, x, z, 1.0 * sc, 0.85 * sc, 1.2 * sc);
+    }
+    let n = 0;
+    Object.entries(big).forEach(([k, l]) => { AS.instances(k, l, g); n += l.length; });
+    if (AS.modelInfo('tree3') && AS.modelInfo('tree4')) Object.entries(bush).forEach(([k, l]) => { AS.instances(k, l, g); n += l.length; });
+    if (AS.modelInfo('rock2')) AS.instances('rock2', rocks, g);
+    return n;
   }
   function buildTown() {
     signStage = 'town';
@@ -806,13 +894,27 @@
     const gIn = grass.clone(); gIn.needsUpdate = true; gIn.repeat.set(CH_SIZE / 5, CH_SIZE / 5);
     const gOut = grass.clone(); gOut.needsUpdate = true; gOut.repeat.set(1 / 5, 1 / 5);
     groundTex.town = { inner: gIn, outer: gOut };
+    const AS = MG.Assets, hasTex = !!(AS && AS.texInfo('grass'));
+    if (hasTex) groundTex.town = { inner: AS.tex('grass', { rx: 5 }), outer: AS.tex('grass', { rx: 5 / CH_SIZE }) };
     const M = (o) => new THREE.MeshStandardMaterial(o);
-    const box = (w, h, d, m, x, y, z, parent) => { const o = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); o.position.set(x, y, z); (parent || g).add(o); return o; };
-    const cyl = (r0, r1, h, m, x, y, z, seg, parent) => { const o = new THREE.Mesh(new THREE.CylinderGeometry(r0, r1, h, seg || 12), m); o.position.set(x, y, z); (parent || g).add(o); return o; };
+    const box = (w, h, d, m, x, y, z, parent) => { const geo = new THREE.BoxGeometry(w, h, d); if (m.userData.tile) tileBox(geo, w, h, d, m.userData.tile[0], m.userData.tile[1]); const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); (parent || g).add(o); return o; };
+    const cyl = (r0, r1, h, m, x, y, z, seg, parent) => { const geo = new THREE.CylinderGeometry(r0, r1, h, seg || 12); if (m.userData.tile) tileCyl(geo, (r0 + r1) / 2, h, m.userData.tile[0], m.userData.tile[1]); const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); (parent || g).add(o); return o; };
     const place = (obj, x, y, z, ry) => { obj.position.set(x, y, z); obj.rotation.y = ry || 0; g.add(obj); return obj; };
     const wood = M({ color: 0x6a4428, roughness: 0.85 }), woodD = M({ color: 0x4a2e1a, roughness: 0.9 });
-    const stone = M({ color: 0xb8b0a0, roughness: 0.95, flatShading: true }), stoneD = M({ color: 0x8a8274, roughness: 0.95, flatShading: true });
-    const roofM = M({ map: roofTexture(), roughness: 0.85 });
+    let stone = M({ color: 0xb8b0a0, roughness: 0.95, flatShading: true }), stoneD = M({ color: 0x8a8274, roughness: 0.95, flatShading: true });
+    let roofM = M({ map: roofTexture(), roughness: 0.85 });
+    // 第30版: トーン・マテリアルガチャの模様（コンクリートブロック塀＝切り石、工場の煉瓦、化粧スレートの屋根）
+    let brickM = stoneD, chapelRoof = M({ color: 0x4a5266, roughness: 0.8 }), shopRoof = M({ color: 0x2a4a6a, roughness: 0.85 });
+    const roofs = [roofM];
+    if (hasTex) {
+      const tiled = (name, tw, th, o) => { const m = M(Object.assign({ map: AS.tex(name), roughness: 0.92 }, o)); m.userData.tile = [tw, th]; return m; };
+      stone = tiled('block', 1.6, 1.6, { color: 0xf2eadc }); stoneD = tiled('block', 1.2, 1.2, { color: 0x8e8676 });
+      brickM = tiled('brick', 1.8, 1.5, { color: 0xe8d8d0 });
+      const slate = (c) => M({ map: AS.tex('slate', { rx: 4 / 1.82 }), color: c, roughness: 0.75 }); // 屋根の UV は 1 が 4m
+      roofM = slate(0xc8c8d0); roofs.length = 0; roofs.push(slate(0xe8a088), slate(0xc8ccd8), slate(0xc89070), slate(0xa8b8c8));
+      chapelRoof = slate(0xb8c4e0); shopRoof = slate(0x90b0e0);
+    }
+    let houseN = 0;
     const winM = M({ color: 0x3a2a18, emissive: 0xffb860, emissiveIntensity: 1, roughness: 0.4 }); townWinMats.push(winM);
     // ---- 土の小道と、石畳の広場 ----
     const dirt = FX.canvasTex(256, 256, (c, w) => {
@@ -822,7 +924,8 @@
     });
     dirt.wrapS = dirt.wrapT = THREE.RepeatWrapping;
     const path = (x0, z0, x1, z1, wid) => {
-      const len = Math.hypot(x1 - x0, z1 - z0), t = dirt.clone(); t.needsUpdate = true; t.repeat.set(wid / 6, len / 6);
+      const len = Math.hypot(x1 - x0, z1 - z0);
+      let t; if (hasTex) t = AS.tex('dirt', { m: [wid * 1.3, len * 1.3] }); else { t = dirt.clone(); t.needsUpdate = true; t.repeat.set(wid / 6, len / 6); }
       const m = new THREE.Mesh(new THREE.PlaneGeometry(wid, len), M({ map: t, roughness: 1, transparent: true, opacity: 0.97 }));
       m.rotation.x = -Math.PI / 2; m.rotation.z = -Math.atan2(x1 - x0, z1 - z0);
       m.position.set((x0 + x1) / 2, 0.025, (z0 + z1) / 2); g.add(m);
@@ -834,9 +937,9 @@
       for (let i = 0; i < 90; i++) { const v = rand(120, 175) | 0; c.fillStyle = `rgb(${v},${(v * 0.96) | 0},${(v * 0.9) | 0})`; c.beginPath(); c.ellipse(rand(0, w), rand(0, w), rand(9, 16), rand(7, 12), rand(0, 3), 0, Math.PI * 2); c.fill(); c.strokeStyle = 'rgba(40,36,32,0.6)'; c.lineWidth = 2; c.stroke(); }
     });
     cob.wrapS = cob.wrapT = THREE.RepeatWrapping; cob.repeat.set(5, 5);
-    const plaza = new THREE.Mesh(new THREE.CircleGeometry(10, 40), M({ map: cob, roughness: 0.95 })); plaza.rotation.x = -Math.PI / 2; plaza.position.set(0, 0.03, -4); g.add(plaza);
+    const plaza = new THREE.Mesh(new THREE.CircleGeometry(10, 40), M({ map: hasTex ? AS.tex('flag', { m: [20, 20] }) : cob, roughness: 0.95 })); plaza.rotation.x = -Math.PI / 2; plaza.position.set(0, 0.03, -4); g.add(plaza);
     // ---- 井戸（広場の真ん中） ----
-    cyl(1.5, 1.6, 0.9, stone, 0, 0.45, -4, 16);
+    cyl(1.5, 1.6, 0.9, hasTex ? brickM : stone, 0, 0.45, -4, 16);
     const water = new THREE.Mesh(new THREE.CircleGeometry(1.25, 20), M({ color: 0x1a3a5a, emissive: 0x0a2040, emissiveIntensity: 0.5, roughness: 0.1 })); water.rotation.x = -Math.PI / 2; water.position.set(0, 0.7, -4); g.add(water);
     [-1, 1].forEach((sd) => box(0.18, 2.4, 0.18, wood, sd * 1.3, 1.5, -4));
     box(2.9, 0.16, 0.18, wood, 0, 2.6, -4);
@@ -861,8 +964,8 @@
       box(w + 0.3, 0.6, d + 0.3, stoneD, 0, 0.3, 0, hg);
       const body = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), timber); body.position.y = 0.6 + h / 2; hg.add(body);
       { const uv = body.geometry.attributes.uv; const faces = [[d, h], [d, h], [w, d], [w, d], [w, h], [w, h]]; for (let f = 0; f < 6; f++) for (let k2 = 0; k2 < 4; k2++) { const i = f * 4 + k2; uv.setXY(i, uv.getX(i) * faces[f][0] / 3, uv.getY(i) * faces[f][1] / 3.1); } }
-      const rf = gableRoof(w, d, 2.4 + w * 0.12, roofM); rf.position.y = 0.6 + h; hg.add(rf);
-      cyl(0.32, 0.32, 1.8, stoneD, w * 0.25, 0.6 + h + 1.6, d * 0.2, 6, hg);
+      const rf = gableRoof(w, d, 2.4 + w * 0.12, roofs[houseN++ % roofs.length]); rf.position.y = 0.6 + h; hg.add(rf);
+      if (hasTex) box(0.6, 1.8, 0.6, brickM, w * 0.25, 0.6 + h + 1.6, d * 0.2, hg); else cyl(0.32, 0.32, 1.8, stoneD, w * 0.25, 0.6 + h + 1.6, d * 0.2, 6, hg);
       box(1.1, 2.0, 0.12, woodD, 0, 1.6, d / 2 + 0.04, hg);
       const lamp = FX.glowSprite('#ffc070', 1.6); lamp.position.set(0.9, 2.9, d / 2 + 0.35); hg.add(lamp);
       for (let f = 0; f < floors; f++) [-1, 1].forEach((sd) => { if (f === 0 && Math.abs(sd * w * 0.3) < 1) return; box(0.8, 0.9, 0.08, winM, sd * w * 0.3, 0.6 + f * 3.1 + 1.8, d / 2 + 0.04, hg); box(1.0, 0.1, 0.18, woodD, sd * w * 0.3, 0.6 + f * 3.1 + 1.3, d / 2 + 0.1, hg); });
@@ -879,9 +982,9 @@
     // ---- 礼拝堂（神殿・北）: 石の壁、とがった屋根、鐘楼、ステンドグラス ----
     const tz = -36;
     box(10, 7, 14, stone, 0, 3.5, tz); addSolid(S, 0, tz, 5, 7, 7);
-    const cr = gableRoof(10, 14, 5.5, M({ color: 0x4a5266, roughness: 0.8 })); cr.position.set(0, 7, tz); g.add(cr);
+    const cr = gableRoof(10, 14, 5.5, chapelRoof); cr.position.set(0, 7, tz); g.add(cr);
     box(4.2, 15, 4.2, stone, 0, 7.5, tz + 8.6); addSolid(S, 0, tz + 8.6, 2.1, 2.1, 15);
-    const spire = new THREE.Mesh(new THREE.ConeGeometry(3.2, 7, 4), M({ color: 0x4a5266, roughness: 0.8 })); spire.rotation.y = Math.PI / 4; spire.position.set(0, 18.5, tz + 8.6); g.add(spire);
+    const spire = new THREE.Mesh(new THREE.ConeGeometry(3.2, 7, 4), chapelRoof); spire.rotation.y = Math.PI / 4; spire.position.set(0, 18.5, tz + 8.6); g.add(spire);
     const bell = cyl(0.5, 0.8, 1, M({ color: 0xc8a040, metalness: 0.7, roughness: 0.35 }), 0, 13.2, tz + 8.6, 12); void bell;
     [-1, 1].forEach((sd) => box(0.9, 1.4, 4.4, M({ color: 0x1a1a22 }), sd * 1.6, 13.2, tz + 8.6));
     const glass = M({ color: 0x2a1a3a, emissive: 0x8a5aff, emissiveIntensity: 0.9, roughness: 0.2 }); townWinMats.push(glass);
@@ -897,7 +1000,7 @@
     box(9.6, 0.6, 8.6, stoneD, 0, 0.3, 0, shop);
     const sb = new THREE.Mesh(new THREE.BoxGeometry(9, 6.2, 8), timber); sb.position.y = 3.7; shop.add(sb);
     { const uv = sb.geometry.attributes.uv; const faces = [[8, 6.2], [8, 6.2], [9, 8], [9, 8], [9, 6.2], [9, 6.2]]; for (let f = 0; f < 6; f++) for (let k2 = 0; k2 < 4; k2++) { const i = f * 4 + k2; uv.setXY(i, uv.getX(i) * faces[f][0] / 3, uv.getY(i) * faces[f][1] / 3.1); } }
-    const srf = gableRoof(9, 8, 3.6, M({ color: 0x2a4a6a, roughness: 0.85 })); srf.position.y = 6.8; shop.add(srf);
+    const srf = gableRoof(9, 8, 3.6, shopRoof); srf.position.y = 6.8; shop.add(srf);
     const show = M({ color: 0x2a1a10, emissive: 0xffb860, emissiveIntensity: 1, roughness: 0.2 }); townWinMats.push(show);
     box(5.4, 2.2, 0.1, show, -0.8, 2.1, 4.04, shop);
     for (let k2 = 0; k2 < 5; k2++) { const wd = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 1.5, 6), M({ color: [0xd5deea, 0xffb347, 0x9effd8, 0xb0c4ff, 0xff5a1f][k2], emissive: [0x7f93b0, 0xff7a20, 0x3affb0, 0x6a8aff, 0xff3a00][k2], emissiveIntensity: 0.7 })); wd.rotation.z = 0.3; wd.position.set(-2.8 + k2 * 1, 2.0, 4.15); shop.add(wd); }
@@ -913,7 +1016,17 @@
     // ---- ダンジョンの入口（西）: 岩山にあいた洞窟の口。木の枠と、奥に紫の渦 ----
     const rockM = M({ color: 0x4a463e, roughness: 1, flatShading: true });
     const rockAt = (x, z, r, sy) => { const rk = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 1), rockM); const pa = rk.geometry.attributes.position; for (let i = 0; i < pa.count; i++) pa.setXYZ(i, pa.getX(i) * rand(0.85, 1.15), pa.getY(i) * rand(0.85, 1.15), pa.getZ(i) * rand(0.85, 1.15)); rk.geometry.computeVertexNormals(); rk.position.set(x, r * 0.35, z); rk.scale.y = sy || 1; g.add(rk); return rk; };
-    [[-40, -13, 7, 1.3], [-40, 5, 7, 1.3], [-46, -4, 9, 1.4], [-37, -10.5, 4, 1.1], [-37, 2.5, 4, 1.1], [-44, -16, 6, 1], [-44, 8, 6, 1]].forEach(([x, z, r, sy]) => { rockAt(x, z, r, sy); addSolid(S, x, z, r * 0.75, r * 0.75, r * 1.4); });
+    const cliffs = [[-40, -13, 7, 1.3], [-40, 5, 7, 1.3], [-46, -4, 9, 1.4], [-37, -10.5, 4, 1.1], [-37, 2.5, 4, 1.1], [-44, -16, 6, 1], [-44, 8, 6, 1]];
+    if (hasTex && AS.modelInfo('rock1') && AS.modelInfo('rock3')) {
+      const r1 = [], r3 = [];
+      cliffs.forEach(([x, z, r, sy], i) => {
+        const k = r / 3.1, ry = i * 1.7;
+        const tint = new THREE.Color(0.62, 0.6, 0.57); r1.push({ x, z, s: k, sy: sy * 0.95, ry, y: -0.3 * k, tint });
+        r3.push({ x: x - 0.6, z: z + (i % 2 ? 0.8 : -0.8), s: k * 1.05, sy: sy * 0.85, ry: ry + Math.PI / 2 + 0.3, y: -0.25 * k, tint: new THREE.Color(0.55, 0.52, 0.5) });
+        addSolid(S, x, z, r * 0.75, r * 0.75, r * 1.4);
+      });
+      AS.instances('rock1', r1, g); AS.instances('rock3', r3, g);
+    } else cliffs.forEach(([x, z, r, sy]) => { rockAt(x, z, r, sy); addSolid(S, x, z, r * 0.75, r * 0.75, r * 1.4); });
     const mouth = new THREE.Mesh(new THREE.CircleGeometry(3.2, 24, 0, Math.PI), M({ color: 0x050308, roughness: 1 })); mouth.rotation.y = Math.PI / 2; mouth.position.set(-35.8, 0.02, -4); mouth.scale.set(1, 1.4, 1); g.add(mouth);
     [-1, 1].forEach((sd) => { box(0.4, 4.6, 0.4, wood, -35.5, 2.3, -4 + sd * 2.7); addSolid(S, -35.5, -4 + sd * 2.7, 0.3, 0.3, 4.6); });
     box(0.5, 0.45, 6.2, wood, -35.5, 4.7, -4);
@@ -950,7 +1063,8 @@
     [[-21, 30], [21, 31], [36, 18]].forEach(([x, z]) => { const hb = cyl(0.9, 0.9, 1.4, hay, x, 0.9, z, 14); hb.rotation.z = Math.PI / 2; addSolid(S, x, z, 0.9, 0.8, 1.8); });
     // ---- 風車（東の丘） ----
     const mill = new THREE.Group(); place(mill, 40, 0, 32, -0.6);
-    const tower = new THREE.Mesh(new THREE.CylinderGeometry(2, 3, 11, 10), stone); tower.position.y = 5.5; mill.add(tower);
+    const tgeo = new THREE.CylinderGeometry(2, 3, 11, hasTex ? 16 : 10); if (hasTex) tileCyl(tgeo, 2.5, 11, 1.6, 1.6);
+    const tower = new THREE.Mesh(tgeo, stone); tower.position.y = 5.5; mill.add(tower);
     const cap = new THREE.Mesh(new THREE.ConeGeometry(2.6, 3, 10), roofM); cap.position.y = 12.5; mill.add(cap);
     const hub = new THREE.Group(); hub.position.set(0, 10.5, 2.4); mill.add(hub);
     for (let k2 = 0; k2 < 4; k2++) { const arm = new THREE.Group(); arm.rotation.z = (k2 / 4) * Math.PI * 2; hub.add(arm); const bar = new THREE.Mesh(new THREE.BoxGeometry(0.25, 7, 0.2), wood); bar.position.y = 3.5; arm.add(bar); const sail = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 5.6), M({ color: 0xe8dcc4, roughness: 0.9, side: THREE.DoubleSide })); sail.position.set(0.85, 4, 0); arm.add(sail); }
@@ -961,12 +1075,16 @@
     const pine = (x, z, s) => { cyl(0.18 * s, 0.25 * s, 2 * s, bark, x, s, z, 6); [0, 1, 2].forEach((k2) => { const c = new THREE.Mesh(new THREE.ConeGeometry((2.2 - k2 * 0.55) * s, 2.6 * s, 7), leafA); c.position.set(x, (2.2 + k2 * 1.5) * s, z); g.add(c); }); addSolid(S, x, z, 0.3 * s, 0.3 * s, 3 * s); };
     const oak = (x, z, s) => { cyl(0.22 * s, 0.32 * s, 2.6 * s, bark, x, 1.3 * s, z, 6); [[0, 3.6, 0, 1.9], [1, 3.2, 0.5, 1.4], [-0.9, 3.3, -0.4, 1.5], [0.2, 4.5, -0.3, 1.3]].forEach(([dx, dy, dz, r]) => { const c = new THREE.Mesh(new THREE.IcosahedronGeometry(r * s, 1), leafB); c.position.set(x + dx * s, dy * s, z + dz * s); g.add(c); }); addSolid(S, x, z, 0.35 * s, 0.35 * s, 3 * s); };
     let seed = 777; const rr = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
-    for (let i = 0; i < 90; i++) {
-      const a = rr() * Math.PI * 2, r = 47 + rr() * 30, x = Math.cos(a) * r, z = Math.sin(a) * r;
-      if (Math.abs(x) < 7 && z > 36) continue;
-      (rr() < 0.6 ? pine : oak)(x, z, 0.9 + rr() * 0.8);
+    if (hasTex && AS.modelInfo('tree1') && AS.modelInfo('tree2')) {
+      W.townTrees = plantTrees(g, S, rr, [[-6, -16], [6, 14], [-20, 1.5], [20, -12], [-25, 34.5], [8, 30]], (x, z) => Math.abs(x) < 7 && z > 36);
+    } else {
+      for (let i = 0; i < 90; i++) {
+        const a = rr() * Math.PI * 2, r = 47 + rr() * 30, x = Math.cos(a) * r, z = Math.sin(a) * r;
+        if (Math.abs(x) < 7 && z > 36) continue;
+        (rr() < 0.6 ? pine : oak)(x, z, 0.9 + rr() * 0.8);
+      }
+      [[-6, -16], [6, 14], [-20, -4.5 + 6], [20, -12], [-25, 30.5 + 4], [8, 30]].forEach(([x, z], i) => (i % 2 ? oak : pine)(x, z, 1));
     }
-    [[-6, -16], [6, 14], [-20, -4.5 + 6], [20, -12], [-25, 30.5 + 4], [8, 30]].forEach(([x, z], i) => (i % 2 ? oak : pine)(x, z, 1));
     // ---- ランタンの柱（夜は温かい光） ----
     const lantern = (x, z) => {
       box(0.16, 3.2, 0.16, woodD, x, 1.6, z); box(0.8, 0.1, 0.1, woodD, x + 0.35, 3.1, z);
@@ -1209,7 +1327,8 @@
       for (let i = 0; i < 900; i++) { c.fillStyle = `rgba(40,34,28,${rand(0.05, 0.2)})`; c.fillRect(rand(0, w), rand(0, 128), rand(1, 4), rand(1, 3)); }
     });
     stoneTex.wrapS = stoneTex.wrapT = THREE.RepeatWrapping;
-    const wallTex = stoneTex.clone(); wallTex.needsUpdate = true; wallTex.repeat.set(26, 1.4);
+    let wallTex = stoneTex.clone(); wallTex.needsUpdate = true; wallTex.repeat.set(26, 1.4);
+    if (MG.Assets && MG.Assets.texInfo('block')) wallTex = MG.Assets.tex('block', { rx: Math.round(2 * Math.PI * (ARENA_R + 0.8) / 1.6), ry: 4.6 / 1.6 });
     const wallMat = new THREE.MeshStandardMaterial({ map: wallTex, roughness: 0.95, side: THREE.BackSide });
     const WR = ARENA_R + 0.8, WH = 4.6;
     const wall = new THREE.Mesh(new THREE.CylinderGeometry(WR, WR, WH, 72, 1, true), wallMat);
@@ -1638,10 +1757,7 @@
   function restoreProp(o) {
     if (o.kind === 'rock') {
       // けずれた形を作り直す
-      const r = o.size;
-      const geo = new THREE.IcosahedronGeometry(r, 1); const pos = geo.attributes.position;
-      for (let i = 0; i < pos.count; i++) { const vx = pos.getX(i), vy = pos.getY(i), vz = pos.getZ(i); const k = 0.8 + prand(vx.toFixed(3) * 1, vy.toFixed(3) * 1, vz.toFixed(3) * 1) * 0.35; pos.setXYZ(i, vx * k, vy * k * 0.8, vz * k); }
-      geo.computeVertexNormals(); o.mesh.geometry.dispose(); o.mesh.geometry = geo;
+      const geo = rockGeometry(o.size, o.stretch); o.mesh.geometry.dispose(); o.mesh.geometry = geo;
     }
     if (!o.mesh.parent) scene.add(o.mesh);
     o.mesh.visible = true;
@@ -1759,6 +1875,7 @@
     pillars: pillars.filter((p) => p.alive).length, mode: W.mode, timeK, stats: Object.assign({}, W.stats), stage: W.stage, bound: W.bound(), solids: solids.length, sky: sky ? sky.visible : true, signs: Object.assign({}, W.signs),
     minHeight: heights ? Math.min.apply(null, Array.from(heights)) : 0,
     kinds: props.reduce((a, o) => { a[o.kind] = (a[o.kind] || 0) + 1; return a; }, {}),
+    skyTextured: W.skyTextured, townTrees: W.townTrees || 0, practiceTrees: W.practiceTrees || 0, groundMap: groundMat && groundMat.map && groundMat.map.image ? String(groundMat.map.image.src || 'canvas').slice(0, 15) : '',
     phys: W.phys, bodies: PH.bodyCount, active: W.phys ? PH.activeCount() : 0, physDebris: debris.filter((d) => d.body).length,
   });
   W.propList = () => props;
@@ -1789,6 +1906,10 @@
     buildPillars();
     buildCrystals();
     buildPracticeGate();
+    if (MG.Assets && MG.Assets.modelInfo('tree1') && MG.Assets.modelInfo('tree2')) {
+      let seed = 4242; const rr = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+      W.practiceTrees = plantTrees(decorP, null, rr, [], (x, z) => Math.abs(x) < 9 && z > 40, [68, 28, 80]);
+    }
     hemi = new THREE.HemisphereLight(0x8c9cff, 0x1a1030, 0.75); scene.add(hemi);
     dirLight = new THREE.DirectionalLight(0xb8c6ff, 0.75); scene.add(dirLight);
     amb = new THREE.AmbientLight(0x30305a, 0.35); scene.add(amb);
