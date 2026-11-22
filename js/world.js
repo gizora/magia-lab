@@ -1834,7 +1834,7 @@
     let best = null;
     const d = bb.clone().sub(a), len = d.length(); if (len < 1e-6) return null; d.normalize();
     for (const b of barriers) {
-      if (!b.alive || b.owner === owner) continue;
+      if (!b.alive || b.owner === owner || (W.allied && owner !== 'enemy')) continue; // 第39版: パーティーでは、味方の壁は味方の魔法を止めない
       let t = null;
       if (b.shape === 'wall') {
         const la = toLocal(b, a.x, a.y, a.z).clone();

@@ -1049,6 +1049,7 @@
     $('lv-xp-text').textContent = max ? '最大レベル' : `次のレベルまで ${need - p.xp}`;
   }
   function saveProgress() { save.rpg = G.getProgress(); persistSoon(); }
+  function saveProgressNow() { saveProgress(); clearTimeout(persistTimer); persist(); } // 階に着いた・倒れた・探索が終わったときは、すぐ保存する
   let luTimer = 0;
   const luQueue = [];
   function showLevelUp(u) {
@@ -1131,6 +1132,11 @@
     if (wd) { if (wd.stairsOpen) dot(wd.stairs.x, wd.stairs.z, '#ffb84a', 5, true); dot(wd.portal.x, wd.portal.z, '#4fa8ff', 5, true); }
     D.chests.forEach((c) => { if (!c.open) dot(c.x, c.z, '#ffe39a', 3, true); });
     (G.enemyDots ? G.enemyDots() : []).forEach((e) => dot(e.x, e.z, e.boss ? '#ff5a3a' : '#ff7a7a', e.boss ? 5 : 2.5, true));
+    // パーティーの仲間（倒れている人は輪つき）
+    (G.mateDots ? G.mateDots() : []).forEach((m) => {
+      dot(m.x, m.z, m.color, 4.5);
+      if (m.down) { const [mx, mz] = RP.worldToTile(m.x, m.z); g.strokeStyle = '#ff4a4a'; g.lineWidth = 2; g.beginPath(); g.arc((mx + 0.5) * k, (mz + 0.5) * k, 8, 0, Math.PI * 2); g.stroke(); }
+    });
     // 自分（向きの三角）
     const p = G.playerPos(), yaw = G.playerYaw();
     const [tx, tz] = RP.worldToTile(p.x, p.z), cx = (tx + 0.5) * k, cz = (tz + 0.5) * k;
@@ -1160,6 +1166,7 @@
   MG.UI = {
     toast,
     confirmPortal(run) {
+      $('portal-confirm-note').hidden = !(G.coop.on && G.dun.coop);
       $('portal-confirm-body').textContent = run ? `拾った ${run.gold} G・回復薬 ${run.potGain} 個と、この回の経験値を持って村へ帰ります。` : '村へ帰ります。';
       open('portal-confirm');
     },
@@ -1183,22 +1190,42 @@
       $('dun-floor').classList.toggle('boss', !!boss);
       $('dun-down').hidden = true;
       toast(boss ? `地下 ${fl} 階: 広い部屋に${MG.RPG.ENEMIES[MG.RPG.bossFor(fl)].label}がいる。倒すと、下の階への穴が開く` : (fl % 5 === 1 && fl > 1) ? `地下 ${fl} 階: ${MG.RPG.areaOf(fl).name}に入った。新しい敵に気をつけよう` : `地下 ${fl} 階: 下の階への穴（オレンジの光）に入ると次の階へ、青い帰還ポータルに触れると村へ帰る`, 3200);
-      saveProgress();
+      saveProgressNow();
     },
-    onDungeonDown(name) {
+    onResume(fl) { toast(`地下 ${fl} 階の最初から、探索を再開します`, 4000); },
+    onDungeonDown(name, wait) {
+      saveProgressNow();
       const el = $('dun-down');
+      el.classList.toggle('waiting', !!wait);
+      if (wait) {
+        if (current === 'portal-confirm') close(false);
+        el.innerHTML = `<div class="dd-title">倒れた…</div><div class="dd-sub">${name ? esc(name) + 'にやられた。' : ''}仲間がそばで <kbd>F</kbd> を4秒押し続けると蘇ります</div>`;
+        el.hidden = false;
+        return;
+      }
       el.innerHTML = `<div class="dd-title">倒れた…</div><div class="dd-sub">${name ? esc(name) + 'にやられた。' : ''}拾った物と、この回の経験値を失って、神殿で蘇ります</div>`;
+      el.hidden = false;
+    },
+    onRevived() {
+      $('dun-down').hidden = true;
+      toast('仲間に蘇生された', 2400);
+    },
+    onPartyWipe() {
+      saveProgressNow();
+      const el = $('dun-down');
+      el.classList.remove('waiting');
+      el.innerHTML = '<div class="dd-title">全滅…</div><div class="dd-sub">全員が倒れた。拾った物と、この回の経験値を失って、神殿で蘇ります</div>';
       el.hidden = false;
     },
     onDungeonEnd(sum) {
       $('dun-down').hidden = true;
-      const won = sum.how === 'portal';
-      $('dun-result-h').textContent = won ? '帰還' : '神殿で蘇った';
+      const won = sum.how === 'portal' || sum.how === 'host';
+      $('dun-result-h').textContent = sum.how === 'host' ? '通信が切れたため帰還' : won ? '帰還' : sum.party ? '全滅' : '神殿で蘇った';
       const lv = sum.level !== sum.startLevel ? `Lv ${sum.startLevel} → ${sum.level}` : `Lv ${sum.level}`;
       $('dun-result-body').innerHTML = won
         ? `<div class="dr-big">地下 ${sum.floor} 階から帰ってきた</div><div class="dr-gain">持ち帰ったお金: ${sum.gold} G</div><div>手に入れた経験値: ${sum.xp}（${lv}）</div><div>倒した敵: ${sum.kills} 体</div>`
         : `<div class="dr-big">地下 ${sum.floor} 階で倒れた</div><div class="dr-lost">失ったお金: ${sum.gold} G・回復薬 ${sum.potions} 個</div><div class="dr-lost">失った経験値: ${sum.xp}（レベルは Lv ${sum.level} に戻った）</div><div>倒した敵: ${sum.kills} 体</div>`;
-      saveProgress();
+      saveProgressNow();
       open('dun-result');
     },
     sens: () => save.sens || 1,

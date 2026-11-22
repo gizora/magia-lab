@@ -73,6 +73,9 @@
   </div>
   <canvas id="minimap" class="minimap" width="200" height="200" hidden aria-label="ダンジョンの地図"></canvas>
   <div id="spot-prompt" class="spot-prompt" hidden></div>
+  <!-- 第39版: パーティー（仲間の様子は左上。画面下の中央は HP・MP・スタミナだけなので置かない） -->
+  <div id="pt-hud" class="pt-hud" aria-label="パーティーの仲間" hidden></div>
+  <div id="pt-prompt" class="pt-prompt" role="status" hidden></div>
   <div id="levelup" class="levelup" aria-live="assertive"></div>
   <div id="dun-down" class="dun-down" role="status" hidden></div>
 
@@ -117,6 +120,7 @@
     </ol>
     <div class="title-btns">
       <button type="button" id="btn-start" class="btn-primary">はじめる</button>
+      <button type="button" id="btn-party-title" class="btn-secondary">友達とパーティー</button>
       <button type="button" id="btn-versus-title" class="btn-secondary">友達と対戦</button>
     </div>
     <p id="engine-status" class="engine-status" aria-live="polite">本物の物理とエフェクトを準備しています…</p>
@@ -238,7 +242,8 @@
       <button type="button" id="menu-craft" class="btn-secondary">魔法工房</button>
       <button type="button" id="menu-book" class="btn-secondary">魔法図鑑</button>
       <button type="button" id="menu-wands" class="btn-secondary">杖をえらぶ</button>
-      <button type="button" id="menu-versus" class="btn-secondary no-dungeon">友達と対戦</button>
+      <button type="button" id="menu-party" class="btn-secondary no-dungeon">友達とパーティー</button>
+        <button type="button" id="menu-versus" class="btn-secondary no-dungeon">友達と対戦</button>
       <div class="setting">
         <label for="sens">視点の感度</label>
         <input type="range" id="sens" min="0.3" max="2.5" step="0.1" value="1">
@@ -349,6 +354,94 @@
     <div class="result-btns">
       <button type="button" id="btn-voice-ok" class="btn-primary">マイクを使って始める</button>
       <button type="button" class="btn-secondary" data-close>やめる</button>
+    </div>
+  </div>
+</section>
+
+<!-- ===== 友達とパーティー（第39版） ===== -->
+<section id="party" class="overlay panel-overlay" role="dialog" aria-modal="true" aria-labelledby="party-h" hidden>
+  <div class="panel party">
+    <header class="panel-head">
+      <h2 id="party-h">パーティー <small>友達とダンジョンへ・最大4人</small></h2>
+      <button type="button" class="btn-close" data-close aria-label="閉じる">×</button>
+    </header>
+    <div class="vs-body">
+      <div id="pt-home" class="pt-col">
+        <div class="vs-name-row">
+          <label for="pt-name">あなたの名前</label>
+          <input type="text" id="pt-name" maxlength="12" placeholder="名無しの魔法使い" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="vs-name-row vs-custom-row">
+          <label for="pt-custom">合言葉 <small>（自分で決める場合）</small></label>
+          <input type="text" id="pt-custom" maxlength="30" placeholder="空欄なら自動で決まります" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="vs-choice">
+          <button type="button" id="pt-host-btn" class="btn-primary">パーティーを作る<small>リーダーになる</small></button>
+          <button type="button" id="pt-join-btn" class="btn-secondary">パーティーに入る<small>合言葉を聞いた</small></button>
+        </div>
+        <details class="vs-more">
+          <summary>決まり・料金・送られる情報</summary>
+          <ul class="vs-notes">
+            <li><b>編成</b>: 全員が準備完了になると、リーダーが出発できる。強さは今のレベルと杖で決まる。</li>
+            <li><b>戦い</b>: 敵の HP だけが人数で増える（1人増えるごとに +60%、守護者は +80%）。味方の魔法は味方に当たらない。</li>
+            <li><b>蘇生</b>: 倒れた仲間のそばで F を4秒押し続けると HP 40% で復活。攻撃を受けると中断。全員が倒れると全滅。</li>
+            <li><b>分け方</b>: お金と経験値は、与えたダメージの割合で分ける。宝箱は開けた人のもの。</li>
+            <li><b>移動</b>: 下の階へは全員集合。帰還は各自で、残った仲間は続けられる。</li>
+            <li><b>通信切れ</b>: リーダーが切れると、全員が成果を持って帰還。途中で開き直すと、今の階の最初からひとりで再開。</li>
+            <li><b>料金</b>: かからない。</li>
+            <li><b>送られる情報</b>: 最初の顔合わせだけ PeerJS の公開サーバーと STUN サーバー（Google・Cloudflare）に接続情報（IP アドレスなど）を渡す。名前・Lv・杖は仲間にだけ届く。</li>
+          </ul>
+        </details>
+      </div>
+
+      <div id="pt-join" class="pt-col" hidden>
+        <div class="vs-code">
+          <label for="pt-room-in">リーダーから聞いた合言葉を入れる</label>
+          <div class="vs-code-row"><input type="text" id="pt-room-in" class="vs-room-input" maxlength="30" placeholder="ほのお-1234 など" autocomplete="off" spellcheck="false"><button type="button" id="pt-room-join" class="btn-small btn-accent">入る</button></div>
+        </div>
+        <details class="vs-alt">
+          <summary>コードでつなぐ（予備）</summary>
+          <div class="vs-alt-body">
+            <div class="vs-code">
+              <label for="pt-invite-in">① リーダーから届いた招待コードを貼り付ける</label>
+              <div class="vs-code-row"><textarea id="pt-invite-in" rows="3" spellcheck="false"></textarea><button type="button" id="pt-make-answer" class="btn-small btn-accent">返事コードを作る</button></div>
+            </div>
+            <div id="pt-answer-box" class="vs-code" hidden>
+              <label for="pt-answer-out">② この返事コードをリーダーに送り返す</label>
+              <div class="vs-code-row"><textarea id="pt-answer-out" readonly rows="3"></textarea><button type="button" id="pt-copy-answer" class="btn-small">コピー</button></div>
+            </div>
+          </div>
+        </details>
+      </div>
+
+      <div id="pt-room" class="pt-col" hidden>
+        <div class="pt-code-row"><span>合言葉</span><output id="pt-code" class="pt-code">準備中…</output><button type="button" id="pt-copy" class="btn-small">コピー</button></div>
+        <ul id="pt-cards" class="pt-cards" aria-label="パーティーの編成"></ul>
+        <div class="pt-actions">
+          <button type="button" id="pt-ready" class="btn-secondary">準備完了</button>
+          <button type="button" id="pt-depart" class="btn-primary" disabled>出発（全員の準備待ち）</button>
+          <p id="pt-wait" class="pt-wait" hidden></p>
+        </div>
+        <p id="pt-host-note" class="pt-wait" hidden>仲間が探索中です。このページを閉じたり部屋を閉じたりすると、仲間の探索も終わります。</p>
+        <details id="pt-code-host" class="vs-alt">
+          <summary>コードで招待する（予備）</summary>
+          <div class="vs-alt-body">
+            <button type="button" id="pt-make-invite" class="btn-secondary">招待コードを作る</button>
+            <div id="pt-invite-box" class="vs-code" hidden>
+              <label for="pt-invite-out">① この招待コードを友達に送る</label>
+              <div class="vs-code-row"><textarea id="pt-invite-out" readonly rows="3"></textarea><button type="button" id="pt-copy-invite" class="btn-small">コピー</button></div>
+              <label for="pt-answer-in">② 届いた返事コードを貼り付ける</label>
+              <div class="vs-code-row"><textarea id="pt-answer-in" rows="3" spellcheck="false"></textarea><button type="button" id="pt-accept" class="btn-small btn-accent">つなぐ</button></div>
+            </div>
+          </div>
+        </details>
+      </div>
+
+      <p id="pt-status" class="vs-status" role="status" aria-live="polite"></p>
+      <div class="vs-foot">
+        <button type="button" id="pt-back" class="btn-small" hidden>最初の画面にもどる</button>
+        <button type="button" id="pt-leave" class="btn-small" hidden>パーティーを抜ける</button>
+      </div>
     </div>
   </div>
 </section>
@@ -505,6 +598,7 @@
   <div class="panel result">
     <h2 id="portal-confirm-h">村へ帰りますか？</h2>
     <p id="portal-confirm-body" class="result-detail">拾った物を持って、村へ帰ります。</p>
+    <p id="portal-confirm-note" class="result-detail pt-portal-note" hidden>帰ると、あなたの探索はここで終わりです。残った仲間は続けられます。</p>
     <div class="result-btns"><button type="button" id="portal-yes" class="btn-primary" data-autofocus>帰る</button><button type="button" id="portal-no" class="btn-secondary">まだ探索する</button></div>
   </div>
 </section>
@@ -552,5 +646,6 @@
 <script src="js/game.js"></script>
 <script src="js/ui.js"></script>
 <script src="js/versus.js"></script>
+<script src="js/party.js"></script>
 </body>
 </html>

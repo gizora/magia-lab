@@ -96,6 +96,8 @@
   }
 
   function openLobby() {
+    if (N.role && N.kind === 'party') { UI.toast('パーティーを組んでいます。対戦は、パーティーを抜けてからできます'); return; }
+    if (G.dun.on) { UI.toast('対戦は、村に帰ってからできます'); return; }
     if (VS.state === 'match') { UI.toast('対戦中です。メニューの「対戦をやめる」で抜けられます'); return; }
     UI.open('versus');
   }

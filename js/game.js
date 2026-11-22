@@ -48,6 +48,18 @@
   }
   const M = (G.match = { on: false, myId: null, hp: PLAYER_HP, maxHp: PLAYER_HP, alive: true, deadT: 0, prot: 0, slowT: 0, slowHard: false, vulnT: 0, burnT: 0, burnDps: 0, burnAcc: 0, burnFrom: null, burnSpell: '', lastFrom: null, respawnSec: RESPAWN_SEC, hurtT: 0 });
   const avatars = new Map(); // ID → 相手の的
+  // 第39版: パーティー。仲間の姿は avatars に置くが targets には入れない（だから味方の魔法は当たらず、狙いも吸われない）。
+  // 通信の中継は部屋主。敵は「受け持ち」（ダンジョンに残っている人の先頭）の画面で動き、ほかの人は写しを見る。
+  //   受け持ち → 全員: snap（敵の様子）・edie（倒れた敵と分け前）・atk（攻撃の見た目）・bolt（魔弾）
+  //   受け持ち → 狙われた人: hurt ／ ほかの人 → 受け持ち: eh（敵に与えたダメージと状態異常）
+  const CO = (G.coop = { on: false, me: 'p0', ids: [], sim: null, n: 1, seq: 0, lastSeq: 0, rev: null, revTo: null, revBlock: false, hook: {} });
+  const co = () => CO.on && D.on && !!D.coop;
+  const isSim = () => !co() || CO.sim === CO.me;
+  const netOn = () => M.on || co();
+  const coSend = (msg, opt) => { if (CO.hook.send && co()) { msg.n = D.floor; CO.hook.send(msg, opt); } };
+  const emitFx = (f) => { if (M.on) { if (G.onFx) G.onFx(f); } else coSend({ t: 'fx', f }); };
+  // 仲間の魔法（見た目だけ）と味方には、押す・引く・凍らせるなどの作用もしない
+  const noPush = (t, spec) => CO.on && (t.isSummon || !!(spec && spec.remote));
   let selfT = null;          // 自分の的（見えない）
   let CTX = null;            // 相手の魔法を再現している間だけ: { pos, tip, aim }。発動の位置や向きを、自分ではなく相手のものにする
   const casterPos = () => (CTX ? CTX.pos : player.pos);
@@ -669,10 +681,23 @@
     setTimeout(() => { el.remove(); popCount--; }, 900);
   }
 
-  function damage(t, d, color, crit) {
+  function damage(t, d, color, crit, by) {
     if (!t.alive) return 0;
     d = Math.max(1, Math.round(d));
-    t.hp -= d; t.flash = 0.1;
+    t.flash = 0.1;
+    if (t.isEnemy && co()) {
+      if (!isSim()) {
+        // 受け持ちでない画面: 数字だけ出して、受け持ちへ送る（HP は受け持ちから届く）
+        const o = enemyOut(t); o.d += d;
+        const q = t.center.clone(); q.x += rand(-0.4, 0.4); q.y += t.r * 0.6;
+        popup(q, crit ? d + '!' : String(d), crit ? 'crit' : '');
+        return d;
+      }
+      const who = by || CO.me;
+      t.dealt[who] = (t.dealt[who] || 0) + Math.min(d, Math.max(0, t.hp));
+      t.killer = who; t.hitBy = who;
+    }
+    t.hp -= d;
     const p = t.center.clone(); p.x += rand(-0.4, 0.4); p.y += t.r * 0.6;
     popup(p, crit ? d + '!' : String(d), crit ? 'crit' : '');
     drawBar(t);
@@ -691,11 +716,11 @@
     if (spec && spec.remote) return 0;                          // 相手の魔法は見た目だけ
     if (o.dir) t.lastDir = o.dir.clone();
     let d = dmg * ((spec && spec.mult) || 1);
-    if (t.vulnT > 0) d *= 1.35;
+    if (t.vulnT > 0 || t.netVul) d *= 1.35;
     let crit = false;
     if (spec && spec.crit && !o.noCrit && Math.random() < spec.crit) { d *= 2.5; crit = true; }
     if (spec && !o.noStatus) {
-      if (spec.burn > 0) { t.burnT = Math.max(t.burnT, 1.5 + spec.burn * 1.2); t.burnDps = Math.max(t.burnDps, (3 + spec.burn * 3) * (spec.mult || 1)); t.burnRec = spec.rec || null; }
+      if (spec.burn > 0) { t.burnT = Math.max(t.burnT, 1.5 + spec.burn * 1.2); t.burnDps = Math.max(t.burnDps, (3 + spec.burn * 3) * (spec.mult || 1)); t.burnRec = spec.rec || null; t.burnBy = CO.me; }
       if (spec.freeze > 0) { t.freezeT = Math.max(t.freezeT, 0.8 + spec.freeze); if (spec.freeze >= 2) t.frozenHard = true; }
       if (spec.corrode > 0) t.vulnT = Math.max(t.vulnT, 3 + spec.corrode * 2);
       if (spec.knock > 0 && o.dir) {
@@ -776,7 +801,7 @@
     opt = opt || {};
     if (!t.alive || t.isPlayer) return;
     if (t.isSummon) { summonDie(t, false); return; }
-    if (t.isEnemy) { enemyDie(t); return; }
+    if (t.isEnemy) { if (isSim()) enemyDie(t); else enemyOut(t).k = 1; return; }
     t.alive = false; t.dead = 0; t.bar.visible = false;
     st.kills++;
     st.combo = st.comboT > 0 ? st.combo + 1 : 1;
@@ -835,7 +860,7 @@
     const dir = _dir.clone();
     let best = null, bestT = range, ground = false;
     for (const t of targets) {
-      if (!t.alive || t.isSelf || (t.isSummon && t.ownerKey === 'me')) continue;
+      if (!t.alive || t.isSelf || (t.isSummon && (CO.on || t.ownerKey === 'me'))) continue;
       const oc = t.center.clone().sub(origin);
       const tca = oc.dot(dir); if (tca < 0) continue;
       const d2 = oc.lengthSq() - tca * tca, r = t.r * 1.15;
@@ -866,7 +891,7 @@
   function nearestToRay(aim, maxAngle, range) {
     let best = null, bestA = maxAngle;
     for (const t of targets) {
-      if (!t.alive || (CTX ? t === CTX.casterT : t.isSelf) || (t.isSummon && t.ownerKey === (CTX ? String(CTX.casterT.pid) : 'me'))) continue;
+      if (!t.alive || (CTX ? t === CTX.casterT : t.isSelf) || (CO.on && t.isSummon) || (t.isSummon && t.ownerKey === (CTX ? String(CTX.casterT.pid) : 'me'))) continue;
       const v = t.center.clone().sub(aim.origin); const d = v.length(); if (d > range) continue;
       const a = v.normalize().angleTo(aim.dir);
       if (a < bestA) { bestA = a; best = t; }
@@ -916,15 +941,15 @@
       else if (d < radius) dd = dmg * (1 - 0.5 * Math.max(0, d) / radius);
       if (dd > 0) hitTarget(t, dd, spec, { dir: t.center.clone().sub(pp) });
     }
-    if (spec.pull > 0) pullAt(pp, radius * 2.5, spec.pull);
+    if (spec.pull > 0) pullAt(pp, radius * 2.5, spec.pull, spec);
     if (!o.noBarrier) W.barriersNear(pp, radius).forEach((wb) => { if (wb.game) damageBarrier(wb.game, dmg * 0.8, pp, spec); }); // 爆風は魔法の壁にも当たる
     if (spec.destroy) W.blast(pp, radius, dmg * 1.2);
     if (!o.noEfk) EF.impact(e, pp, radius);
   }
 
-  function pullAt(p, radius, power) {
+  function pullAt(p, radius, power, spec) {
     for (const t of targets) {
-      if (!t.alive) continue;
+      if (!t.alive || noPush(t, spec)) continue;
       const v = p.clone().sub(t.center); const d = v.length();
       if (d > radius || d < 0.3) continue;
       v.normalize();
@@ -1015,7 +1040,7 @@
       if (Math.hypot(dx, dz) < R + t.r * 0.5 && t.center.y < 3.6 * s + t.r) {
         hitSet.add(t);
         hitTarget(t, spec.dmg, spec, { dir: new V3(dx, 0, dz) });
-        t.dispV.y += 3 * t.mass;
+        if (!noPush(t, spec)) t.dispV.y += 3 * t.mass;
         extras(t, spec, spec.dmg, t.center.clone(), null);
       }
     }
@@ -1053,6 +1078,7 @@
 
   // 相手の完全反磁性に入った弾: 撃った人のほうへはね返す（撃った人の画面では、撃った人に当たる）
   function reflectProj(p) {
+    if (CO.on) return false; // パーティーの完全反磁性は、味方の弾をはね返さない
     const own = okey(ownerKey(p.spec));
     for (const m of meissners) {
       if (!m.alive || m.owner === own) continue;
@@ -1127,7 +1153,7 @@
         spawnProj(spec, pos, d, { speedMul: 0.6, life: 0.6, size: Math.max(0.15, spec.size * 0.6), dmg: dmg * 0.4, isShard: true, homing: 0, pierce: 0, bounce: 0, radius: 0.8, kind: 'shard', hit: [t] });
       }
     }
-    if (spec.pull > 0 && !(p && EXPLOSIVE[p.kind])) pullAt(pos, 9, spec.pull);
+    if (spec.pull > 0 && !(p && EXPLOSIVE[p.kind])) pullAt(pos, 9, spec.pull, spec);
   }
 
   function updateProjs(dt0) {
@@ -1224,7 +1250,7 @@
       hitTarget(t, dmg * (k === 0 ? 1 : 0.88), spec, { dir: t.center.clone().sub(from) });
       EF.impact(spec.element, t.center, 1.4);
       if (spec.split > 0 && spec.form === 'chain') extras(t, Object.assign({}, spec, { chainHit: 0, pull: 0 }), dmg, t.center.clone(), null);
-      if (spec.pull > 0) pullAt(t.center.clone(), 7, spec.pull);
+      if (spec.pull > 0) pullAt(t.center.clone(), 7, spec.pull, spec);
       if (k < jumps) {
         const next = nearestTarget(t.center, jumpRange, hitSet, null, spec);
         if (next) after(0.08, () => step(k + 1, t.center.clone(), next));
@@ -1272,7 +1298,7 @@
     shatterFx(p, colorsOf(spec)[0], 1.3);
     explode(p, spec.radius, spec.dmg * 0.35, Object.assign({}, spec, { casterT: selfT }));
     popup(ahead(2.4, 0.25), '障壁がこわれた', 'ward');
-    if (M.on && G.onFx) G.onFx({ k: 'wardBreak', p: arr(p), e: spec.element, r: spec.radius });
+    if (netOn()) emitFx({ k: 'wardBreak', p: arr(p), e: spec.element, r: spec.radius });
   }
   // 受けるダメージ: 守護で半分、障壁で吸い取る。戻り値は HP から引く分
   function absorb(d) {
@@ -1281,7 +1307,7 @@
     if (SUP.shield > 0 && d > 0 && (SUP.shieldShape !== 'front' || fromFront())) {
       const a = Math.min(SUP.shield, d);
       SUP.shield -= a; d -= a; SUP.hitT = 0.3;
-      if (M.on && G.onFx && lastHitFrom) G.onFx({ k: 'wardHit', from: lastHitFrom }); // ほかの人の画面でも、当たった所から波紋が広がる
+      if (M.on && lastHitFrom) emitFx({ k: 'wardHit', from: lastHitFrom }); // ほかの人の画面でも、当たった所から波紋が広がる
       if (SUP.shield <= 0.5) breakShield();
     }
     return d;
@@ -1458,7 +1484,7 @@
     shatterFx(c, c1, b.shape === 'dome' ? b.wb.R * 0.6 : 1.4);
     if (b.shape === 'wall' && SOLID_EL[b.spec.element]) FX.emit(c, { count: 40, c1: '#7a7468', c2: c1, speed: 6, up: 4, gravity: 14, life: 1.1, size: 0.35, jitter: b.wb.half[0] * 0.8 });
     if (shock) explode(c, Math.min(6, b.spec.radius || 4), (b.spec.dmg || 0) * 0.3, Object.assign({}, b.spec, b.owner === 'me' ? { casterT: selfT } : { remote: b.owner }), null, { noBarrier: true });
-    if (b.owner === 'me' && M.on && G.onFx) G.onFx({ k: 'barBreak', id: String(b.id).split(':').slice(1).join(':') });
+    if (b.owner === 'me' && netOn()) emitFx({ k: 'barBreak', id: String(b.id).split(':').slice(1).join(':') });
     removeBarrier(b);
   }
   function updateBarriers(dt) {
@@ -1501,7 +1527,7 @@
   const SUMMON_MAX = 3;
   const SUMMON_TYPES = ['golem', 'spirit', 'beast', 'wisp', 'titan'];
   let summonSerial = 0;
-  const friendly = (t, spec) => !!(t && t.isSummon && t.ownerKey === ownerKey(spec)); // 自分の召喚獣（自分の魔法は当たらない）
+  const friendly = (t, spec) => !!(t && t.isSummon && (CO.on || t.ownerKey === ownerKey(spec))); // 自分の召喚獣（自分の魔法は当たらない）
   function makeSummonModel(type, c1, c2, mats) {
     const g = new THREE.Group(), parts = {};
     const std = (o) => { const m = new THREE.MeshStandardMaterial(o); m.userData.baseEmissive = new THREE.Color(o.emissive || 0); m.userData.baseInt = o.emissiveIntensity == null ? 1 : o.emissiveIntensity; mats.push(m); return m; };
@@ -1746,7 +1772,7 @@
       FX.emit(from, { count: 10, c1, c2, speed: 3, life: 0.25, size: 0.25, drag: 4 });
       if (t.kind === 'spirit') AU.cast(spec.element);
     }
-    if (!visualOnly && !t.puppet && M.on && G.onFx) G.onFx({ k: 'sumAtk', id: t.sid, tp: arr(e.center) });
+    if (!visualOnly && !t.puppet && netOn()) emitFx({ k: 'sumAtk', id: t.sid, tp: arr(e.center) });
   }
   function summonDie(t, expired) {
     if (!t.alive) return;
@@ -1756,7 +1782,7 @@
     if (t.kind === 'golem' || t.kind === 'titan') { FX.emit(c, { count: t.kind === 'titan' ? 90 : 30, c1: '#7a7468', c2: t.kind === 'titan' ? '#d9a84a' : '#c8c0b0', speed: t.kind === 'titan' ? 10 : 6, up: 4, gravity: 14, life: 1.2, size: 0.45 }); AU.crumble(ap(c)); }
     FX.flash(c, c1, 3, 10, 0.25);
     if (!expired && !t.puppet) popup(c.clone().add(new V3(0, 1, 0)), MG.SUMMONS[t.kind].label + 'が倒された', 'ward');
-    if (!t.puppet && M.on && G.onFx) G.onFx({ k: 'sumDie', id: t.sid });
+    if (!t.puppet && netOn()) emitFx({ k: 'sumDie', id: t.sid });
   }
   // 召喚獣の動きの見た目（歩く・浮かぶ・殴る・飛びかかる）
   function animateSummon(t, dt, speed) {
@@ -2272,7 +2298,7 @@
             if (!t.alive) continue;
             if (Math.hypot(t.center.x - f.pos.x, t.center.z - f.pos.z) < f.radius + t.r * 0.5 && t.center.y < f.radius + 2.5) {
               hitTarget(t, spec.dmg, spec, { noCrit: false });
-              if (spec.pull > 0) t.dispV.addScaledVector(f.pos.clone().sub(t.center).setY(0).normalize(), spec.pull * 1.5 * t.mass);
+              if (spec.pull > 0 && !noPush(t, spec)) t.dispV.addScaledVector(f.pos.clone().sub(t.center).setY(0).normalize(), spec.pull * 1.5 * t.mass);
             }
           }
         }
@@ -2288,7 +2314,7 @@
         for (const t of targets) {
           if (!t.alive) continue;
           const v = f.pos.clone().sub(t.center); v.y = (f.pos.y + 1.5) - t.center.y; const d = v.length();
-          if (d < f.radius * 1.6) t.dispV.addScaledVector(v.normalize(), dt * 22 * t.mass * (1 + spec.pull * 0.5));
+          if (d < f.radius * 1.6 && !noPush(t, spec)) t.dispV.addScaledVector(v.normalize(), dt * 22 * t.mass * (1 + spec.pull * 0.5));
         }
         f.tickT -= dt;
         if (f.tickT <= 0) {
@@ -2340,6 +2366,7 @@
   // 時間遅延の球の中では、球を張った人以外の時間が 1/5 になる
   function timeK(p, owner) {
     if (!dilations.length) return 1;
+    if (CO.on && owner !== 'enemy' && owner != null) return 1; // 仲間の時間遅延は、味方を遅らせない
     for (const d of dilations) if (d.alive && d.owner !== owner && p.distanceTo(d.c) < d.R) return 0.2;
     return 1;
   }
@@ -2543,7 +2570,7 @@
         strikeT -= dt;
         if (strikeT <= 0 && t < 4.4) {
           strikeT = 0.32;
-          const cands = targets.filter((x) => x.alive && x !== spec.casterT && Math.hypot(x.center.x - c.x, x.center.z - c.z) < 24);
+          const cands = targets.filter((x) => x.alive && x !== spec.casterT && !friendly(x, spec) && Math.hypot(x.center.x - c.x, x.center.z - c.z) < 24);
           const tg = cands.length ? cands[(Math.random() * cands.length) | 0] : null;
           const end = tg ? tg.center.clone() : new V3(c.x + rand(-9, 9), 0.1, c.z + rand(-9, 9));
           const top = new V3(end.x + rand(-2, 2), 17, end.z + rand(-2, 2));
@@ -2614,7 +2641,7 @@
         for (const tg of targets) {
           if (!tg.alive) continue;
           const v = p.clone().sub(tg.center); const d = v.length();
-          if (d < 22 && d > 0.5) tg.dispV.addScaledVector(v.normalize(), dt * 34 * tg.mass);
+          if (d < 22 && d > 0.5 && !noPush(tg, spec)) tg.dispV.addScaledVector(v.normalize(), dt * 34 * tg.mass);
         }
         tick -= dt;
         if (tick <= 0) { tick = 0.25; for (const tg of targets) if (tg.alive && tg.center.distanceTo(p) < 6) hitTarget(tg, 9, spec, { noStatus: true, noCrit: true }); }
@@ -2687,7 +2714,7 @@
         if (d > 32) continue;
         after(d / 36, () => {
           if (!t.alive) return;
-          t.freezeT = 6; t.frozenHard = true;
+          if (!noPush(t, spec)) { t.freezeT = 6; t.frozenHard = true; }
           spawnSpike(t.pos.clone(), Object.assign({}, spec, { radius: 0.1, colors: ['#bff0ff', '#ffffff'], size: 1.2 }), new Set(aliveTargets()), 1);
           if (t.isPlayer) hitTarget(t, 42, Object.assign({}, spec, { freeze: 5.2, burn: 0, knock: 0, corrode: 0, rewind: 0, pulses: 0 }), {});
           else hitTarget(t, 42, spec, { noStatus: true });
@@ -2736,6 +2763,7 @@
             continue;
           }
           if (tg.center.distanceTo(c) < R + tg.r * 0.3) {
+            if (noPush(tg, spec)) continue;
             if (spec.rec) spec.rec.add(Math.max(0, tg.hp));
             popup(tg.center.clone().add(new V3(0, 1, 0)), '消滅', 'pierce');
             tg.hp = 0; drawBar(tg);
@@ -2744,7 +2772,7 @@
           }
         }
         // 球の中を飛んでいる弾も消える
-        for (let i = projs.length - 1; i >= 0; i--) if (projs[i].pos.distanceTo(c) < R) removeProj(i);
+        for (let i = projs.length - 1; i >= 0; i--) if (projs[i].pos.distanceTo(c) < R && (!CO.on || ownerKey(projs[i].spec) === ownerKey(spec))) removeProj(i);
         return n;
       };
       special((dt) => {
@@ -2931,7 +2959,7 @@
             if (!tg.alive || tg === spec.casterT) continue;
             if (Math.hypot(tg.center.x - c.x, tg.center.z - c.z) > R + tg.r || !grounded(tg)) continue;
             hitTarget(tg, 20, S, { noCrit: true, dir: new V3(0, 1, 0) });
-            if (!tg.isPlayer) tg.dispV.y += 2.2 * tg.mass;
+            if (!tg.isPlayer && !noPush(tg, spec)) tg.dispV.y += 2.2 * tg.mass;
           }
           AU.impact('earth', 2.5, ap(c));
         }
@@ -3398,6 +3426,7 @@
     castN = ++castSerial; const n = castN;
     castSpell(spec, aim, rec);
     if (M.on && G.onLocalCast) G.onLocalCast(packCast(spec0, mods || G.castMods('slot'), aim));
+    else if (co()) coSend({ t: 'cast', c: packCast(spec0, mods || G.castMods('slot'), aim) });
     // 使い魔: 小さな光の玉が現れて、しばらくそばで戦う
     if (spec.familiar > 0) after(0.25, () => { if (st.running && (!M.on || M.alive)) spawnSummon('wisp', Object.assign({}, spec, { rec }), player.pos.clone().add(new V3(0, 2.2, 0))); });
     if (spec.guard > 0) { SUP.guardT = Math.max(SUP.guardT, spec.guard); popup(ahead(2.4, 0.35), '守護', 'ward'); }
@@ -3425,7 +3454,7 @@
     const spec = st.slots[i];
     if (!spec) { if (MG.UI) MG.UI.toast('このスロットは空です。E キーの魔法工房で作りましょう'); AU.error(); return false; }
     if (st.cds[i] > 0 || st.gcd > 0) return false;
-    if (D.on && !D.alive) return false;
+    if (D.on && (!D.alive || CO.rev)) return false;
     if (inTown()) return false;
     if (spec.seq.length > DER.chain) { if (!st.sealWarnT || st.time > st.sealWarnT) { sealedMsg(spec.seq.length); st.sealWarnT = st.time + 1; } return false; }
     const ch = G.charge(i);
@@ -3456,7 +3485,7 @@
     const spec = MG.buildSpell(seq);
     if (!spec) return 'invalid';
     if (seq.length > DER.chain) { sealedMsg(seq.length); return 'sealed'; }
-    if (D.on && !D.alive) return 'paused';
+    if (D.on && (!D.alive || CO.rev)) return 'paused';
     const key = seq.join('|');
     if ((st.vcd[key] || 0) > st.time || st.gcd > 0) return 'cooldown';
     const m = G.castMods(st.wand === 'bare' ? 'bare' : how === 'draw' ? 'draw' : 'chant');
@@ -3537,6 +3566,7 @@
     if (key === circleKey) return;
     circleKey = key;
     if (M.on && G.onCircle) G.onCircle(words, state);
+    else coSend({ t: 'circle', g: words.slice(0, 4), k: state });
   }
   G.chantBuild = function (o) {
     const b = st.build;
@@ -3749,7 +3779,7 @@
     const k = input.keys;
     const dead = (M.on && !M.alive) || (D.on && !D.alive);
     let fx = 0, fz = 0;
-    if (!dead) {
+    if (!dead && !st.paused && !CO.rev) {
       if (k.KeyW || k.ArrowUp) fz -= 1;
       if (k.KeyS || k.ArrowDown) fz += 1;
       if (k.KeyA || k.ArrowLeft) fx -= 1;
@@ -3783,7 +3813,7 @@
     player.floor = floor;
     if (SUP.flyT > 0 && !dead) {
       // 飛翔: Space で上昇、C で下降、どちらも押さなければその高さにとどまる
-      const want = ((k.Space ? 1 : 0) - (k.KeyC ? 1 : 0)) * 8;
+      const want = st.paused ? 0 : ((k.Space ? 1 : 0) - (k.KeyC ? 1 : 0)) * 8;
       player.vy += (want - player.vy) * Math.min(1, dt * (want ? 6 : 10));
       player.pos.y += player.vy * dt;
       const flyMax = W.stage === 'dungeon' ? 3.2 : FLY_MAX_H; // ダンジョンでは壁より高く飛べない
@@ -3810,7 +3840,7 @@
       const kd = Math.min(1, (M.respawnSec - M.deadT) / 0.6);
       camera.position.y -= kd * 1.25; camera.rotation.z += kd * 0.6;
     }
-    if (M.on) { wand.visible = !dead && st.wand !== 'bare'; handGlow.visible = !dead && st.wand === 'bare'; }
+    if (M.on || co()) { wand.visible = !dead && st.wand !== 'bare'; handGlow.visible = !dead && st.wand === 'bare'; }
     if (st.shake > 0.001) {
       const k = H.scale;
       camera.position.x += rand(-1, 1) * st.shake * 0.25 * k;
@@ -3869,6 +3899,7 @@
     if (M.on) updateMatch(dt);
     updatePlayer(dt);
     updateTargets(dt);
+    if (CO.on) updateMates(dt);
     updateDungeon(dt);
     updateSpot(dt);
     updateProjs(dt);
@@ -3909,7 +3940,7 @@
     clockLast = now;
     dt = Math.min(dt, 0.05);
     // 対戦中は、メニューを開いていても世界は進み続ける（入力だけ止まる）
-    if (st.running && (!st.paused || M.on)) step(dt);
+    if (st.running && (!st.paused || M.on || CO.on)) step(dt);
     else {
       // 止まっている間も景色だけは少し動かす
       W.update(dt, null);
@@ -3919,7 +3950,7 @@
     }
     W.follow(camera.position);
     renderer.render(scene, camera);
-    if (EF.ready) EF.draw(st.running && (!st.paused || M.on) ? dt : 0, camera, renderer);
+    if (EF.ready) EF.draw(st.running && (!st.paused || M.on || CO.on) ? dt : 0, camera, renderer);
     if (MG.UI) MG.UI.updateHud();
   }
 
@@ -3969,7 +4000,7 @@
 
   G.start = function () {
     st.running = true; st.paused = false; clockLast = 0;
-    if (!st.started && !M.on) { st.started = true; G.goStage('town', W.TOWN_SPAWN); }
+    if (!st.started && !M.on) { st.started = true; G.goStage('town', W.TOWN_SPAWN); resumeRun(); }
   };
   G.setPaused = function (v) { st.paused = !!v; if (v) { input.mouseDown = false; input.keys = {}; input.move.x = input.move.y = 0; if (MG.Draw) MG.Draw.cancelStroke(); } };
 
@@ -3979,6 +4010,7 @@
   // ======================================================================
   const RP = MG.RPG;
   const P = (G.prog = { prog: RP.newProgress(), gold: RP.START_GOLD, potions: 0, wands: ['novice'], bestFloor: 0 });
+  let pendingRun = null; // 第39版: 途中で閉じた探索（今の階の最初から再開する）
   let DER = RP.derive(P.prog);
   G.derived = () => DER;
   G.chainMax = () => DER.chain;
@@ -3999,10 +4031,26 @@
     P.wands = Array.isArray(o.wands) ? ['novice'].concat(o.wands.filter((id) => MG.WAND_MAP[id] && id !== 'novice' && id !== 'bare')) : ['novice'];
     P.wands = [...new Set(P.wands)];
     P.bestFloor = Math.max(0, Math.round(+o.bestFloor) || 0);
+    pendingRun = validRun(o.run);
     applyProgress();
     st.mp = st.mpMax; D.hp = D.maxHp;
   };
-  G.getProgress = () => ({ prog: RP.cloneProgress(P.prog), gold: P.gold, potions: P.potions, wands: P.wands.slice(), bestFloor: P.bestFloor });
+  const progNow = () => ({ prog: RP.cloneProgress(P.prog), gold: P.gold, potions: P.potions, wands: P.wands.slice(), bestFloor: P.bestFloor });
+  // 保存する中身。探索中は「今の階に着いた時点」を保存する。倒れて失うと決まったあとは、失ったあとの中身を保存する
+  G.getProgress = function () {
+    if (D.on && D.run) {
+      if (D.lost) return Object.assign(progNow(), { prog: RP.cloneProgress(D.run.snapshot), potions: Math.max(0, P.potions - D.run.potGain) });
+      if (D.cp) return JSON.parse(JSON.stringify(D.cp));
+    } else if (pendingRun) return Object.assign(progNow(), { run: pendingRun });
+    return progNow();
+  };
+  function validRun(r) {
+    if (!r || typeof r !== 'object' || !r.snapshot || typeof r.snapshot !== 'object') return null;
+    const n = (v, a, b) => Math.max(a, Math.min(b, Math.round(+v) || 0));
+    if (!(+r.floor >= 1) || !Number.isFinite(+r.seed)) return null;
+    return { floor: n(r.floor, 1, 999), seed: n(r.seed, 0, 1e9), hp: n(r.hp, 1, 1e5), mp: n(r.mp, 0, 1e5), snapshot: RP.validProgress(r.snapshot),
+      gold: n(r.gold, 0, 1e9), potGain: n(r.potGain, 0, RP.POTION.max), xp: n(r.xp, 0, 1e9), kills: n(r.kills, 0, 1e7), startLevel: n(r.startLevel, 1, 999), floors: n(r.floors, 1, 999) };
+  }
   G.playerPos = () => player.pos;
   G.playerYaw = () => player.yaw;
   G.enemyYaw = (id) => { const t = targets.find((q) => q.id === id); return t ? t.yaw : null; }; // 動作確認用（第38版）
@@ -4030,7 +4078,7 @@
     const ups = RP.addXp(P.prog, n);
     if (ups.length) {
       applyProgress();
-      st.mp = st.mpMax; if (D.on) D.hp = Math.min(D.maxHp, D.hp + Math.round(D.maxHp * 0.3));
+      st.mp = st.mpMax; if (D.on && D.alive) D.hp = Math.min(D.maxHp, D.hp + Math.round(D.maxHp * 0.3));
       AU.reveal(6);
       FX.emit(new V3(player.pos.x, player.pos.y + 0.5, player.pos.z), { count: 60, c1: '#ffe9a0', c2: '#7fd8ff', speed: 2, up: 5, jitter: 0.8, life: 1.1, size: 0.3, drag: 1 });
       FX.ring(new V3(player.pos.x, player.pos.y + 0.1, player.pos.z), '#ffe9a0', 0.4, 4, 0.6);
@@ -4084,16 +4132,20 @@
   // 体が「触れると入る」範囲に入っているか
   const inTouch = (s) => { const t = s.touch, p = player.pos; if (!t) return false; if (t.r) return Math.hypot(p.x - t.x, p.z - t.z) < t.r && p.y < 3; return Math.abs(p.x - t.x) < t.hx && Math.abs(p.z - t.z) < t.hz && p.y < 4; };
   let touchCd = 0; // 移動した直後は、少しのあいだ触れても移動しない（行ったり来たりしないように）
+  let entryHold = false; // パーティーのとき、入口の渦に触れて編成を開いたら、外へ出るまで開き直さない
   let portalHold = false; // 帰還ポータルの確認画面を出したあと、外へ出るまで出さない
-  G.leaveByPortal = () => (D.on ? leaveDungeon('portal') : false); // 確認画面の「帰る」
+  G.leaveByPortal = () => (D.on && D.alive ? leaveDungeon('portal') : false); // 確認画面の「帰る」
   function updateSpot(dt) {
     touchCd = Math.max(0, touchCd - (dt || 0));
+    if (D.on && !D.alive) { if (st.spot) { st.spot = null; if (MG.UI && MG.UI.onSpot) MG.UI.onSpot(null); } return; } // 倒れている間は、扉・穴・ポータルを使えない
     let best = null, bd = 1e9;
     for (const s of spotsHere()) {
       if (s.touch) {
         const inside = inTouch(s);
         // 帰還ポータル: 触れると確認画面。いったん外へ出るまでは、もう一度は出さない
         if (s.confirm) { if (inside && !portalHold && touchCd <= 0 && !M.on && !st.paused) { portalHold = true; if (MG.UI && MG.UI.confirmPortal) MG.UI.confirmPortal(D.run); else enterSpot(s); } if (!inside) portalHold = false; continue; }
+        if (s.id === 'dungeon' && CO.on) { if (inside && !entryHold && !st.paused && touchCd <= 0) { entryHold = true; enterSpot(s); } if (!inside) entryHold = false; continue; }
+        if (s.id === 'stairs' && co()) continue; // パーティーでは、全員が穴に集まると部屋主の合図で下りる
         if (touchCd <= 0 && !M.on && !st.paused && inside) { touchCd = 1.2; enterSpot(s); return; }
         continue;
       } // ポータルや穴は、触れたらすぐ入る
@@ -4103,24 +4155,26 @@
   }
   // F キー: 近くの場所（神殿・杖の店）に入る。all（動作確認用）なら、触れて入る場所も近ければ使う
   G.interact = function (all) {
+    if (co() && CO.revTo && !st.paused) return true; // 倒れた仲間のそばの F は蘇生（扉や魔法より先）
     let s = st.spot;
     if (all && !s) { let bd = 1e9; for (const q of spotsHere()) { const d = Math.hypot(player.pos.x - q.x, player.pos.z - q.z); if (d < q.r && d < bd) { bd = d; s = q; } } }
-    if (!s || !st.running || st.paused || M.on) return false;
+    if (!s || !st.running || st.paused || M.on || (D.on && !D.alive)) return false;
     touchCd = 1.2;
     return enterSpot(s);
   };
   function enterSpot(s) {
     AU.click();
     if (s.door != null) { // 第37版: 重い扉を開ける・閉める
-      W.toggleDoor(s.door);
+      const open = W.toggleDoor(s.door);
+      coSend({ t: 'door', i: s.door, o: open ? 1 : 0 });
       const p = new V3(s.x, 1.5, s.z); AU.step('heavy', ap(p), 1.8); AU.impact('earth', 1.2, ap(p)); st.shake = Math.max(st.shake, 0.12);
       return true;
     }
     if (s.id === 'temple' || s.id === 'shop') { if (MG.UI) MG.UI.open(s.id); return true; }
     if (s.id === 'practice') return G.goStage('practice', W.PRACTICE_SPAWN);
     if (s.id === 'town') return G.goStage('town', [0, 27, 0]);
-    if (s.id === 'dungeon') return G.enterDungeon();
-    if (s.id === 'stairs') return nextFloor(D.floor + 1);
+    if (s.id === 'dungeon') { if (CO.on) { if (CO.hook.entrance) CO.hook.entrance(); return false; } return G.enterDungeon(); }
+    if (s.id === 'stairs') return co() ? false : nextFloor(D.floor + 1);
     if (s.id === 'portal') return leaveDungeon('portal');
     return false;
   };
@@ -4129,54 +4183,104 @@
   //  ダンジョン（第26版）: 迷路の階を下へ進む。帰るには帰還ポータルを使う。
   //  ひとりで倒れると、その回に拾った物とその回の経験値を失って、神殿で蘇る
   // ======================================================================
-  const D = (G.dun = { on: false, floor: 0, hp: 150, maxHp: 150, alive: true, run: null, invul: 0, explored: null, chests: [], ebolts: [], data: null, deadT: 0 });
+  const D = (G.dun = { on: false, floor: 0, hp: 150, maxHp: 150, alive: true, run: null, cp: null, lost: false, seed: 0, invul: 0, explored: null, chests: [], ebolts: [], data: null, deadT: 0 });
   let lastHitPos = null; // 敵の攻撃が来た場所（大盾で前から受けたか調べる）
   function clearDungeonThings() {
     D.chests.forEach((c) => scene.remove(c.g)); D.chests.length = 0;
     D.ebolts.forEach((b) => { scene.remove(b.glow); scene.remove(b.core); }); D.ebolts.length = 0;
   }
-  G.enterDungeon = function () {
+  G.enterDungeon = function () { return CO.on ? false : startRun(null); };
+  function startRun(party) {
     if (M.on || D.on) return false;
-    D.on = true; D.alive = true;
+    st.challenge = null;
+    D.coop = !!party; CO.rev = null; CO.revTo = null;
+    pendingRun = null;
+    D.on = true; D.alive = true; D.lost = false; D.cp = null;
     D.run = { snapshot: RP.cloneProgress(P.prog), gold: 0, potGain: 0, xp: 0, kills: 0, startLevel: P.prog.level, floors: 0 };
     D.hp = D.maxHp; st.mp = st.mpMax;
     resetSup();
-    nextFloor(1);
+    nextFloor(1, party ? party.seed : null);
     return true;
-  };
-  function nextFloor(f) {
+  }
+  // 階の種から決まる 0〜1 の数（再開しても、仲間の画面でも、宝箱の中身や敵の位置が同じになる）
+  function seeded(seed, i, k) {
+    let h = Math.imul(seed ^ 0x5bd1e995, 2654435761) ^ Math.imul(i + 1, 1597334677) ^ Math.imul(k + 1, 3812015801);
+    h = Math.imul(h ^ (h >>> 15), 2246822507); h = Math.imul(h ^ (h >>> 13), 3266489909);
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+  }
+  function checkpoint() {
+    const r = D.run;
+    D.cp = Object.assign(progNow(), { run: { floor: D.floor, seed: D.seed, hp: Math.max(1, Math.round(D.hp)), mp: Math.round(st.mp), snapshot: RP.cloneProgress(r.snapshot),
+      gold: r.gold, potGain: r.potGain, xp: r.xp, kills: r.kills, startLevel: r.startLevel, floors: r.floors } });
+  }
+  function resumeRun() {
+    const r = pendingRun;
+    if (!r || M.on || D.on) return false;
+    pendingRun = null;
+    D.on = true; D.alive = true; D.lost = false; D.cp = null; D.coop = false;
+    D.run = { snapshot: RP.cloneProgress(r.snapshot), gold: r.gold, potGain: r.potGain, xp: r.xp, kills: r.kills, startLevel: r.startLevel, floors: r.floors };
+    D.hp = Math.min(D.maxHp, r.hp); st.mp = Math.min(st.mpMax, r.mp);
+    resetSup();
+    nextFloor(r.floor, r.seed);
+    if (MG.UI && MG.UI.onResume) MG.UI.onResume(r.floor);
+    return true;
+  }
+  // 対戦に呼ばれたら探索を中断する（持ち帰りにはせず、対戦のあとに今の階の最初から再開する）
+  function suspendRun() {
+    if (!D.on) return;
+    if (D.lost || !D.cp) { leaveDungeon('death', true); return; }
+    const c = D.cp;
+    P.prog = RP.cloneProgress(c.prog); P.gold = c.gold; P.potions = c.potions; P.bestFloor = c.bestFloor;
+    pendingRun = c.run;
+    D.on = false; D.alive = true; D.run = null; D.cp = null;
+    clearDungeonThings();
+    applyProgress();
+  }
+  function nextFloor(f, seed0) {
     if (!D.on) return false;
     clearStageThings();
     if (W.stage !== 'dungeon') { W.setStage('dungeon'); if (MG.UI && MG.UI.onStage) MG.UI.onStage('dungeon'); }
-    const seed = (Math.random() * 1e9) | 0;
+    const seed = seed0 != null ? seed0 : (Math.random() * 1e9) | 0;
     const data = RP.makeFloor(f, seed);
+    D.seed = seed;
     D.floor = f; D.data = data; D.run.floors = Math.max(D.run.floors, f);
     W.buildDungeon(data);
     W.resetTerrain();
     D.explored = new Uint8Array(data.N * data.N);
     const s = W.dun.start;
-    placeAt([s.x, s.z, Math.random() * Math.PI * 2]);
+    placeAt([s.x, s.z, seeded(seed, 0, 9) * Math.PI * 2]);
+    const coNow = co();
+    CO.rev = null; CO.revTo = null; CO.lastSeq = 0;
+    if (coNow) {
+      const o = [[0, 0], [1.4, 0], [-1.4, 0], [0, 1.4]][Math.max(0, CO.ids.indexOf(CO.me)) % 4];
+      player.pos.x += o[0]; player.pos.z += o[1]; W.pushOut(player.pos, 0.45);
+      touchCd = 1.2;
+    }
     D.invul = 1.5;
     // 敵と宝箱
     const sc = RP.scale(f);
-    data.spawns.forEach((e) => {
+    data.spawns.forEach((e, i) => {
       const [x, z] = RP.tileToWorld(e.t[0], e.t[1]);
-      const t = spawnEnemy(e.type, e.face ? new V3(x, 0, z) : new V3(x + rand(-0.5, 0.5), 0, z + rand(-0.5, 0.5)), f, sc);
+      // 人数で増えるのは HP だけ（1人増えるごとに +60%、守護者は +80%）
+      const hpK = coNow && RP.ENEMIES[e.type] ? 1 + (CO.n - 1) * (RP.ENEMIES[e.type].boss ? 0.8 : 0.6) : 1;
+      const t = spawnEnemy(e.type, e.face ? new V3(x, 0, z) : new V3(x + seeded(seed, i, 1) - 0.5, 0, z + seeded(seed, i, 2) - 0.5), f, Object.assign({}, sc, { hp: sc.hp * hpK }), 'e' + i);
       if (t && e.face) { t.yaw = Math.atan2(e.face[0], e.face[1]); t.postYaw = t.yaw; } // 第38版: 守護者は扉の方を向いて、その場で待つ
     });
-    data.chests.forEach((c) => { const [x, z] = RP.tileToWorld(c.t[0], c.t[1]); spawnChest(new V3(x, 0, z), f); });
+    data.chests.forEach((c, i) => { const [x, z] = RP.tileToWorld(c.t[0], c.t[1]); spawnChest(new V3(x, 0, z), f, i); });
     if (f > P.bestFloor) P.bestFloor = f;
+    checkpoint();
     st.spot = null; if (MG.UI && MG.UI.onSpot) MG.UI.onSpot(null);
     if (MG.UI && MG.UI.onFloor) MG.UI.onFloor(f, data.boss);
     AU.respawn();
     return true;
   }
   // ダンジョンを出る（how: 'portal' = 持ち帰る / 'death' = 失う / 'quit' = 対戦などで中断）
-  function leaveDungeon(how) {
+  function leaveDungeon(how, quiet) {
     if (!D.on) return false;
     const run = D.run;
-    const sum = { how, floor: D.floor, gold: run.gold, xp: run.xp, kills: run.kills, startLevel: run.startLevel, level: P.prog.level, potions: run.potGain };
-    if (how === 'portal') {
+    const wasCo = co();
+    const sum = { how, party: wasCo, floor: D.floor, gold: run.gold, xp: run.xp, kills: run.kills, startLevel: run.startLevel, level: P.prog.level, potions: run.potGain };
+    if (how === 'portal' || how === 'host') { // host: 部屋主との通信が切れた（全員が持ち帰って帰還）
       P.gold += run.gold;
     } else {
       // 倒れた: その回の経験値（上がったレベルも）と、拾ったお金・回復薬を失う
@@ -4184,18 +4288,22 @@
       P.potions = Math.max(0, P.potions - run.potGain);
       sum.level = P.prog.level;
     }
-    D.on = false; D.alive = true; D.run = null;
+    if (wasCo && CO.hook.left) CO.hook.left(how);
+    D.on = false; D.alive = true; D.run = null; D.cp = null; D.lost = false; D.coop = false;
+    CO.rev = null; CO.revTo = null;
+    if (wasCo) applyWandLook(MG.WAND_MAP[st.wand]);
     resetSup();
     applyProgress();
     D.hp = D.maxHp; st.mp = st.mpMax;
-    G.goStage('town', how === 'portal' ? [-20, -4, -Math.PI / 2] : W.TEMPLE_SPAWN);
-    if (MG.UI && MG.UI.onDungeonEnd) MG.UI.onDungeonEnd(sum);
+    G.goStage('town', how === 'portal' ? [-20, -4, -Math.PI / 2] : how === 'host' ? W.TOWN_SPAWN : W.TEMPLE_SPAWN);
+    if (!quiet && MG.UI && MG.UI.onDungeonEnd) MG.UI.onDungeonEnd(sum);
     return true;
   }
   G.leaveDungeon = leaveDungeon;
   // 敵の攻撃を受けた
   function hurtPlayer(d, from, name) {
     if (!D.on || !D.alive || D.invul > 0 || !st.running) return 0;
+    if (CO.rev) { CO.rev = null; CO.revBlock = true; popup(ahead(2.4, 0.1), '蘇生が中断された', 'pvp'); } // 押し直すまで再開しない
     lastHitPos = from || null;
     d = Math.round(absorb(d));
     lastHitPos = null;
@@ -4207,12 +4315,17 @@
     return d;
   }
   function dungeonDeath(name) {
-    D.hp = 0; D.alive = false; D.deadT = 2.6;
+    const wait = co(); // パーティーでは、蘇生を待つ（全員が倒れたら全滅）
+    D.hp = 0; D.alive = false; D.deadT = wait ? Infinity : 2.6;
+    D.lost = !wait; // ひとりなら、倒れた時点で失うことが決まる（再読み込みで取り消せない）
+    CO.rev = null; CO.revTo = null;
     input.mouseDown = false;
     AU.down(); whiteFlash('#5a0010', 0.6);
-    if (MG.UI && MG.UI.onDungeonDown) MG.UI.onDungeonDown(name || '');
+    if (MG.UI && MG.UI.onDungeonDown) MG.UI.onDungeonDown(name || '', wait);
+    if (wait && CO.hook.life) CO.hook.life(false);
   }
   G.usePotion = function () {
+    if (CO.rev) return false;
     if (!D.on || !D.alive) { if (MG.UI) MG.UI.toast('回復薬はダンジョンの中で使えます'); AU.error(); return false; }
     if (P.potions <= 0) { if (MG.UI) MG.UI.toast('回復薬を持っていません（村の杖の店で買えます）'); AU.error(); return false; }
     if (D.hp >= D.maxHp) { if (MG.UI) MG.UI.toast('HP は満タンです'); return false; }
@@ -4226,9 +4339,9 @@
 
   // ---- 宝箱 ----
   let chestMats = null;
-  function spawnChest(p, f) {
+  function spawnChest(p, f, idx) {
     if (!chestMats) chestMats = { wood: new THREE.MeshStandardMaterial({ color: 0x7a4a24, roughness: 0.8, flatShading: true }), gold: new THREE.MeshStandardMaterial({ color: 0xe8b04a, emissive: 0x8a5a10, emissiveIntensity: 0.6, roughness: 0.35, metalness: 0.4 }) };
-    const g = new THREE.Group(); g.position.set(p.x, W.heightAt(p.x, p.z), p.z); g.rotation.y = rand(0, Math.PI * 2);
+    const g = new THREE.Group(); g.position.set(p.x, W.heightAt(p.x, p.z), p.z); g.rotation.y = seeded(D.seed, idx || 0, 3) * Math.PI * 2;
     let lidP;
     if (MG.Monsters && MG.Monsters.chest) { const ch = MG.Monsters.chest(null); g.add(ch.g); lidP = ch.lid; } // 第36版: 鉄の帯と鋲の宝箱
     else {
@@ -4240,25 +4353,29 @@
     }
     const glow = FX.glowSprite('#ffd36b', 1.8); glow.position.y = 0.9; g.add(glow);
     scene.add(g);
-    D.chests.push({ g, lidP, glow, open: false, t: 0, f, x: p.x, z: p.z });
+    D.chests.push({ g, lidP, glow, open: false, t: 0, f, i: idx || 0, x: p.x, z: p.z });
   }
   function updateChests(dt) {
     for (const c of D.chests) {
       if (c.open) { c.t += dt; c.lidP.rotation.x = -Math.min(1.9, c.t * 6); c.glow.visible = false; continue; }
       c.glow.scale.setScalar(1.8 + Math.sin(st.time * 3 + c.x) * 0.2);
       if (D.alive && Math.hypot(player.pos.x - c.x, player.pos.z - c.z) < 1.9) {
-        c.open = true;
-        const sc = RP.scale(c.f);
-        const gold = Math.round((14 + Math.random() * 26) * sc.gold);
-        D.run.gold += gold;
-        let msg = `宝箱: ${gold} G`;
-        if (Math.random() < 0.32 && P.potions < RP.POTION.max) { P.potions++; D.run.potGain++; msg += ' と 回復薬'; }
-        popup(new V3(c.x, 1.8, c.z), msg, 'score');
-        FX.emit(new V3(c.x, 1, c.z), { count: 50, c1: '#ffd24a', c2: '#fff3b8', speed: 4, up: 4, gravity: 10, life: 1, size: 0.25 });
-        AU.reveal(4);
-        if (MG.UI && MG.UI.onProgress) MG.UI.onProgress();
+        if (co()) { if (!c.claimT || st.time - c.claimT > 1.5) { c.claimT = st.time; if (CO.hook.claim) CO.hook.claim(D.floor, c.i); } continue; } // だれが先か、部屋主が決める
+        openChest(c);
       }
     }
+  }
+  function openChest(c) {
+    c.open = true;
+    const sc = RP.scale(c.f);
+    const gold = Math.round((14 + seeded(D.seed, c.i, 4) * 26) * sc.gold);
+    D.run.gold += gold;
+    let msg = `宝箱: ${gold} G`;
+    if (seeded(D.seed, c.i, 5) < 0.32 && P.potions < RP.POTION.max) { P.potions++; D.run.potGain++; msg += ' と 回復薬'; }
+    popup(new V3(c.x, 1.8, c.z), msg, 'score');
+    FX.emit(new V3(c.x, 1, c.z), { count: 50, c1: '#ffd24a', c2: '#fff3b8', speed: 4, up: 4, gravity: 10, life: 1, size: 0.25 });
+    AU.reveal(4);
+    if (MG.UI && MG.UI.onProgress) MG.UI.onProgress();
   }
 
   // ---- 敵 ----
@@ -4315,7 +4432,7 @@
     }
     return { g, parts };
   }
-  function spawnEnemy(kind, pos, f, sc) {
+  function spawnEnemy(kind, pos, f, sc, id) {
     const E = RP.ENEMIES[kind]; if (!E) return null;
     const mats = [];
     const { g: model, parts } = MG.Monsters ? MG.Monsters.build(kind, mats) : makeEnemyModel(kind, mats); // 第29版: js/monsters.js の作り込んだ見た目
@@ -4329,7 +4446,7 @@
       type: 'enemy', isEnemy: true, kind, E, T: { cy: E.cy, r: E.r }, group: g, face: model, parts, mats, hp, maxHp: hp, r: E.r, pts: 0,
       home: pos.clone(), pos: pos.clone(), center: new V3(), floatY: 0, phase: rand(0, 10), moveDir: new V3(1, 0, 0), disp: new V3(), dispV: new V3(), mass: E.boss ? 0.1 : E.fly ? 0.9 : 0.7,
       burnT: 0, burnDps: 0, burnAcc: 0, burnPop: 0, freezeT: 0, frozenHard: false, vulnT: 0, flash: 0, alive: true, dead: 0, spawnT: 0,
-      bar, bc, btex, id: 'e' + Math.random().toString(36).slice(2, 7), dmg: Math.round(E.dmg * sc.dmg), xp: Math.round(E.xp * sc.xp), gold: Math.round(E.gold * sc.gold),
+      dealt: {}, out: null, netPos: pos.clone(), bar, bc, btex, id: id || 'e' + Math.random().toString(36).slice(2, 7), dmg: Math.round(E.dmg * sc.dmg), xp: Math.round(E.xp * sc.xp), gold: Math.round(E.gold * sc.gold),
       awake: false, yaw: rand(0, Math.PI * 2), atkT: rand(0.6, 1.4), windup: 0, walk: 0, vy: 0, detourT: 0, stuck: 0, shots: 0,
     };
     pos.y = E.fly ? (E.flyY || 2.2) : W.floorAt(pos.x, pos.z, 1);
@@ -4340,71 +4457,135 @@
     targets.push(t);
     return t;
   }
-  // 敵の攻撃相手: 自分か、自分の召喚獣（近いほう）
-  function enemyFoe(t) {
-    let best = D.alive ? { player: true, center: new V3(player.pos.x, player.pos.y + 1, player.pos.z) } : null;
-    let bd = best ? Math.hypot(best.center.x - t.pos.x, best.center.z - t.pos.z) : 1e9;
+  // 立っている人（自分と、同じ階にいる仲間）
+  function standing() {
+    const out = [];
+    if (D.alive) out.push({ player: true, self: true, pid: CO.me, inv: D.invul > 0, center: new V3(player.pos.x, player.pos.y + 1, player.pos.z) });
+    if (co()) avatars.forEach((a) => { if (onMyFloor(a) && !a.netDown) out.push({ player: true, self: false, pid: a.pid, inv: a.netInv, av: a, center: new V3(a.pos.x, a.pos.y + 1, a.pos.z) }); });
+    return out;
+  }
+  const flatDist = (p, q) => Math.hypot(p.x - q.x, p.z - q.z);
+  // 敵の攻撃相手: 立っている人か、その召喚獣（近いほう。パーティーでは見えている人を優先）
+  function enemyFoe(t, ppl) {
+    let best = null, bd = 1e9, bs = false;
+    for (const q of ppl) {
+      const d = flatDist(q.center, t.pos), seen = ppl.length > 1 && W.solidOnSegment(t.center, q.center) == null;
+      if ((seen && !bs) || (seen === bs && d < bd)) { best = q; bd = d; bs = seen; }
+    }
+    const coNow = co();
     for (const o of targets) {
-      if (!o.alive || !o.isSummon || o.puppet || o.kind === 'wisp') continue;
-      const d = Math.hypot(o.center.x - t.pos.x, o.center.z - t.pos.z);
+      if (!o.alive || !o.isSummon || (o.puppet && !coNow) || o.kind === 'wisp') continue;
+      const d = flatDist(o.center, t.pos);
       if (d < bd - 1.5) { bd = d; best = o; }
     }
     return best ? { foe: best, d: bd } : null;
   }
   function enemyHit(t, foe, dmg) {
-    if (foe.player) return hurtPlayer(dmg, t.center.clone(), t.E.label);
-    if (foe.alive) { foe.flash = 0.1; return damage(foe, dmg, null, false); }
-    return 0;
+    if (foe.player) {
+      if (foe.self) return hurtPlayer(dmg, t.center.clone(), t.E.label);
+      coSend({ t: 'hurt', d: Math.round(dmg), p: arr(t.center), e: t.kind }, { to: foe.pid });
+      if (foe.av) foe.av.flash = 0.1;
+      return dmg;
+    }
+    if (!foe.alive) return 0;
+    foe.flash = 0.1;
+    if (foe.puppet) { coSend({ t: 'shit', h: { id: foe.sid, d: Math.round(dmg) } }, { to: foe.ownerKey }); return dmg; } // 仲間の召喚獣は持ち主の画面で減らす
+    return damage(foe, dmg, null, false);
+  }
+  function fireBolts(t, from, dir0, dmg0) {
+    const E = t.E, [c1] = ENEMY_COL[t.kind];
+    const n = E.spread || 1;
+    for (let i = 0; i < n; i++) {
+      const dir = dir0.clone().applyAxisAngle(UP, (i - (n - 1) / 2) * 0.13);
+      const col = E.bolt ? E.bolt[i % E.bolt.length] : (E.boss ? '#ffb07a' : c1);
+      let glow = FX.glowSprite(col, E.boss ? 2.6 : 1.4), core = FX.glowSprite('#ffffff', E.boss ? 1 : 0.5);
+      if (E.rock) { // 第37版: 石の守護者が投げる岩（回りながら飛ぶ）
+        const geo = new THREE.DodecahedronGeometry(0.75, 0), pa = geo.attributes.position; for (let q = 0; q < pa.count; q++) pa.setXYZ(q, pa.getX(q) * rand(0.8, 1.2), pa.getY(q) * rand(0.8, 1.2), pa.getZ(q) * rand(0.8, 1.2)); geo.computeVertexNormals();
+        glow = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: 0x6a645a, roughness: 1, flatShading: true })); glow.userData.rock = true;
+        core = FX.glowSprite('#ff8a3a', 1.2);
+      }
+      glow.position.copy(from); core.position.copy(from); scene.add(glow); scene.add(core);
+      D.ebolts.push({ pos: from.clone(), vel: dir.multiplyScalar(E.boss ? 16 : 19), dmg: dmg0 * (E.boss ? 0.8 : 1) * (n > 1 ? 0.7 : 1), life: 3, glow, core, r: E.boss ? 1.2 : 0.7, name: E.label, c1: col });
+    }
+    AU.cast(E.boltEl || (E.boss ? 'earth' : 'void'));
+  }
+  function slamFx(t, p) {
+    const c1 = ENEMY_COL[t.kind][0];
+    FX.ring(new V3(p.x, p.y + 0.1, p.z), c1, 0.5, 7.5, 0.5); FX.emit(new V3(p.x, p.y + 0.3, p.z), { count: 70, c1: '#8a6a4a', c2: c1, speed: 9, up: 6, gravity: 16, life: 1, size: 0.45 });
+    EF.impact('earth', p, 3); st.shake = Math.max(st.shake, 0.5 * (co() ? Math.max(0, 1 - flatDist(p, player.pos) / 30) : 1)); AU.impact('earth', 4, ap(p));
   }
   function enemyAttack(t, foe, farShot) {
     const E = t.E, [c1, c2] = ENEMY_COL[t.kind];
     t.windup = E.boss ? 0.7 : 0.4;
     const fc = foe.center.clone();
     after(t.windup, () => {
-      if (!t.alive || !D.on) return;
-      const cur = foe.player ? new V3(player.pos.x, player.pos.y + 1, player.pos.z) : foe.center;
+      if (!t.alive || !D.on || !isSim()) return;
+      const coNow = co();
+      let cur;
+      if (!foe.player) cur = foe.center;
+      else if (foe.self) cur = new V3(player.pos.x, player.pos.y + 1, player.pos.z);
+      else { if (!foe.av || !avatars.has(foe.pid)) return; cur = new V3(foe.av.pos.x, foe.av.pos.y + 1, foe.av.pos.z); }
       const every = E.rangedEvery == null ? 3 : E.rangedEvery;
       if (farShot || E.ranged || (E.boss && every > 0 && t.shots % every === every - 1)) {
         // 魔弾（よけられる）。石の守護者は 3 回に 1 回、岩を投げる。第36版: 弾の色（bolt）、扇形に広がる数（spread）、撃つ高さ（boltY）
         const from = t.center.clone().add(new V3(0, E.boltY != null ? E.boltY : (E.boss ? 2.5 : 0.6), 0));
-        const dir0 = cur.clone().sub(from).normalize(), n = E.spread || 1;
-        for (let i = 0; i < n; i++) {
-          const dir = dir0.clone().applyAxisAngle(UP, (i - (n - 1) / 2) * 0.13);
-          const col = E.bolt ? E.bolt[i % E.bolt.length] : (E.boss ? '#ffb07a' : c1);
-          let glow = FX.glowSprite(col, E.boss ? 2.6 : 1.4), core = FX.glowSprite('#ffffff', E.boss ? 1 : 0.5);
-          if (E.rock) { // 第37版: 石の守護者が投げる岩（回りながら飛ぶ）
-            const geo = new THREE.DodecahedronGeometry(0.75, 0), pa = geo.attributes.position; for (let q = 0; q < pa.count; q++) pa.setXYZ(q, pa.getX(q) * rand(0.8, 1.2), pa.getY(q) * rand(0.8, 1.2), pa.getZ(q) * rand(0.8, 1.2)); geo.computeVertexNormals();
-            glow = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: 0x6a645a, roughness: 1, flatShading: true })); glow.userData.rock = true;
-            core = FX.glowSprite('#ff8a3a', 1.2);
-          }
-          glow.position.copy(from); core.position.copy(from); scene.add(glow); scene.add(core);
-          D.ebolts.push({ pos: from.clone(), vel: dir.multiplyScalar(E.boss ? 16 : 19), dmg: t.dmg * (E.boss ? 0.8 : 1) * (n > 1 ? 0.7 : 1), life: 3, glow, core, r: E.boss ? 1.2 : 0.7, name: E.label, c1: col });
-        }
-        AU.cast(E.boltEl || (E.boss ? 'earth' : 'void'));
+        const dir0 = cur.clone().sub(from).normalize();
+        fireBolts(t, from, dir0, t.dmg);
+        if (coNow) coSend({ t: 'bolt', i: t.id, p: arr(from), v: [dir0.x, dir0.y, dir0.z], d: t.dmg }); // 当たったかは、それぞれの画面で決める
       } else if (E.boss) {
         // 大地をたたく: まわり 6m
         const p = t.pos.clone().addScaledVector(fc.clone().sub(t.pos).setY(0).normalize(), 2.5); p.y = W.heightAt(p.x, p.z);
-        FX.ring(new V3(p.x, p.y + 0.1, p.z), c1, 0.5, 7.5, 0.5); FX.emit(new V3(p.x, p.y + 0.3, p.z), { count: 70, c1: '#8a6a4a', c2: c1, speed: 9, up: 6, gravity: 16, life: 1, size: 0.45 });
-        EF.impact('earth', p, 3); st.shake = Math.max(st.shake, 0.5); AU.impact('earth', 4, ap(p));
-        if (Math.hypot(cur.x - p.x, cur.z - p.z) < 6.5 && cur.y - p.y < 3.5) enemyHit(t, foe, t.dmg);
+        slamFx(t, p);
+        const inRing = (c) => flatDist(c, p) < 6.5 && c.y - p.y < 3.5;
+        if (coNow) {
+          coSend({ t: 'atk', i: t.id, p: arr(p), s: 1 });
+          standing().forEach((q) => { if (inRing(q.center)) enemyHit(t, q, t.dmg); }); // 輪の中にいる人みんな
+          if (!foe.player && inRing(cur)) enemyHit(t, foe, t.dmg);
+        } else if (inRing(cur)) enemyHit(t, foe, t.dmg);
       } else {
         // 近くの相手をたたく・かみつく
+        if (coNow) coSend({ t: 'atk', i: t.id, p: arr(t.center) });
         FX.emit(t.center.clone().add(fc.clone().sub(t.center).setY(0).normalize().multiplyScalar(0.8)), { count: 12, c1, c2, speed: 4, life: 0.25, size: 0.3, drag: 4 });
         if (Math.hypot(cur.x - t.pos.x, cur.z - t.pos.z) < E.range + 0.9 && Math.abs(cur.y - t.center.y) < 2.5) { enemyHit(t, foe, t.dmg); AU.hit('force', ap(t.center)); }
       }
       t.shots++;
     });
   }
-  function enemyDie(t) {
+  // 与えたダメージの割合で分ける（端数は割合の端数が大きい人へ）
+  function shareOf(t) {
+    const ids = CO.ids.slice();
+    const sumAll = Object.keys(t.dealt).reduce((a, k) => a + t.dealt[k], 0);
+    const who = t.killer || CO.me;
+    if (sumAll < t.maxHp) t.dealt[who] = (t.dealt[who] || 0) + (t.maxHp - sumAll); // 消滅・黄金化など、一度に消した分
+    const w = ids.map((id) => t.dealt[id] || 0), total = w.reduce((a, b) => a + b, 0);
+    const out = {}; ids.forEach((id) => (out[id] = [0, 0]));
+    [t.xp, t.gold].forEach((amount, k) => {
+      const raw = ids.map((id, i) => (total > 0 ? (amount * w[i]) / total : amount / ids.length));
+      ids.forEach((id, i) => (out[id][k] = Math.floor(raw[i])));
+      let left = Math.round(amount - ids.reduce((a, id) => a + out[id][k], 0));
+      ids.map((id, i) => [id, raw[i] - Math.floor(raw[i])]).sort((a, b) => b[1] - a[1]).forEach(([id]) => { if (left > 0) { out[id][k]++; left--; } });
+    });
+    return out;
+  }
+  function enemyDie(t, given) {
     if (!t.alive) return;
     t.alive = false; t.dead = 0; t.bar.visible = false;
     const [c1, c2] = ENEMY_COL[t.kind], c = t.center.clone();
     FX.emit(c, { count: t.E.boss ? 160 : 40, c1, c2, speed: t.E.boss ? 9 : 5, up: 2, life: 0.8, size: 0.4, drag: 2 });
     FX.flash(c, c1, 4, 12, 0.3); AU.destroy(ap(c));
     if (D.on && D.run) {
-      D.run.kills++; D.run.xp += t.xp; D.run.gold += t.gold;
-      popup(c.clone().add(new V3(0, 1, 0)), `+${t.xp} EXP  +${t.gold} G`, 'score');
-      G.gainXp(t.xp);
+      let xp = t.xp, gold = t.gold;
+      if (co()) {
+        const share = given || shareOf(t);
+        if (!given) coSend({ t: 'edie', i: t.id, s: share });
+        const mine = Array.isArray(share[CO.me]) ? share[CO.me] : [0, 0];
+        xp = Math.round(clamp(mine[0], 0, t.xp)); gold = Math.round(clamp(mine[1], 0, t.gold));
+      }
+      if (xp || gold || !co()) {
+        D.run.kills++; D.run.xp += xp; D.run.gold += gold;
+        popup(c.clone().add(new V3(0, 1, 0)), `+${xp} EXP  +${gold} G`, 'score');
+        if (!D.lost) G.gainXp(xp);
+      }
       if (t.E.boss) { W.setStairsOpen(true); popup(ahead(3, 0.4), '守護者を倒した！ 下の階への道が開いた', 'pierce'); AU.secret(); }
     }
   }
@@ -4415,21 +4596,21 @@
     t.spawnT = Math.min(1, t.spawnT + dt * 2.5);
     t.group.scale.setScalar(Math.max(0.01, 1 - Math.pow(1 - t.spawnT, 3)));
     if (t.flash > 0) t.flash -= dt;
-    if (t.burnT > 0) { t.burnT -= dt; t.burnAcc += t.burnDps * dt; if (Math.random() < 0.4) FX.emit(t.center, { count: 1, c1: '#ff6a1a', c2: '#ffd24a', speed: 0.6, up: 2.5, jitter: t.r * 0.7, life: 0.6, size: 0.4, drag: 0.5 }); if (t.burnAcc >= 4) { const d = Math.floor(t.burnAcc); t.burnAcc -= d; const dd = damage(t, d, null, false); if (t.burnRec) t.burnRec.add(dd); if (!t.alive) return false; } }
+    if (!isSim()) return enemyPuppet(t, dt);
+    if (t.burnT > 0) { t.burnT -= dt; t.burnAcc += t.burnDps * dt; if (Math.random() < 0.4) FX.emit(t.center, { count: 1, c1: '#ff6a1a', c2: '#ffd24a', speed: 0.6, up: 2.5, jitter: t.r * 0.7, life: 0.6, size: 0.4, drag: 0.5 }); if (t.burnAcc >= 4) { const d = Math.floor(t.burnAcc); t.burnAcc -= d; const dd = damage(t, d, null, false, t.burnBy); if (t.burnRec) t.burnRec.add(dd); if (!t.alive) return false; } }
     if (t.freezeT > 0) { t.freezeT -= dt; if (t.freezeT <= 0) t.frozenHard = false; }
     if (t.vulnT > 0) t.vulnT -= dt;
     // 攻撃を受けたら、プレイヤーのいる場所に気づく（第37版: 前は一度でも傷つくと、ずっと追い続けた）
-    if (t.prevHp != null && t.hp < t.prevHp && !E.mimic) { if (!t.awake) { t.awake = true; t.bar.visible = true; } t.lastSeen = new V3(player.pos.x, player.pos.y + 1, player.pos.z); t.lostT = 0; }
+    if (t.prevHp != null && t.hp < t.prevHp && !E.mimic) { if (!t.awake) { t.awake = true; t.bar.visible = true; } const a = co() && t.hitBy !== CO.me ? avatars.get(t.hitBy) : null, hp0 = a ? a.pos : player.pos; t.lastSeen = new V3(hp0.x, hp0.y + 1, hp0.z); t.lostT = 0; }
     if (E.mimic && t.hp < t.maxHp) t.awake = true;
     t.prevHp = t.hp;
     const slow = t.freezeT > 0 ? (t.frozenHard ? 0.08 : 0.45) : 1;
-    const eye = new V3(player.pos.x, player.pos.y + 1.4, player.pos.z);
-    const pd = Math.hypot(player.pos.x - t.pos.x, player.pos.z - t.pos.z);
-    if (E.mimic && !t.awake && D.alive && pd < 2.6) { t.awake = true; t.bar.visible = true; popup(t.center.clone().add(new V3(0, 1.4, 0)), 'ミミックだ！', 'pvp'); AU.hit('force', ap(t.center)); }
-    if (!E.mimic && !t.awake && D.alive && pd < (E.boss ? 22 : 15) && W.solidOnSegment(t.center, eye) == null) { t.awake = true; t.bar.visible = true; popup(t.center.clone().add(new V3(0, 1.2, 0)), '!', 'pvp'); }
+    const ppl = standing(), anyUp = ppl.length > 0;
+    if (E.mimic && !t.awake && ppl.some((q) => flatDist(q.center, t.pos) < 2.6)) { t.awake = true; t.bar.visible = true; popup(t.center.clone().add(new V3(0, 1.4, 0)), 'ミミックだ！', 'pvp'); AU.hit('force', ap(t.center)); }
+    if (!E.mimic && !t.awake && ppl.some((q) => flatDist(q.center, t.pos) < (E.boss ? 22 : 15) && W.solidOnSegment(t.center, new V3(q.center.x, q.center.y + 0.4, q.center.z)) == null)) { t.awake = true; t.bar.visible = true; popup(t.center.clone().add(new V3(0, 1.2, 0)), '!', 'pvp'); }
     let speed = 0;
-    const fr = t.awake ? enemyFoe(t) : null;
-    if (fr && D.alive) {
+    const fr = t.awake ? enemyFoe(t, ppl) : null;
+    if (fr && anyUp) {
       t.bar.visible = true;
       const foe = fr.foe, goal = foe.center;
       const sight = W.solidOnSegment(t.center, goal) == null;
@@ -4461,8 +4642,8 @@
       t.atkT -= dt * slow;
       const inRange = E.ranged ? fr.d < E.range && sight : fr.d <= E.range + (foe.player ? 0.5 : foe.r);
       const far = !inRange && E.farShot && sight && fr.d < E.farShot; // 第37版: 石の守護者は、離れた相手に岩を投げる
-      if ((inRange || far) && t.atkT <= 0 && t.windup <= 0 && D.invul <= 0) { enemyAttack(t, foe, far); t.atkT = E.atkCd * (0.85 + Math.random() * 0.3); }
-    } else if (!t.awake && D.alive && !E.mimic) {
+      if ((inRange || far) && t.atkT <= 0 && t.windup <= 0 && (co() ? !foe.inv : D.invul <= 0)) { enemyAttack(t, foe, far); t.atkT = E.atkCd * (0.85 + Math.random() * 0.3); }
+    } else if (!t.awake && anyUp && !E.mimic) {
       // 第37版: 見張り中は持ち場のまわりを歩き回る（徘徊）。見失った直後は、最後に見た場所まで行ってあたりを見回す
       let tgt = null, spd = E.speed * 0.4;
       if (t.searchT > 0) {
@@ -4503,6 +4684,11 @@
     // 高さ: 飛ぶ敵は宙に、それ以外は床に
     if (E.fly) t.pos.y += ((E.flyY || 2.2) + Math.sin(st.time * 2.5 + t.phase) * 0.4 - t.pos.y) * Math.min(1, dt * 4);
     else { const fl = W.floorAt(t.pos.x, t.pos.z, t.pos.y + 0.4); t.vy -= 20 * dt; t.pos.y += t.vy * dt; if (t.pos.y <= fl) { t.pos.y = fl; t.vy = 0; } }
+    enemyLook(t, dt, speed);
+    return false;
+  }
+  function enemyLook(t, dt, speed) {
+    const E = t.E;
     // 見た目の動き
     t.walk += dt * Math.min(8, speed) * 1.4;
     stepSound(t, ENEMY_STEP[t.kind] || 'soft', E.boss ? 1.6 : 1, E.fly ? 1 : speed);
@@ -4514,10 +4700,28 @@
     for (const m of t.mats) {
       if (t.flash > 0) { m.emissive.setRGB(1, 1, 1); m.emissiveIntensity = 0.9; }
       else if (t.windup > 0) { m.emissive.setRGB(1, 0.25, 0.1); m.emissiveIntensity = 0.4 + k * 0.6; }
-      else if (t.freezeT > 0) { m.emissive.setRGB(0.3, 0.75, 1); m.emissiveIntensity = 0.55; }
-      else if (t.burnT > 0) { m.emissive.setRGB(1, 0.35, 0.05); m.emissiveIntensity = 0.45; }
+      else if (t.freezeT > 0 || t.netFrz) { m.emissive.setRGB(0.3, 0.75, 1); m.emissiveIntensity = 0.55; }
+      else if (t.burnT > 0 || t.netBrn) { m.emissive.setRGB(1, 0.35, 0.05); m.emissiveIntensity = 0.45; }
       else { m.emissive.copy(m.userData.baseEmissive); m.emissiveIntensity = m.userData.baseInt; }
     }
+  }
+  // 受け持ちでない画面の敵: 届いた場所へなめらかに動かし、この画面で与えた作用をまとめて受け持ちへ送る
+  function enemyOut(t) { return t.out || (t.out = { d: 0, k: 0, kb: new V3(), f: 0, fh: 0, b: 0, bd: 0, v: 0 }); }
+  function enemyPuppet(t, dt) {
+    if (t.dispV.lengthSq() > 1e-6) { enemyOut(t).kb.add(t.dispV); t.dispV.set(0, 0, 0); }
+    if (t.freezeT > (t.sentF || 0) + 1e-3) { const o = enemyOut(t); o.f = t.freezeT; o.fh = t.frozenHard ? 1 : 0; }
+    if (t.burnT > (t.sentB || 0) + 1e-3) { const o = enemyOut(t); o.b = t.burnT; o.bd = t.burnDps; }
+    if (t.vulnT > (t.sentV || 0) + 1e-3) enemyOut(t).v = t.vulnT;
+    t.freezeT = Math.max(0, t.freezeT - dt); t.burnT = Math.max(0, t.burnT - dt); t.vulnT = Math.max(0, t.vulnT - dt);
+    if (t.freezeT <= 0) t.frozenHard = false;
+    t.sentF = t.freezeT; t.sentB = t.burnT; t.sentV = t.vulnT;
+    if ((t.burnT > 0 || t.netBrn) && Math.random() < 0.4) FX.emit(t.center, { count: 1, c1: '#ff6a1a', c2: '#ffd24a', speed: 0.6, up: 2.5, jitter: t.r * 0.7, life: 0.6, size: 0.4, drag: 0.5 });
+    const k = Math.min(1, dt * 12), before = t.pos.clone();
+    if (t.pos.distanceTo(t.netPos) > 8) t.pos.copy(t.netPos); else t.pos.lerp(t.netPos, k);
+    if (t.netYaw != null) { let dy = t.netYaw - t.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); t.yaw += dy * k; }
+    t.windup = Math.max(0, t.windup - dt);
+    t.bar.visible = t.awake || t.hp < t.maxHp;
+    enemyLook(t, dt, flatDist(before, t.pos) / Math.max(dt, 1e-4));
     return false;
   }
   function updateEbolts(dt) {
@@ -4531,6 +4735,7 @@
       let done = b.life <= 0;
       const pc = new V3(player.pos.x, player.pos.y + 1, player.pos.z);
       if (!done && D.alive && b.pos.distanceTo(pc) < b.r + 0.5) { hurtPlayer(b.dmg, prev, b.name); done = true; }
+      if (!done && co()) avatars.forEach((a) => { if (onMyFloor(a) && !a.netDown && b.pos.distanceTo(a.center) < b.r + 0.5) done = true; }); // 仲間に当たった弾は、見た目だけ消す
       if (!done) { const bh = W.barrierOnSegment(prev, b.pos, 0.2, 'enemy'); if (bh) { if (bh.barrier.game) damageBarrier(bh.barrier.game, b.dmg, b.pos.clone(), { element: 'void', colors: [b.c1, '#ffffff'] }); done = true; } }
       if (!done && (W.collide(b.pos, 0.2) || b.pos.y <= W.heightAt(b.pos.x, b.pos.z))) done = true;
       if (done) {
@@ -4545,6 +4750,7 @@
     if (D.invul > 0) D.invul -= dt;
     updateChests(dt);
     updateEbolts(dt);
+    updateRevive(dt);
     // 地図: まわり 10m を見たことにする
     if (D.data && D.explored) {
       const [tx, tz] = RP.worldToTile(player.pos.x, player.pos.z), N = D.data.N;
@@ -4570,7 +4776,7 @@
     return {
       seq: spec0.seq.slice(), m: { dmg: m.dmg, cost: m.cost, cd: m.cd, pen: m.pen, speed: m.speed, mode: m.mode },
       tip: arr(getTip()), o: arr(aim.origin), d: arr(aim.dir), p: arr(aim.point),
-      tg: aim.target && aim.target.isPlayer ? aim.target.pid : null, dist: Math.round(aim.dist * 100) / 100, ground: !!aim.ground, range: aim.range,
+      tg: aim.target && aim.target.isPlayer ? aim.target.pid : null, te: aim.target && aim.target.isEnemy ? aim.target.id : null, dist: Math.round(aim.dist * 100) / 100, ground: !!aim.ground, range: aim.range,
       pos: arr(player.pos), n: castN,
     };
   }
@@ -4625,7 +4831,7 @@
 
   // 対戦を始める: 練習用の的を片付け、自分の的を置き、決められた地点に立つ
   G.matchStart = function (o) {
-    if (D.on) { if (D.run) P.gold += D.run.gold; D.on = false; D.alive = true; D.run = null; clearDungeonThings(); }
+    suspendRun();
     M.on = true; M.myId = o.myId; M.maxHp = DER.maxHp; M.hp = DER.maxHp; M.alive = true; M.prot = PROTECT_SEC;
     M.slowT = 0; M.slowHard = false; M.vulnT = 0; M.burnT = 0; M.burnAcc = 0;
     st.challenge = null;
@@ -4658,12 +4864,13 @@
     G.noRespawn = false;
     placeAt(W.TOWN_SPAWN);
     if (MG.UI && MG.UI.onStage) MG.UI.onStage('town');
+    resumeRun();
   };
   G.addAvatar = function (pid, name, color) {
     if (avatars.has(pid)) return avatars.get(pid);
     const t = makePlayerTarget({ id: pid, name, color, x: 0, z: -60 });
     t.alive = false; // 最初の位置が届くまで隠しておく
-    avatars.set(pid, t); targets.push(t);
+    avatars.set(pid, t); if (!CO.on) targets.push(t); // パーティーの仲間は的にしない
     return t;
   };
   G.removeAvatar = function (pid) {
@@ -4703,7 +4910,7 @@
   }
   // 相手の画面で起きた見た目だけの出来事（障壁に当たった・こわれた）
   G.remoteFx = function (pid, f) {
-    if (!M.on || !f) return false;
+    if (!netOn() || !f) return false;
     const t = avatars.get(pid);
     // 相手の召喚獣の攻撃・倒れた、相手の魔法の壁がこわれた（相手の画面で決まったこと）
     if (f.k === 'sumAtk' || f.k === 'sumDie') {
@@ -4743,7 +4950,7 @@
   // 相手が魔法を放った: 自分の画面で、相手の位置と向きから同じ魔法を再現する（見た目だけ）
   G.remoteCast = function (pid, c) {
     const casterT = avatars.get(pid);
-    if (!M.on || !casterT || !c || !Array.isArray(c.seq)) return false;
+    if (!netOn() || !casterT || !c || !Array.isArray(c.seq) || c.seq.length > 4) return false;
     const spec0 = MG.buildSpell(c.seq.map(String));
     if (!spec0) return false;
     const m = c.m || {};
@@ -4752,13 +4959,13 @@
     const tip = vec(c.tip), o = vec(c.o), d = vec(c.d), pt = vec(c.p), pos = vec(c.pos);
     if (!tip || !o || !d || !pt || !pos) return false;
     d.normalize();
-    const target = c.tg === M.myId ? selfT : c.tg ? avatars.get(c.tg) || null : null;
+    const target = co() ? (c.te ? targets.find((q) => q.isEnemy && q.id === c.te) || null : null) : c.tg === M.myId ? selfT : c.tg ? avatars.get(c.tg) || null : null;
     const aim = { origin: o, dir: d, point: pt, target: target && target.alive ? target : null, dist: clamp(c.dist, 0, 200), ground: !!c.ground, range: clamp(c.range, 1, 200) };
     const ctx = { pos, tip, aim, casterT };
     const run = () => { CTX = ctx; const keepN = castN; castN = Math.round(clamp(c.n, 0, 1e9)); try { castSpell(spec, aim, null); } finally { CTX = null; castN = keepN; } };
     casterT.castGlow = 1;
     run();
-    for (let k = 1; k <= spec.echo; k++) after(0.38 * k, () => { if (M.on && avatars.has(pid)) run(); });
+    for (let k = 1; k <= spec.echo; k++) after(0.38 * k, () => { if (netOn() && avatars.has(pid)) run(); });
     return true;
   };
   // 相手の魔法が自分に当たった（相手の画面で決まったダメージ）
@@ -4792,7 +4999,7 @@
   G.avatarList = () => [...avatars.values()];
   // 相手の魔法が、自分の召喚獣に当たった（相手の画面で決まったダメージ）
   G.applySummonHit = function (from, h) {
-    if (!M.on || !h) return false;
+    if (!netOn() || !h) return false;
     const t = targets.find((o) => o.isSummon && !o.puppet && o.alive && o.sid === Math.round(+h.id));
     if (!t) return false;
     let d = clamp(h.d, 0, 5000); if (t.vulnT > 0) d *= 1.35;
@@ -4806,6 +5013,232 @@
   // 自分の召喚獣・魔法の壁の様子（画面下の表示用）
   G.mySummons = () => targets.filter((t) => t.isSummon && !t.puppet && t.alive).map((t) => ({ kind: t.kind, label: MG.SUMMONS[t.kind].label, hp: Math.max(0, Math.round(t.hp)), maxHp: t.maxHp, left: Math.max(0, t.life) }));
   G.myBarriers = () => barrierList.filter((b) => b.owner === 'me' && !b.dead).map((b) => ({ shape: b.shape, hp: Math.max(0, Math.round(b.hp)), maxHp: b.maxHp, left: Math.max(0, b.dur - b.t) }));
+
+  // ======================================================================
+  //  パーティー（第39版）。部屋とやりとりは js/party.js、ここはゲームの中のこと
+  // ======================================================================
+  const REVIVE_SEC = 4, REVIVE_R = 2.4, REVIVE_HP = 0.4, GATHER_R = 2.8;
+  const PID = /^p[0-3]$/;
+  function onMyFloor(a) { return co() && a.netStage === 'dungeon' && a.netFloor === D.floor && CO.ids.includes(a.pid); }
+  function mateShown(a) { return D.on ? onMyFloor(a) : W.stage === 'town' && a.netStage === 'town'; } // 練習場は各自
+  function updateMates(dt) {
+    avatars.forEach((a) => {
+      const show = mateShown(a);
+      if (show && !a.alive) a.pos.copy(a.netPos);
+      a.alive = show;
+      a.face.rotation.order = 'YXZ';
+      updatePlayerTarget(a, dt);
+      a.bar.visible = show && D.on;
+      const down = show && D.on && a.netDown;
+      a.face.rotation.x = down ? 1.4 : 0;
+      // 倒れた体は、足元ではなく体のまん中が倒れた場所に来るように寝かせる
+      a.face.position.x = down ? -Math.sin(a.yaw) : 0; a.face.position.z = down ? -Math.cos(a.yaw) : 0;
+      if (show && flatDist(a.pos, player.pos) < (down ? 0.9 : 0.8)) a.group.visible = false; // 重なった仲間の体で視界をふさがない
+      if (down) {
+        a.face.position.y = 0.3;
+        a.ringT = (a.ringT || 0) - dt;
+        if (a.ringT <= 0) { a.ringT = 1; FX.ring(new V3(a.pos.x, a.pos.y + 0.12, a.pos.z), '#ff6b6b', 0.4, 2, 0.9); }
+      }
+    });
+  }
+  function updateRevive(dt) {
+    if (!co()) { CO.rev = null; CO.revTo = null; return; }
+    let best = null, bd = REVIVE_R;
+    if (D.alive) avatars.forEach((a) => { if (!onMyFloor(a) || !a.netDown) return; const d = flatDist(a.pos, player.pos); if (d < bd) { bd = d; best = a; } });
+    CO.revTo = best;
+    const held = !!input.keys.KeyF && !st.paused;
+    if (!held) CO.revBlock = false;
+    if (!best || !held || CO.revBlock) { CO.rev = null; return; }
+    if (!CO.rev || CO.rev.pid !== best.pid) { CO.rev = { pid: best.pid, t: 0 }; input.mouseDown = false; }
+    CO.rev.t += dt;
+    if (Math.random() < 0.6) FX.emit(new V3(best.pos.x, best.pos.y + 0.3, best.pos.z), { count: 1, c1: '#9dffb0', c2: '#ffffff', speed: 0.6, up: 2, jitter: 0.6, life: 0.7, size: 0.3, drag: 1 });
+    if (CO.rev.t >= REVIVE_SEC) { coSend({ t: 'rev' }, { to: best.pid }); CO.rev = null; CO.revBlock = true; AU.reveal(3); }
+  }
+  function revived() {
+    if (!co() || D.alive || D.lost) return false;
+    D.alive = true; D.hp = Math.max(1, Math.round(D.maxHp * REVIVE_HP)); D.invul = 2; D.deadT = 0;
+    AU.respawn();
+    FX.emit(new V3(player.pos.x, player.pos.y + 0.5, player.pos.z), { count: 50, c1: '#9dffb0', c2: '#ffffff', speed: 2, up: 4, life: 0.9, size: 0.3, drag: 2 });
+    if (MG.UI && MG.UI.onRevived) MG.UI.onRevived();
+    if (CO.hook.life) CO.hook.life(true);
+    return true;
+  }
+
+  G.partyJoin = function (me) {
+    if (CO.on || M.on) return false;
+    avatars.forEach((a, id) => G.removeAvatar(id));
+    CO.on = true; CO.me = me; CO.ids = []; CO.sim = null; W.allied = true;
+    return true;
+  };
+  G.partyLeave = function () {
+    if (!CO.on) return;
+    if (co() && !D.alive) { D.lost = true; D.deadT = Math.min(D.deadT, 0.5); } // 倒れたままひとりになることはない
+    D.coop = false;
+    [...avatars.keys()].forEach((id) => G.removeAvatar(id));
+    CO.on = false; CO.rev = null; CO.revTo = null; CO.ids = []; W.allied = false;
+  };
+  G.partyStart = function (o) {
+    if (!CO.on || D.on || M.on) return false;
+    CO.ids = o.ids.slice(); CO.n = o.ids.length; CO.sim = o.sim; CO.seq = 0;
+    return startRun({ seed: o.seed });
+  };
+  G.partyFloor = function (o) {
+    if (!co() || !D.alive || D.lost) return false;
+    CO.ids = o.ids.slice(); CO.n = o.ids.length; CO.sim = o.sim;
+    return nextFloor(o.floor, o.seed);
+  };
+  // 残っている人と、敵の受け持ちが変わった
+  G.partyPresent = function (ids, sim) {
+    CO.ids = ids.slice();
+    if (CO.sim === sim) return;
+    CO.sim = sim; CO.lastSeq = 0;
+    if (!co() || sim !== CO.me) return;
+    // 引き継ぐ: 写しの場所と HP から動かし始める
+    targets.forEach((t) => {
+      if (!t.isEnemy || !t.alive) return;
+      t.vy = 0; t.atkT = 1; t.windup = 0; t.netVul = false; t.netFrz = false; t.netBrn = false; t.prevHp = t.hp; t.lastSeen = null;
+      const o = t.out; t.out = null;
+      if (o && o.d > 0) damage(t, o.d, null, false, CO.me);
+    });
+  };
+  G.partyWipe = function () {
+    if (!co() || D.lost) return false;
+    D.alive = false; D.hp = 0; D.lost = true; D.deadT = 2.6; CO.rev = null; CO.revTo = null;
+    if (MG.UI && MG.UI.onPartyWipe) MG.UI.onPartyWipe();
+    return true;
+  };
+  G.partyChest = function (floor, i, by) {
+    if (!co() || floor !== D.floor) return;
+    const c = D.chests.find((q) => q.i === i);
+    if (!c || c.open) return;
+    if (by === CO.me) openChest(c); else c.open = true;
+  };
+  G.partyState = function () {
+    const base = G.localState(), inRun = co();
+    const atHole = inRun && D.alive && W.dun && W.dun.stairsOpen && flatDist(W.dun.stairs, player.pos) < GATHER_R;
+    return Object.assign(base, { a: 1, b: 0, fr: 0, pr: 0, hp: Math.max(0, Math.round(D.on ? D.hp : D.maxHp)), mh: Math.round(D.maxHp),
+      s: W.stage, n: inRun ? D.floor : 0, dn: inRun && !D.alive ? 1 : 0, iv: inRun && D.invul > 0 ? 1 : 0, g: atHole ? 1 : 0, sm: inRun ? base.sm : [] });
+  };
+  G.partyUpdate = function (pid, s) {
+    const a = avatars.get(pid);
+    if (!CO.on || !a || !s || typeof s !== 'object') return;
+    a.netStage = String(s.s || ''); a.netFloor = Math.round(+s.n) || 0; a.netDown = !!s.dn; a.netInv = !!s.iv;
+    const show = mateShown(a);
+    G.updateAvatar(pid, Object.assign({}, s, { a: show ? 1 : 0, sm: show && D.on ? s.sm : [] }));
+  };
+  // 受け持ち: 敵の様子を送る（1秒に10回）／ほか: 与えた作用を受け持ちへ送る
+  G.partySync = function () {
+    if (!co()) return;
+    const r2 = (v) => Math.round(v * 100) / 100;
+    if (isSim()) {
+      const e = [];
+      targets.forEach((t) => {
+        if (!t.isEnemy || !t.alive || !/^e\d+$/.test(t.id)) return;
+        const fl = (t.awake ? 1 : 0) | (t.windup > 0 ? 2 : 0) | (t.freezeT > 0 ? 4 : 0) | (t.burnT > 0 ? 8 : 0) | (t.vulnT > 0 ? 16 : 0);
+        const by = [0, 1, 2, 3].map((i) => Math.round(t.dealt['p' + i] || 0));
+        e.push([+t.id.slice(1), r2(t.pos.x), r2(t.pos.y), r2(t.pos.z), r2(t.yaw), Math.round(t.hp), fl].concat(by));
+      });
+      coSend({ t: 'snap', q: ++CO.seq, e }, { fast: true });
+    } else {
+      targets.forEach((t) => {
+        const o = t.isEnemy && t.alive ? t.out : null;
+        if (!o) return;
+        t.out = null;
+        coSend({ t: 'eh', i: t.id, d: o.d, k: o.k, kb: arr(o.kb), f: o.f, fh: o.fh, b: o.b, bd: o.bd, v: o.v }, { to: CO.sim });
+      });
+    }
+  };
+  // 仲間から届いた、ゲームの中の出来事（送り主は通信側で確かめてある。数は必ず範囲に収める）
+  G.partyMsg = function (from, m) {
+    if (!co() || m.n !== D.floor || !PID.test(from) || !CO.ids.includes(from)) return false;
+    const en = () => targets.find((t) => t.isEnemy && t.alive && t.id === m.i);
+    const bySim = from === CO.sim && !isSim();
+    switch (m.t) {
+      case 'cast': return G.remoteCast(from, m.c);
+      case 'fx': return G.remoteFx(from, m.f);
+      case 'circle': return G.avatarCircle(from, m.g, String(m.k || ''));
+      case 'rev': return revived();
+      case 'door': {
+        const i = Math.round(+m.i), d = W.dun && W.dun.doors && W.dun.doors[i];
+        if (!d || !!d.open === !!m.o) return false;
+        W.toggleDoor(i);
+        const p = new V3(d.x, 1.5, d.z); AU.step('heavy', ap(p), 1.8); AU.impact('earth', 1.2, ap(p));
+        return true;
+      }
+      case 'shit': return from === CO.sim ? G.applySummonHit(from, m.h) : false;
+      case 'hurt': {
+        if (from !== CO.sim) return false;
+        const E = Object.prototype.hasOwnProperty.call(RP.ENEMIES, m.e) ? RP.ENEMIES[m.e] : null;
+        hurtPlayer(clamp(m.d, 0, 3000), vec(m.p), E ? E.label : '敵');
+        return true;
+      }
+      case 'bolt': {
+        const t = bySim && en(), p = vec(m.p), v = vec(m.v);
+        if (!t || !p || !v || v.lengthSq() < 1e-4 || D.ebolts.length > 80) return false;
+        fireBolts(t, p, v.normalize(), clamp(m.d, 0, 3000));
+        return true;
+      }
+      case 'atk': {
+        const t = bySim && en(), p = vec(m.p);
+        if (!t || !p) return false;
+        if (m.s) slamFx(t, p);
+        else { const c = ENEMY_COL[t.kind]; FX.emit(p, { count: 12, c1: c[0], c2: c[1], speed: 4, life: 0.25, size: 0.3, drag: 4 }); }
+        return true;
+      }
+      case 'edie': {
+        const t = bySim && en();
+        if (!t || !m.s || typeof m.s !== 'object') return false;
+        enemyDie(t, m.s);
+        return true;
+      }
+      case 'eh': {
+        if (!isSim()) return false;
+        const t = en(); if (!t) return false;
+        const a = avatars.get(from);
+        const f = clamp(m.f, 0, 10), b = clamp(m.b, 0, 10), v = clamp(m.v, 0, 14), kb = vec(m.kb);
+        if (f > 0) { t.freezeT = Math.max(t.freezeT, f); if (m.fh) t.frozenHard = true; }
+        if (b > 0) { t.burnT = Math.max(t.burnT, b); t.burnDps = Math.max(t.burnDps, clamp(m.bd, 0, 200)); t.burnBy = from; t.burnRec = null; }
+        if (v > 0) t.vulnT = Math.max(t.vulnT, v);
+        if (kb) { kb.clampLength(0, 30); t.dispV.add(kb); }
+        t.hitBy = from;
+        if (!t.awake && a) { t.awake = true; t.lastSeen = new V3(a.pos.x, a.pos.y + 1, a.pos.z); t.lostT = 0; }
+        const d = clamp(m.d, 0, 100000);
+        if (d > 0) damage(t, d, null, false, from);
+        if (m.k && t.alive) damage(t, t.hp, null, false, from);
+        return true;
+      }
+      case 'snap': {
+        if (!bySim || !Array.isArray(m.e) || !(+m.q > CO.lastSeq)) return false;
+        CO.lastSeq = +m.q;
+        const byId = new Map(); targets.forEach((t) => { if (t.isEnemy && t.alive) byId.set(t.id, t); });
+        m.e.slice(0, 100).forEach((e) => {
+          if (!Array.isArray(e) || e.length < 11) return;
+          const t = byId.get('e' + e[0]), p = vec([e[1], e[2], e[3]]);
+          if (!t || !p) return;
+          t.netPos.set(clamp(p.x, -100, 100), clamp(p.y, -5, 20), clamp(p.z, -100, 100));
+          t.netYaw = clamp(e[4], -1e5, 1e5);
+          const hp = clamp(e[5], 0, t.maxHp);
+          if (hp !== t.hp) { if (hp < t.hp) t.flash = 0.1; t.hp = hp; drawBar(t); }
+          const fl = Math.round(clamp(e[6], 0, 31));
+          if ((fl & 1) && !t.awake) popup(t.center.clone().add(new V3(0, 1.2, 0)), t.E.mimic ? 'ミミックだ！' : '!', 'pvp');
+          t.awake = !!(fl & 1);
+          if ((fl & 2) && !t.netWind) t.windup = t.E.boss ? 0.7 : 0.4;
+          t.netWind = !!(fl & 2); t.netFrz = !!(fl & 4); t.netBrn = !!(fl & 8); t.netVul = !!(fl & 16);
+          for (let i = 0; i < 4; i++) t.dealt['p' + i] = clamp(e[7 + i], 0, 1e7); // 受け持ちを継いでも分け前が狂わないように
+        });
+        return true;
+      }
+    }
+    return false;
+  };
+  G.mateDots = () => [...avatars.values()].filter((a) => co() && onMyFloor(a)).map((a) => ({ x: a.pos.x, z: a.pos.z, color: a.color, down: !!a.netDown }));
+  G.atStairs = () => co() && !!W.dun && W.dun.stairsOpen && flatDist(W.dun.stairs, player.pos) < GATHER_R;
+  G.reviveInfo = () => (CO.revTo ? { name: CO.revTo.name, k: CO.rev ? Math.min(1, CO.rev.t / REVIVE_SEC) : 0, on: !!CO.rev } : null);
+  // 画面が隠れて描画が止まっている間も、世界を進める（パーティーのみ）
+  G.bgStep = function (sec) {
+    if (!CO.on || !st.running) return;
+    for (let left = Math.min(2, sec); left > 1e-4; left -= 0.05) step(Math.min(0.05, left));
+  };
 
   G.startChallenge = function (sec) {
     if (W.stage !== 'practice' && !M.on && !D.on) G.goStage('practice', [0, 16, 0]);
@@ -4857,6 +5290,7 @@
     giveGold(n) { P.gold += n; if (MG.UI && MG.UI.onProgress) MG.UI.onProgress(); },
     unlockAll() { P.prog.level = Math.max(P.prog.level, 20); P.wands = MG.WANDS.map((w) => w.id).filter((id) => id !== 'bare'); applyProgress(); st.mp = st.mpMax; },
     goStage: (n, sp) => G.goStage(n, sp),
+    coop: () => ({ on: CO.on, run: co(), me: CO.me, sim: CO.sim, ids: CO.ids.slice(), n: CO.n, rev: CO.rev ? CO.rev.t : 0, allies: [...avatars.values()].map((a) => ({ id: a.pid, shown: a.alive, down: !!a.netDown, hp: a.hp, x: a.pos.x, z: a.pos.z, inTargets: targets.includes(a) })) }),
     dun: () => ({ on: D.on, floor: D.floor, hp: Math.round(D.hp), maxHp: D.maxHp, alive: D.alive, run: D.run ? { gold: D.run.gold, xp: D.run.xp, kills: D.run.kills, potGain: D.run.potGain } : null, chests: D.chests.length, opened: D.chests.filter((c) => c.open).length, ebolts: D.ebolts.length, stairsOpen: W.dun ? W.dun.stairsOpen : false, explored: D.explored ? D.explored.reduce((a, v) => a + v, 0) : 0 }),
     dunPos: () => (W.dun ? { start: [W.dun.start.x, W.dun.start.z], stairs: [W.dun.stairs.x, W.dun.stairs.z], portal: [W.dun.portal.x, W.dun.portal.z] } : null),
     enemies: () => targets.filter((t) => t.isEnemy && t.alive).map((t) => ({ id: t.id, kind: t.kind, hp: t.hp, maxHp: t.maxHp, x: Math.round(t.pos.x * 10) / 10, y: Math.round(t.pos.y * 10) / 10, z: Math.round(t.pos.z * 10) / 10, awake: t.awake, search: t.searchT > 0, dmg: t.dmg, xp: t.xp })),

@@ -767,3 +767,42 @@ kbd { font-family: var(--sans); font-size: 11px; padding: 1px 6px; border-radius
 .spell-banner { bottom: 104px; }
 .voice-box { bottom: 92px; }
 .vs-on .spell-banner, .vs-on .voice-box { bottom: 120px; }
+
+/* 第39版: パーティー（編成の画面・左上の仲間・一時的な案内） */
+.party { max-width: 820px; }
+.pt-col { display: flex; flex-direction: column; gap: 12px; }
+.pt-col[hidden] { display: none; }
+.pt-code-row { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 10px 14px; border-radius: 12px; border: 1px solid var(--line-strong); background: rgba(5, 8, 25, 0.55); }
+.pt-code-row > span { font-size: 13px; font-weight: 700; color: var(--muted); }
+.pt-code { font-size: 26px; font-weight: 800; color: var(--gold); letter-spacing: 0.08em; overflow-wrap: anywhere; }
+.pt-cards { margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.pt-card { min-height: 168px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; padding: 12px 8px; border-radius: 14px; border: 1px solid var(--line-strong); border-top: 4px solid var(--pc, var(--line)); background: rgba(8, 10, 30, 0.6); text-align: center; }
+.pt-card.me { background: rgba(30, 40, 85, 0.6); }
+.pt-card.empty { border-style: dashed; color: var(--muted); }
+.pt-role { font-size: 12px; color: var(--muted); }
+.pt-name { font-size: 17px; color: var(--pc); overflow-wrap: anywhere; }
+.pt-lv { font-size: 15px; color: var(--gold); font-weight: 700; }
+.pt-wand { font-size: 13px; }
+.pt-state { margin-top: 6px; padding: 3px 12px; border-radius: 999px; border: 1px solid var(--line-strong); font-size: 13px; color: var(--muted); }
+.pt-card.ready .pt-state { color: #8dffb8; border-color: #8dffb8; }
+.pt-actions { display: flex; gap: 10px; justify-content: center; align-items: center; flex-wrap: wrap; }
+.pt-actions .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+.pt-wait { margin: 0; font-size: 14px; color: var(--muted); text-align: center; }
+.pt-portal-note { color: var(--gold); }
+.pt-hud { position: absolute; left: 16px; top: 108px; width: 190px; display: flex; flex-direction: column; gap: 5px; pointer-events: none; }
+.pt-hud[hidden], .pt-prompt[hidden] { display: none; }
+.stage-practice .pt-hud { top: 214px; }
+.ph-title { display: flex; justify-content: space-between; gap: 6px; font-size: 12px; font-weight: 800; color: var(--gold); text-shadow: 0 1px 3px #000; }
+.ph-title small { color: var(--text); }
+.ph-row { padding: 5px 9px; border-radius: 9px; background: rgba(6, 8, 22, 0.72); border-left: 3px solid var(--pc); }
+.ph-line { display: flex; justify-content: space-between; gap: 6px; font-size: 13px; }
+.ph-line b { color: var(--pc); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ph-line span { color: var(--muted); white-space: nowrap; }
+.ph-row.down .ph-line span { color: #ff7a7a; font-weight: 800; }
+.ph-bar, .pp-bar { height: 6px; margin-top: 4px; border-radius: 4px; background: rgba(255, 255, 255, 0.14); overflow: hidden; }
+.ph-bar i { display: block; height: 100%; background: linear-gradient(90deg, #ff4a5a, #ff9a6a); }
+.pt-prompt { position: absolute; left: 50%; bottom: 202px; transform: translateX(-50%); padding: 10px 18px; border-radius: 12px; background: rgba(10, 14, 40, 0.88); border: 1px solid var(--gold); font-size: 15px; pointer-events: none; white-space: nowrap; }
+.pt-prompt kbd { margin-right: 8px; padding: 1px 8px; border-radius: 6px; background: var(--gold); color: #1a1420; font-weight: 800; }
+.pt-prompt b { color: var(--gold); }
+.pp-bar i { display: block; height: 100%; background: #9dffb0; }
+.dun-down.waiting { justify-content: flex-start; padding-top: 14vh; background: radial-gradient(circle, rgba(60, 0, 10, 0.05), rgba(20, 0, 4, 0.5)); }

@@ -1,4 +1,4 @@
-// 対戦の通信: WebRTC でブラウザどうしを直接つなぐ（ゲーム用のサーバーは使わない）
+// 対戦とパーティーの通信: WebRTC でブラウザどうしを直接つなぐ（ゲーム用のサーバーは使わない）
 // つなぎ方は2つ:
 //  ・合言葉（ふだん）: ホストが部屋を作ると「ほのお-1234」のような合言葉が出る → 友達が入力するとつながる。
 //    最初の顔合わせ（接続情報の受け渡し）だけ、無料の PeerJS 公開サーバー（0.peerjs.com）に手伝ってもらう。対戦のデータは直接やりとりする。
@@ -15,7 +15,7 @@
   const TIMEOUT_MS = 10000;
 
   const N = (MG.Net = {
-    role: null, myId: null, myName: '', peers: new Map(), pending: new Map(), roster: [],
+    role: null, kind: 'vs', myId: null, myName: '', peers: new Map(), pending: new Map(), roster: [],
     ice: ICE, gatherMs: 3500, maxPlayers: MAX_PLAYERS,
     onMessage() {}, onJoin() {}, onLeave() {}, onRoster() {}, onClosed() {}, onState() {}, onRoomError() {},
     roomCode: '', rtc: null, locked: false, joinWaiter: null, roomTimeoutMs: 12000, joinTimeoutMs: 20000,
@@ -80,7 +80,7 @@
     N.peers.forEach((p) => { try { p.close(); } catch (e) { /* 閉じ済み */ } });
     N.pending.forEach((p) => { try { p.close(); } catch (e) { /* 閉じ済み */ } });
     N.peers.clear(); N.pending.clear();
-    N.role = null; N.myId = null; N.roster = []; N.hostName = '';
+    N.role = null; N.myId = null; N.roster = []; N.hostName = ''; N.locked = false;
   }
 
   // ---- つなぐ ----
@@ -117,8 +117,10 @@
   }
 
   // ホスト: 部屋を作る
-  N.host = function (name) {
+  // kind: 'vs'（対戦）か 'party'（パーティー）。同じ合言葉でも別の部屋になる
+  N.host = function (name, kind) {
     reset();
+    N.kind = kind === 'party' ? 'party' : 'vs';
     N.role = 'host'; N.myId = 'p0'; N.myName = cleanName(name);
     publishRoster();
   };
@@ -139,7 +141,7 @@
     wireChannel(peer, peer.pc.createDataChannel('st', { ordered: false, maxRetransmits: 0 }));
     await peer.pc.setLocalDescription(await peer.pc.createOffer());
     await gathered(peer.pc);
-    return PREFIX_I + (await pack({ v: 1, s: peer.pc.localDescription.sdp, id: pid, h: N.myName }));
+    return PREFIX_I + (await pack({ v: 1, s: peer.pc.localDescription.sdp, id: pid, h: N.myName, k: N.kind }));
   };
   // ホスト: 友達の返事コードを受け取る
   N.acceptAnswer = async function (code) {
@@ -154,9 +156,11 @@
     return peer.pid;
   };
   // 参加者: 招待コードから返事コードを作る
-  N.join = async function (name, code) {
-    const d = await unpack(code, PREFIX_I);
+  N.join = async function (name, code, kind) {
+    const d = await unpack(code, PREFIX_I), want = kind === 'party' ? 'party' : 'vs';
+    if ((d.k || 'vs') !== want) throw new Error(want === 'party' ? 'これは対戦の招待コードです。「友達と対戦」で使ってください' : 'これはパーティーの招待コードです。「友達とパーティー」で使ってください');
     reset();
+    N.kind = want;
     N.role = 'guest'; N.myName = cleanName(name); N.myId = d.id; N.hostName = cleanName(d.h);
     const peer = makePeer('p0');
     peer.name = N.hostName;
@@ -200,6 +204,7 @@
       if (msg.t === 'hello') { peer.name = cleanName(msg.name); publishRoster(); N.onJoin(peer.pid, peer.name); return; }
       if (msg.t === 'bye') { drop(peer.pid, 'bye'); return; }
       if (msg.t === 'ping') return;
+      if (msg.t === 'roster' || msg.t === 'welcome' || msg.t === 'deny') return; // 部屋主しか出さない知らせは中継しない
       // ほかの参加者への中継
       if (!msg.to) { const s = JSON.stringify(msg); N.peers.forEach((p) => { if (p !== peer) rawSend(p, s, fast); }); }
       else if (msg.to !== N.myId) { const p = N.peers.get(msg.to); if (p) rawSend(p, JSON.stringify(msg), fast); return; }
@@ -207,7 +212,7 @@
       if (msg.t === 'roster') { N.roster = Array.isArray(msg.list) ? msg.list.slice(0, MAX_PLAYERS).map((r) => ({ id: String(r.id), name: cleanName(r.name) })) : []; N.onRoster(N.roster); return; }
       if (msg.t === 'bye' && msg.f === 'p0') { drop('p0', 'bye'); return; }
       if (msg.t === 'welcome') { N.myId = String(msg.id).slice(0, 3); N.hostName = cleanName(msg.h); peer.name = N.hostName; if (N.joinWaiter) N.joinWaiter.ok(); return; }
-      if (msg.t === 'deny') { if (N.joinWaiter) N.joinWaiter.fail(msg.why === 'busy' ? 'その部屋は対戦中です。対戦が終わってから入り直してください' : `その部屋は満員です（${MAX_PLAYERS}人まで）`); return; }
+      if (msg.t === 'deny') { if (N.joinWaiter) N.joinWaiter.fail(msg.why === 'busy' ? (N.kind === 'party' ? 'そのパーティーは探索中です。探索が終わってから入り直してください' : 'その部屋は対戦中です。対戦が終わってから入り直してください') : `その部屋は満員です（${MAX_PLAYERS}人まで）`); return; }
       if (msg.t === 'ping') return;
     }
     N.onMessage(msg.f, msg, fast);
@@ -220,6 +225,7 @@
   }
 
   function drop(pid, why) {
+    if (unloading) { held.push([pid, why]); return; }
     const p = N.peers.get(pid) || N.pending.get(pid);
     if (!p) return;
     const wasOpen = p.open;
@@ -252,12 +258,28 @@
     N.rtc = null; N.roomCode = ''; N.joinWaiter = null; N.locked = false;
     N.role = null; N.myId = null; N.roster = [];
   };
-  window.addEventListener('beforeunload', () => { if (N.role) N.send({ t: 'bye' }); });
+  // 自分がページを閉じる・開き直す途中に起きる切断は、相手が切れたのではないので扱わない
+  // （扱うと、開き直しが「部屋主との通信切れ＝持ち帰り」や全滅として保存されてしまう）。閉じるのが取りやめになったら、あとで片付ける
+  let unloading = false, unloadTimer = 0;
+  const held = [];
+  window.addEventListener('beforeunload', () => {
+    if (!N.role) return;
+    unloading = true;
+    N.send({ t: 'bye' });
+    clearTimeout(unloadTimer);
+    unloadTimer = setTimeout(stillHere, 10000);
+  });
+  function stillHere() {
+    unloading = false;
+    held.splice(0).forEach(([pid, why]) => drop(pid, why));
+  }
+  window.addEventListener('pagehide', () => { unloading = true; clearTimeout(unloadTimer); });
+  window.addEventListener('pageshow', (e) => { if (e.persisted) stillHere(); });
 
   // ======================================================================
   //  合言葉の部屋
   // ======================================================================
-  const PROTO = 36; // ゲームの版。版がちがうと、同じ合言葉でも別の部屋になる（混ざらない）。対戦のやりとりや、対戦の公平さにかかわる決まりが変わったら上げる
+  const PROTO = 39; // ゲームの版。版がちがうと、同じ合言葉でも別の部屋になる（混ざらない）。対戦のやりとりや、対戦の公平さにかかわる決まりが変わったら上げる
   const ID_PREFIX = 'magia-lab-' + PROTO + '-';
   // 合言葉のことば（どれも、ほかのことばの頭と重ならない）
   const WORDS = ['ほのお', 'こおり', 'かみなり', 'ほし', 'つき', 'たいよう', 'かぜ', 'みず', 'もり', 'やま', 'うみ', 'そら', 'にじ', 'ゆき', 'あめ', 'くも',
@@ -292,6 +314,7 @@
     return { code: shown, id: ID_PREFIX + 'c-' + fnv(n, 2166136261) + fnv(n, 3735928559), custom: true };
   };
   N.CUSTOM_MIN = CUSTOM_MIN; N.CUSTOM_MAX = CUSTOM_MAX;
+  const roomId = (room) => room.id + (N.kind === 'party' ? '-party' : '');
   function newRoom() { return N.parseRoom(WORDS[Math.floor(Math.random() * WORDS.length)] + String(Math.floor(Math.random() * 10000)).padStart(4, '0')); }
   const randKey = () => Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 8);
   const peerOpts = () => ({ debug: 0, config: { iceServers: N.ice } });
@@ -318,7 +341,7 @@
       let tries = 0, done = false;
       const attempt = () => {
         const room = fixed || newRoom();
-        const rtc = new window.Peer(room.id, peerOpts());
+        const rtc = new window.Peer(roomId(room), peerOpts());
         N.rtc = rtc;
         const timer = setTimeout(() => { if (!done && N.rtc === rtc) { done = true; killRtc(); reject(new Error(rtcError('network'))); } }, N.roomTimeoutMs);
         rtc.on('open', () => { if (done || N.rtc !== rtc) return; done = true; clearTimeout(timer); N.roomCode = room.code; resolve(room.code); });
@@ -370,11 +393,12 @@
     attachConn(peer, conn);
   }
   // 参加者: 合言葉で部屋に入る（つながると自分の番号が返る）
-  N.joinRoom = function (name, code) {
+  N.joinRoom = function (name, code, kind) {
     const room = N.roomFromText(code);
     if (!room) return Promise.reject(new Error(`合言葉を入れてください（${CUSTOM_MIN}〜${CUSTOM_MAX} 文字。「ほのお-1234」や、部屋を作った人が決めた合言葉）。`));
     if (!N.roomSupported()) return Promise.reject(new Error(rtcError('browser-incompatible')));
     reset();
+    N.kind = kind === 'party' ? 'party' : 'vs';
     N.role = 'guest'; N.myName = cleanName(name); N.myId = null;
     return new Promise((resolve, reject) => {
       let done = false, asked = false;
@@ -390,8 +414,8 @@
         const peer = makeRoomPeer('p0');
         N.pending.set('p0', peer);
         const meta = { v: PROTO }; // 名前はここに入れない（サーバーを通るため）
-        attachConn(peer, rtc.connect(room.id, { label: 'ev', serialization: 'raw', reliable: true, metadata: meta }));
-        attachConn(peer, rtc.connect(room.id, { label: 'st', serialization: 'raw', reliable: false, metadata: meta }));
+        attachConn(peer, rtc.connect(roomId(room), { label: 'ev', serialization: 'raw', reliable: true, metadata: meta }));
+        attachConn(peer, rtc.connect(roomId(room), { label: 'st', serialization: 'raw', reliable: false, metadata: meta }));
       });
     });
   };
