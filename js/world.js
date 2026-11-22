@@ -868,7 +868,7 @@
     if (S) {
       // 広場のふち（道のあいだ）にツツジ、礼拝堂の前と練習場の門の左右・杖の店の前にツバキ、柵ぞいにツツジ
       for (let k = 0; k < 8; k++) { const a = ((k + 0.5) / 8) * Math.PI * 2; bush.tree3.push({ x: Math.cos(a) * 10.9, z: -4 + Math.sin(a) * 10.9, s: 1.15 + rr() * 0.3, ry: rr() * 6.28, tint: leafTint() }); }
-      [[-4.6, -26.2], [-6.4, -26.4], [6.4, -26.4], [-5, 35.6], [5, 35.6]].concat(W.townBldg ? [[24.2, -10.6], [24.2, 4.6]] : [[27.2, -9.6], [27.2, 2.2]]).forEach(([x, z]) => { bush.tree4.push({ x, z, s: 0.85 + rr() * 0.25, ry: rr() * 6.28, tint: leafTint() }); addSolid(S, x, z, 0.6, 0.6, 2.4); });
+      [[-4.6, -26.2], [-6.4, -26.4], [6.4, -26.4], [-5, 35.6], [5, 35.6]].concat(W.townBldg ? [[24.2, -10.4], [24.2, 2.4]] : [[27.2, -9.6], [27.2, 2.2]]).forEach(([x, z]) => { bush.tree4.push({ x, z, s: 0.85 + rr() * 0.25, ry: rr() * 6.28, tint: leafTint() }); addSolid(S, x, z, 0.6, 0.6, 2.4); });
       [-9, -14, -19, -25, 9, 14, 25].forEach((x) => bush.tree3.push({ x, z: 35.8, s: 1 + rr() * 0.4, ry: rr() * 6.28, tint: leafTint() }));
       bush.tree3.forEach((b) => addSolid(S, b.x, b.z, 0.55, 0.55, 1.2));
     }
@@ -1047,9 +1047,10 @@
       const sh = AS.bldgInfo('shop').size;
       const winS = M({ color: 0x2a1a10, emissive: 0xffb860, emissiveIntensity: 1, roughness: 0.2 }); townWinMats.push(winS);
       const shopB = AS.building('shop', winS);
-      shopB.position.set(26 + sh[2] / 2, 0, -4); shopB.rotation.y = -Math.PI / 2; g.add(shopB);
-      addSolid(S, 26 + sh[2] / 2, -4, sh[2] / 2, sh[0] / 2, sh[1]);
-      W.townBuildings.push({ name: 'shop', x: 26 + sh[2] / 2, z: -4, size: sh, tris: shopB.userData.tris });
+      const door = AS.bldgInfo('shop').door || [0, 0], scz = -4 - door[0]; // 第35版: 玄関が道の正面に来るように
+      shopB.position.set(26 + sh[2] / 2, 0, scz); shopB.rotation.y = -Math.PI / 2; g.add(shopB);
+      addSolid(S, 26 + sh[2] / 2, scz, sh[2] / 2, sh[0] / 2, sh[1]);
+      W.townBuildings.push({ name: 'shop', x: 26 + sh[2] / 2, z: scz, size: sh, tris: shopB.userData.tris, door: [26 + sh[2] / 2 - door[1], scz + door[0]] });
     }
     place(makeSignboard('杖の店', Object.assign({ sub: '杖・回復薬', w: 2.2, h: 0.9, posts: 1 }, WOOD_SIGN)), 24.5, 0, 0.6, -Math.PI / 2 + 0.5);
     // たる・木箱
@@ -1119,8 +1120,7 @@
     const oak = (x, z, s) => { cyl(0.22 * s, 0.32 * s, 2.6 * s, bark, x, 1.3 * s, z, 6); [[0, 3.6, 0, 1.9], [1, 3.2, 0.5, 1.4], [-0.9, 3.3, -0.4, 1.5], [0.2, 4.5, -0.3, 1.3]].forEach(([dx, dy, dz, r]) => { const c = new THREE.Mesh(new THREE.IcosahedronGeometry(r * s, 1), leafB); c.position.set(x + dx * s, dy * s, z + dz * s); g.add(c); }); addSolid(S, x, z, 0.35 * s, 0.35 * s, 3 * s); };
     let seed = 777; const rr = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
     if (hasTex && AS.modelInfo('tree1') && AS.modelInfo('tree2')) {
-      const castleDir = Math.atan2(-1, -1);
-      const skipT = useB ? (x, z) => (Math.abs(x) < 7 && z > 36) || (Math.abs(x) < 17 && z < -22 && z > -75) || (Math.hypot(x, z) > 36 && Math.abs(Math.atan2(z, x) - castleDir) < 0.26) : (x, z) => Math.abs(x) < 7 && z > 36;
+      const skipT = useB ? (x, z) => (Math.abs(x) < 7 && z > 36) || (Math.abs(x) < 17 && z < -22 && z > -75) : (x, z) => Math.abs(x) < 7 && z > 36; // 第35版: 城をやめたので、北西の木も元どおり
       W.townTrees = plantTrees(g, S, rr, useB ? [[-7, -22], [7, -22], [-26, 1.5], [24, 7.5], [-27, 35], [7, 33]] : [[-6, -16], [6, 14], [-20, 1.5], [20, -12], [-25, 34.5], [8, 30]], skipT);
     } else {
       for (let i = 0; i < 90; i++) {
