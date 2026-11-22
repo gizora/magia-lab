@@ -4005,7 +4005,7 @@
   G.getProgress = () => ({ prog: RP.cloneProgress(P.prog), gold: P.gold, potions: P.potions, wands: P.wands.slice(), bestFloor: P.bestFloor });
   G.playerPos = () => player.pos;
   G.playerYaw = () => player.yaw;
-  G.enemyDots = () => targets.filter((t) => t.isEnemy && t.alive).map((t) => ({ x: t.pos.x, z: t.pos.z, boss: !!t.E.boss }));
+  G.enemyDots = () => targets.filter((t) => t.isEnemy && t.alive && (!t.E.mimic || t.awake)).map((t) => ({ x: t.pos.x, z: t.pos.z, boss: !!t.E.boss }));
   G.ownsWand = (id) => id === 'bare' || P.wands.includes(id);
   // 杖を買う。戻り値: 'ok' | 'owned' | 'gold' | 'invalid'
   G.buyWand = function (id) {
@@ -4208,11 +4208,15 @@
   function spawnChest(p, f) {
     if (!chestMats) chestMats = { wood: new THREE.MeshStandardMaterial({ color: 0x7a4a24, roughness: 0.8, flatShading: true }), gold: new THREE.MeshStandardMaterial({ color: 0xe8b04a, emissive: 0x8a5a10, emissiveIntensity: 0.6, roughness: 0.35, metalness: 0.4 }) };
     const g = new THREE.Group(); g.position.set(p.x, W.heightAt(p.x, p.z), p.z); g.rotation.y = rand(0, Math.PI * 2);
-    const base = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.7, 0.8), chestMats.wood); base.position.y = 0.35; g.add(base);
-    const lidP = new THREE.Group(); lidP.position.set(0, 0.7, -0.4); g.add(lidP);
-    const lid = new THREE.Mesh(new THREE.BoxGeometry(1.24, 0.3, 0.84), chestMats.wood); lid.position.set(0, 0.15, 0.4); lidP.add(lid);
-    [[-0.45], [0.45]].forEach(([x]) => { const b = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.72, 0.84), chestMats.gold); b.position.set(x, 0.36, 0); g.add(b); });
-    const lock = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.22, 0.06), chestMats.gold); lock.position.set(0, 0.6, 0.42); g.add(lock);
+    let lidP;
+    if (MG.Monsters && MG.Monsters.chest) { const ch = MG.Monsters.chest(null); g.add(ch.g); lidP = ch.lid; } // 第36版: 鉄の帯と鋲の宝箱
+    else {
+      const base = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.7, 0.8), chestMats.wood); base.position.y = 0.35; g.add(base);
+      lidP = new THREE.Group(); lidP.position.set(0, 0.7, -0.4); g.add(lidP);
+      const lid = new THREE.Mesh(new THREE.BoxGeometry(1.24, 0.3, 0.84), chestMats.wood); lid.position.set(0, 0.15, 0.4); lidP.add(lid);
+      [[-0.45], [0.45]].forEach(([x]) => { const b = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.72, 0.84), chestMats.gold); b.position.set(x, 0.36, 0); g.add(b); });
+      const lock = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.22, 0.06), chestMats.gold); lock.position.set(0, 0.6, 0.42); g.add(lock);
+    }
     const glow = FX.glowSprite('#ffd36b', 1.8); glow.position.y = 0.9; g.add(glow);
     scene.add(g);
     D.chests.push({ g, lidP, glow, open: false, t: 0, f, x: p.x, z: p.z });
@@ -4237,7 +4241,11 @@
   }
 
   // ---- 敵 ----
-  const ENEMY_COL = { slime: ['#5aff8a', '#c8ffd8'], skeleton: ['#e8e2d0', '#ff5a3a'], bat: ['#6a4a9a', '#ff4a8a'], mage: ['#7a3cff', '#c8a8ff'], boss: ['#ff5a3a', '#ffb07a'] };
+  const ENEMY_COL = { slime: ['#5aff8a', '#c8ffd8'], skeleton: ['#e8e2d0', '#ff5a3a'], bat: ['#6a4a9a', '#ff4a8a'], mage: ['#7a3cff', '#c8a8ff'], boss: ['#ff5a3a', '#ffb07a'],
+    // 第36版: 深い階の敵
+    spider: ['#8a2a2a', '#ff4a4a'], goblin: ['#8ab04a', '#e8d070'], mimic: ['#c8a050', '#ff4a4a'], armor: ['#5a8aff', '#c8e0ff'], wraith: ['#7a4aff', '#c8a8ff'], gargoyle: ['#8a8a88', '#ff9a3a'],
+    salamander: ['#ff6a1a', '#ffd24a'], ifrit: ['#ff5a10', '#ffe08a'], minotaur: ['#c8402a', '#ffb07a'], lich: ['#4ac8ff', '#c8a8ff'], dragon: ['#ff4a10', '#ffd24a'], iceking: ['#8ae0ff', '#ffffff'] };
+  const ENEMY_STEP = { slime: 'slime', skeleton: 'bone', mage: 'soft', boss: 'heavy', bat: 'flap', spider: 'soft', goblin: 'soft', mimic: 'heavy', armor: 'heavy', wraith: 'soft', gargoyle: 'flap', salamander: 'soft', ifrit: 'heavy', minotaur: 'heavy', lich: 'soft', dragon: 'heavy', iceking: 'heavy' };
   function makeEnemyModel(kind, mats) {
     const g = new THREE.Group(), parts = {};
     const [c1, c2] = ENEMY_COL[kind];
@@ -4294,7 +4302,7 @@
     const bc = document.createElement('canvas'); bc.width = 128; bc.height = 16;
     const btex = new THREE.CanvasTexture(bc);
     const bar = new THREE.Sprite(new THREE.SpriteMaterial({ map: btex, depthTest: false, transparent: true, fog: false }));
-    bar.scale.set(E.boss ? 4 : 1.4, E.boss ? 0.3 : 0.16, 1); bar.renderOrder = 20; bar.position.y = E.boss ? 7.2 : E.cy + 1.2; g.add(bar);
+    bar.scale.set(E.boss ? 4 : 1.4, E.boss ? 0.3 : 0.16, 1); bar.renderOrder = 20; bar.position.y = E.barY || (E.boss ? 7.2 : E.cy + 1.2); g.add(bar);
     const hp = Math.round(E.hp * sc.hp);
     const t = {
       type: 'enemy', isEnemy: true, kind, E, T: { cy: E.cy, r: E.r }, group: g, face: model, parts, mats, hp, maxHp: hp, r: E.r, pts: 0,
@@ -4303,7 +4311,7 @@
       bar, bc, btex, id: 'e' + Math.random().toString(36).slice(2, 7), dmg: Math.round(E.dmg * sc.dmg), xp: Math.round(E.xp * sc.xp), gold: Math.round(E.gold * sc.gold),
       awake: false, yaw: rand(0, Math.PI * 2), atkT: rand(0.6, 1.4), windup: 0, walk: 0, vy: 0, detourT: 0, stuck: 0, shots: 0,
     };
-    pos.y = E.fly ? 2.2 : W.floorAt(pos.x, pos.z, 1);
+    pos.y = E.fly ? (E.flyY || 2.2) : W.floorAt(pos.x, pos.z, 1);
     t.pos.copy(pos);
     g.position.copy(t.pos); g.scale.setScalar(0.01);
     scene.add(g);
@@ -4334,14 +4342,19 @@
     after(t.windup, () => {
       if (!t.alive || !D.on) return;
       const cur = foe.player ? new V3(player.pos.x, player.pos.y + 1, player.pos.z) : foe.center;
-      if (E.ranged || (E.boss && t.shots % 3 === 2)) {
-        // 魔弾（よけられる）。ボスは 3 回に 1 回、岩を投げる
-        const from = t.center.clone().add(new V3(0, E.boss ? 2.5 : 0.6, 0));
-        const dir = cur.clone().sub(from).normalize();
-        const glow = FX.glowSprite(E.boss ? '#ffb07a' : c1, E.boss ? 2.6 : 1.4), core = FX.glowSprite('#ffffff', E.boss ? 1 : 0.5);
-        glow.position.copy(from); core.position.copy(from); scene.add(glow); scene.add(core);
-        D.ebolts.push({ pos: from, vel: dir.multiplyScalar(E.boss ? 16 : 19), dmg: t.dmg * (E.boss ? 0.8 : 1), life: 3, glow, core, r: E.boss ? 1.2 : 0.7, name: E.label, c1 });
-        AU.cast(E.boss ? 'earth' : 'void');
+      const every = E.rangedEvery == null ? 3 : E.rangedEvery;
+      if (E.ranged || (E.boss && every > 0 && t.shots % every === every - 1)) {
+        // 魔弾（よけられる）。石の守護者は 3 回に 1 回、岩を投げる。第36版: 弾の色（bolt）、扇形に広がる数（spread）、撃つ高さ（boltY）
+        const from = t.center.clone().add(new V3(0, E.boltY != null ? E.boltY : (E.boss ? 2.5 : 0.6), 0));
+        const dir0 = cur.clone().sub(from).normalize(), n = E.spread || 1;
+        for (let i = 0; i < n; i++) {
+          const dir = dir0.clone().applyAxisAngle(UP, (i - (n - 1) / 2) * 0.13);
+          const col = E.bolt ? E.bolt[i % E.bolt.length] : (E.boss ? '#ffb07a' : c1);
+          const glow = FX.glowSprite(col, E.boss ? 2.6 : 1.4), core = FX.glowSprite('#ffffff', E.boss ? 1 : 0.5);
+          glow.position.copy(from); core.position.copy(from); scene.add(glow); scene.add(core);
+          D.ebolts.push({ pos: from.clone(), vel: dir.multiplyScalar(E.boss ? 16 : 19), dmg: t.dmg * (E.boss ? 0.8 : 1) * (n > 1 ? 0.7 : 1), life: 3, glow, core, r: E.boss ? 1.2 : 0.7, name: E.label, c1: col });
+        }
+        AU.cast(E.boltEl || (E.boss ? 'earth' : 'void'));
       } else if (E.boss) {
         // 大地をたたく: まわり 6m
         const p = t.pos.clone().addScaledVector(fc.clone().sub(t.pos).setY(0).normalize(), 2.5); p.y = W.heightAt(p.x, p.z);
@@ -4383,7 +4396,8 @@
     const slow = t.freezeT > 0 ? (t.frozenHard ? 0.08 : 0.45) : 1;
     const eye = new V3(player.pos.x, player.pos.y + 1.4, player.pos.z);
     const pd = Math.hypot(player.pos.x - t.pos.x, player.pos.z - t.pos.z);
-    if (!t.awake && D.alive && pd < (E.boss ? 22 : 15) && W.solidOnSegment(t.center, eye) == null) { t.awake = true; t.bar.visible = true; popup(t.center.clone().add(new V3(0, 1.2, 0)), '!', 'pvp'); }
+    if (E.mimic && !t.awake && D.alive && pd < 2.6) { t.awake = true; t.bar.visible = true; popup(t.center.clone().add(new V3(0, 1.4, 0)), 'ミミックだ！', 'pvp'); AU.hit('force', ap(t.center)); }
+    if (!E.mimic && !t.awake && D.alive && pd < (E.boss ? 22 : 15) && W.solidOnSegment(t.center, eye) == null) { t.awake = true; t.bar.visible = true; popup(t.center.clone().add(new V3(0, 1.2, 0)), '!', 'pvp'); }
     let speed = 0;
     const fr = t.awake ? enemyFoe(t) : null;
     if (fr && D.alive) {
@@ -4418,11 +4432,11 @@
     // 吹き飛ばし
     if (t.dispV.lengthSq() > 1e-3) { t.pos.x += t.dispV.x * dt; t.pos.z += t.dispV.z * dt; t.dispV.multiplyScalar(Math.exp(-4 * dt)); W.pushOut(t.pos, t.r * 0.8); }
     // 高さ: 飛ぶ敵は宙に、それ以外は床に
-    if (E.fly) t.pos.y += (2.2 + Math.sin(st.time * 2.5 + t.phase) * 0.4 - t.pos.y) * Math.min(1, dt * 4);
+    if (E.fly) t.pos.y += ((E.flyY || 2.2) + Math.sin(st.time * 2.5 + t.phase) * 0.4 - t.pos.y) * Math.min(1, dt * 4);
     else { const fl = W.floorAt(t.pos.x, t.pos.z, t.pos.y + 0.4); t.vy -= 20 * dt; t.pos.y += t.vy * dt; if (t.pos.y <= fl) { t.pos.y = fl; t.vy = 0; } }
     // 見た目の動き
     t.walk += dt * Math.min(8, speed) * 1.4;
-    stepSound(t, { slime: 'slime', skeleton: 'bone', mage: 'soft', boss: 'heavy', bat: 'flap' }[t.kind], E.boss ? 1.6 : 1, E.fly ? 1 : speed);
+    stepSound(t, ENEMY_STEP[t.kind] || 'soft', E.boss ? 1.6 : 1, E.fly ? 1 : speed);
     const sw = speed > 0.2 ? Math.sin(t.walk) : 0, k = t.windup > 0 ? 1 - t.windup / (E.boss ? 0.7 : 0.4) : 0;
     t.face.rotation.y = t.yaw;
     if (MG.Monsters) MG.Monsters.animate(t, { sw, k, speed, walk: t.walk, time: st.time, phase: t.phase, dt });

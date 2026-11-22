@@ -152,7 +152,7 @@
   MG.SECRETS = [
     { id: 'redox',     seq: ['oxidation', 'reduction'], kanji: '酸化還元連鎖', kana: 'レドックス・サイクル', elem: 'magnet', cost: 45,
       desc: '酸化と還元は、必ずセットで起こる。的から的へ、赤と青の稲妻が8回はね移る。', hint: '必ずセットで起こる、2つの反応' },
-    { id: 'cumulo',    seq: ['evaporation', 'discharge'], kanji: '積乱雷雲', kana: 'キュムロニンバス', elem: 'lightning', cost: 55,
+    { id: 'cumulo',    seq: ['evaporation', 'discharge'], kanji: '積乱雷雲', kana: 'キュムロニンバス', elem: 'lightning', cost: 80,
       desc: '水が蒸発して空へのぼると、やがて雷雲になる。狙った場所に雷雲を呼び、雷を落とし続ける。', hint: '水が空へのぼると、やがて雷が鳴る（2語）' },
     { id: 'supernova', seq: ['compression', 'expansion', 'combustion'], kanji: '超新星', kana: 'スーパーノヴァ', elem: 'fire', cost: 70,
       desc: '重い星が一生の最後に起こす大爆発。狙った場所に星を生み、巨大な爆発を起こす。', hint: '押し縮めて、ふくらませて、燃やす（3語）' },

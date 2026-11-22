@@ -1171,10 +1171,11 @@
       if (sp) el.innerHTML = `<kbd>F</kbd><b>${esc(sp.label)}</b>${esc(sp.hint)}`;
     },
     onFloor(fl, boss) {
-      $('dun-floor').textContent = `地下 ${fl} 階${boss ? '（守護者の階）' : ''}`;
+      const area = MG.RPG.areaOf ? MG.RPG.areaOf(fl).name : '';
+      $('dun-floor').textContent = `地下 ${fl} 階・${area}${boss ? '（守護者）' : ''}`; // 第36版: 地域の名前
       $('dun-floor').classList.toggle('boss', !!boss);
       $('dun-down').hidden = true;
-      toast(boss ? `地下 ${fl} 階: 広い部屋に守護者がいる。倒すと、下の階への穴が開く` : `地下 ${fl} 階: 下の階への穴（オレンジの光）に入ると次の階へ、青い帰還ポータルに触れると村へ帰る`, 3200);
+      toast(boss ? `地下 ${fl} 階: 広い部屋に${MG.RPG.ENEMIES[MG.RPG.bossFor(fl)].label}がいる。倒すと、下の階への穴が開く` : (fl % 5 === 1 && fl > 1) ? `地下 ${fl} 階: ${MG.RPG.areaOf(fl).name}に入った。新しい敵に気をつけよう` : `地下 ${fl} 階: 下の階への穴（オレンジの光）に入ると次の階へ、青い帰還ポータルに触れると村へ帰る`, 3200);
       saveProgress();
     },
     onDungeonDown(name) {

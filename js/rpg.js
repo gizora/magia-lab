@@ -82,13 +82,39 @@
     bat:      { label: '影コウモリ',   hp: 30,  dmg: 6,  speed: 6.0, range: 1.6, atkCd: 1.0, xp: 7,   gold: 3,  r: 0.6,  cy: 0.1, fly: true }, // cy は飛ぶ高さからの体の中心（第33版で 2.2 → 0.1）
     mage:     { label: '闇の魔導士',   hp: 50,  dmg: 10, speed: 3.2, range: 15,  atkCd: 2.2, xp: 12,  gold: 6,  r: 0.7,  cy: 1.1, ranged: true },
     boss:     { label: '石の守護者',   hp: 480, dmg: 26, speed: 2.6, range: 4.2, atkCd: 2.4, xp: 160, gold: 120, r: 2.4, cy: 2.6, boss: true },
+    // 第36版: 深い階の敵（地下 6 階から）。bolt は撃つ弾の色、spread は一度に撃つ弾の数、flyY は飛ぶ高さ、barY は HP のバーの高さ
+    spider:     { label: '大グモ',       hp: 60,  dmg: 12, speed: 5.4, range: 1.9, atkCd: 1.1, xp: 14,  gold: 7,   r: 0.9,  cy: 0.6 },
+    goblin:     { label: 'ゴブリン',     hp: 72,  dmg: 13, speed: 4.6, range: 2.0, atkCd: 1.2, xp: 14,  gold: 9,   r: 0.6,  cy: 0.85 },
+    mimic:      { label: 'ミミック',     hp: 120, dmg: 22, speed: 3.6, range: 2.0, atkCd: 1.4, xp: 30,  gold: 45,  r: 0.85, cy: 0.5, mimic: true },
+    armor:      { label: '動く鎧',       hp: 150, dmg: 18, speed: 3.2, range: 2.4, atkCd: 1.6, xp: 24,  gold: 12,  r: 0.8,  cy: 1.2 },
+    wraith:     { label: 'レイス',       hp: 75,  dmg: 15, speed: 5.0, range: 1.9, atkCd: 1.2, xp: 20,  gold: 10,  r: 0.7,  cy: 0.4, fly: true, flyY: 1.8 },
+    gargoyle:   { label: 'ガーゴイル',   hp: 95,  dmg: 16, speed: 5.5, range: 1.9, atkCd: 1.2, xp: 22,  gold: 11,  r: 0.8,  cy: 0.1, fly: true },
+    salamander: { label: 'サラマンダー', hp: 85,  dmg: 15, speed: 4.0, range: 13,  atkCd: 2.0, xp: 22,  gold: 11,  r: 0.9,  cy: 0.5, ranged: true, bolt: ['#ff7a20', '#ffd24a'], boltY: 0.1, boltEl: 'fire' },
+    ifrit:      { label: 'イフリート',   hp: 140, dmg: 21, speed: 3.8, range: 2.5, atkCd: 1.5, xp: 30,  gold: 15,  r: 0.95, cy: 1.4 },
+    // 守護者（5 階ごと）
+    minotaur:   { label: 'ミノタウロス', hp: 520, dmg: 28, speed: 3.0, range: 4.4, atkCd: 2.2, xp: 220, gold: 160, r: 1.7,  cy: 2.3, boss: true, rangedEvery: 0, barY: 5.8 },
+    lich:       { label: 'リッチ',       hp: 430, dmg: 24, speed: 2.6, range: 16,  atkCd: 2.0, xp: 260, gold: 200, r: 1.0,  cy: 1.6, boss: true, ranged: true, spread: 3, bolt: ['#4ac8ff', '#ff7a20'], boltY: 0.5, boltEl: 'void', barY: 3.8 },
+    dragon:     { label: 'ドラゴン',     hp: 640, dmg: 30, speed: 2.4, range: 5.2, atkCd: 2.4, xp: 320, gold: 260, r: 2.8,  cy: 2.6, boss: true, rangedEvery: 2, spread: 5, bolt: ['#ff6a10', '#ffd24a'], boltY: 1.3, boltEl: 'fire', barY: 7.8 },
+    iceking:    { label: '氷の王',       hp: 600, dmg: 30, speed: 2.8, range: 3.6, atkCd: 2.1, xp: 400, gold: 320, r: 1.3,  cy: 1.9, boss: true, spread: 3, bolt: ['#8ae0ff', '#ffffff'], boltY: 1.0, boltEl: 'ice', barY: 5.8 },
   };
+  // 第36版: 5 階ごとの地域。地域ごとに出る敵・守護者・ダンジョンの色が変わる（地下 25 階より深い階は、守護者が順に入れかわる）
+  R.AREAS = [
+    { id: 0, name: '地下牢', boss: 'boss', pool: [['slime', 5], ['skeleton', 4], ['bat', 3], ['mage', 3]] },
+    { id: 1, name: '古い坑道', boss: 'minotaur', pool: [['spider', 5], ['goblin', 5], ['bat', 2], ['mage', 1]] },
+    { id: 2, name: '呪われた墓所', boss: 'lich', pool: [['armor', 4], ['wraith', 4], ['gargoyle', 4], ['skeleton', 2]] },
+    { id: 3, name: '溶岩の深層', boss: 'dragon', pool: [['salamander', 5], ['ifrit', 4], ['gargoyle', 2], ['mage', 1]] },
+    { id: 4, name: '凍てつく玉座', boss: 'iceking', pool: [['armor', 3], ['wraith', 3], ['ifrit', 3], ['spider', 2], ['goblin', 2], ['salamander', 2]] },
+  ];
+  R.LAST_FLOOR = 25;
+  R.areaOf = (f) => R.AREAS[Math.min(R.AREAS.length - 1, Math.floor((Math.max(1, f) - 1) / 5))];
+  R.bossFor = (f) => (f <= R.LAST_FLOOR ? R.areaOf(f).boss : R.AREAS[(Math.floor(f / 5) - 1) % R.AREAS.length].boss);
   R.BOSS_EVERY = 5;
   R.isBossFloor = (f) => f > 0 && f % R.BOSS_EVERY === 0;
   // 深い階ほど強くなる
   R.scale = (f) => ({ hp: 1 + 0.22 * (f - 1), dmg: 1 + 0.12 * (f - 1), xp: 1 + 0.15 * (f - 1), gold: 1 + 0.2 * (f - 1) });
   // その階に出る敵の種類（重みつき）
   R.enemyPool = function (f) {
+    if (f > 5) return R.areaOf(f).pool.slice(); // 第36版: 地下 6 階からは地域ごとの敵
     const pool = [['slime', 5], ['skeleton', f >= 2 ? 4 : 2]];
     if (f >= 2) pool.push(['bat', 3]);
     if (f >= 3) pool.push(['mage', 2 + Math.min(3, f - 3)]);
@@ -187,14 +213,18 @@
     const tilePos = (r) => [ri(r.x0, r.x0 + r.w - 1), ri(r.z0, r.z0 + r.h - 1)];
     const others = rooms.filter((r) => r !== start);
     const nChest = 2 + Math.floor(rnd() * 2);
-    for (let k = 0; k < nChest; k++) { const r = others[Math.floor(rnd() * others.length)]; chests.push({ room: r.id, t: tilePos(r) }); }
+    for (let k = 0; k < nChest; k++) {
+      const r = others[Math.floor(rnd() * others.length)];
+      // 第36版: 古い坑道より深い階では、宝箱の 3 割はミミック（宝箱のふりをした敵）
+      if (floor > 5 && rnd() < 0.3) spawns.push({ type: 'mimic', room: r.id, t: tilePos(r) }); else chests.push({ room: r.id, t: tilePos(r) });
+    }
     const pool = R.enemyPool(floor);
     others.forEach((r) => {
-      if (boss && r === stairs) { spawns.push({ type: 'boss', room: r.id, t: center(r) }); return; }
-      const n = Math.min(3, Math.floor(rnd() * (r.small ? 1.6 : 2.6)) + Math.floor(floor / 6));
+      if (boss && r === stairs) { spawns.push({ type: R.bossFor(floor), room: r.id, t: center(r) }); return; } // 第36版: 地域ごとの守護者
+      const n = Math.min(3, Math.floor(rnd() * (r.small ? 1.6 : 2.6)) + (floor >= 12 && rnd() < 0.4 ? 1 : 0)); // 第36版: 深い階でも増えすぎないように（前は 6 階ごとに 1 体ずつ増えた）
       for (let k = 0; k < n; k++) spawns.push({ type: R.pick(pool, rnd), room: r.id, t: tilePos(r) });
     });
-    return { floor, seed, N, tiles, rooms, start: start.id, stairs: stairs.id, portal: portal ? portal.id : stairs.id, chests, spawns, boss, center };
+    return { area: R.areaOf(floor).id, floor, seed, N, tiles, rooms, start: start.id, stairs: stairs.id, portal: portal ? portal.id : stairs.id, chests, spawns, boss, center };
   };
   // タイル → 世界の座標（タイルの中心）
   R.tileToWorld = (x, z) => [(x + 0.5) * R.TILE - (R.GRID * R.TILE) / 2, (z + 0.5) * R.TILE - (R.GRID * R.TILE) / 2];

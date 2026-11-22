@@ -48,7 +48,7 @@
     LC(a.fog, b.fog, scene.fog.color);
     scene.fog.density = L(a.fogD, b.fogD);
     if (W.skyTextured && W.stage === 'arena' && PRESET.auroraFog) scene.fog.color.lerp(PRESET.auroraFog, k);
-    if (W.stage === 'dungeon') { scene.fog.color.setRGB(0.012, 0.01, 0.009); scene.fog.density = W.dun && W.dun.data && W.dun.data.boss ? 0.045 : 0.07; } // 第32版: 薄暗く（第33版: 守護者の階は、広い部屋の奥まで見えるよう少し薄く）
+    if (W.stage === 'dungeon') { { const fc = W.dunTheme().fog; scene.fog.color.setRGB(fc[0], fc[1], fc[2]); } scene.fog.density = W.dun && W.dun.data && W.dun.data.boss ? 0.045 : 0.07; } // 第32版: 薄暗く（第33版: 守護者の階は、広い部屋の奥まで見えるよう少し薄く）
     LC(a.hemiSky, b.hemiSky, hemi.color); LC(a.hemiGround, b.hemiGround, hemi.groundColor); hemi.intensity = L(a.hemiI, b.hemiI) * (W.stage === 'dungeon' ? 0.16 : 1);
     if (W.stage === 'dungeon') { hemi.color.setRGB(0.75, 0.62, 0.5); hemi.groundColor.setRGB(0.15, 0.1, 0.08); }
     if (sky) sky.visible = W.stage !== 'dungeon';
@@ -61,7 +61,7 @@
     if (W.skyTextured && W.stage === 'arena') moonGroup.children.forEach((c) => (c.material.opacity *= 0.35));
     LC(a.mt, b.mt, mtMat.color);
     LC(a.ground, b.ground, groundMat.color);
-    if (W.stage === 'dungeon') groundMat.color.setRGB(0.62, 0.58, 0.53); // ダンジョンの床は、昼と夜で色を変えない（敷石）
+    if (W.stage === 'dungeon') { const th = W.dunTheme(); groundMat.color.setRGB(th.floor[0], th.floor[1], th.floor[2]); } // ダンジョンの床は、昼と夜で色を変えない（敷石。第36版: 地域の色）
     outerMat.color.copy(groundMat.color);
     renderer.toneMappingExposure = L(a.exposure, b.exposure);
     const lampK = L(a.lamp, b.lamp);
@@ -1191,6 +1191,15 @@
     } else { dunStone.dark = wallMat; dunStone.pillar = wallMat; dunStone.ceil = new THREE.MeshStandardMaterial({ map: dunTex, color: 0x6a5a4c, roughness: 1, side: THREE.DoubleSide }); }
   }
   const dunStone = {};
+  // 第36版: 地域ごとのダンジョンの色（壁・土台・柱・天井・床・霧・たいまつ）
+  const DUN_THEMES = [
+    { wall: 0x9a9084, dark: 0x5c554c, pillar: 0xb0a698, ceil: 0x4e4840, floor: [0.62, 0.58, 0.53], fog: [0.012, 0.01, 0.009], torch: 0xff8a3e, flame: '#ff8a2a', flameC: 0xffa040 }, // 地下牢
+    { wall: 0x8a7056, dark: 0x4a3a2a, pillar: 0x7a6044, ceil: 0x3a2e22, floor: [0.56, 0.46, 0.36], fog: [0.014, 0.01, 0.006], torch: 0xffa04a, flame: '#ffb04a', flameC: 0xffc060 }, // 古い坑道
+    { wall: 0x7a8278, dark: 0x464c46, pillar: 0x8e968e, ceil: 0x363c36, floor: [0.5, 0.55, 0.5], fog: [0.006, 0.012, 0.01], torch: 0x7affb4, flame: '#7affb0', flameC: 0x9affc8 }, // 呪われた墓所
+    { wall: 0x6e4238, dark: 0x3a1c16, pillar: 0x7a4a3c, ceil: 0x2a1410, floor: [0.62, 0.4, 0.32], fog: [0.032, 0.008, 0.004], torch: 0xff5a20, flame: '#ff5a1a', flameC: 0xff7030 }, // 溶岩の深層
+    { wall: 0x8ea6c4, dark: 0x4a5a76, pillar: 0xb4cae2, ceil: 0x34445e, floor: [0.62, 0.7, 0.82], fog: [0.006, 0.01, 0.022], torch: 0x8ad0ff, flame: '#8ad8ff', flameC: 0xb0e8ff }, // 凍てつく玉座
+  ];
+  W.dunTheme = () => (W.dun && W.dun.theme) || DUN_THEMES[0];
   // 箱をまとめて 1 つの形にする。模様の位置は世界の座標から決める（箱の継ぎ目で模様がずれない）。tile: 模様 1 枚の大きさ（m）
   function stoneMesh(list, mat, tile) {
     const pos = [], nor = [], uv = [], idx = [];
@@ -1239,6 +1248,9 @@
         boxes.push([x, z, x1]); x = x1 + 1;
       }
     }
+    // 第36版: 地域の色
+    const theme = DUN_THEMES[Math.min(DUN_THEMES.length - 1, d.area || 0)];
+    if (dunStone.dark !== wallMat) { wallMat.color.set(theme.wall); dunStone.dark.color.set(theme.dark); dunStone.pillar.color.set(theme.pillar); dunStone.ceil.color.set(theme.ceil); }
     // 第32版: 石造りの壁。天井まで届く切り石の壁に、足もとの土台と、天井との境の石を回す
     const WALL_VIS = WALL_H + 0.7, wallBoxes = [], plinth = [], cornice = [];
     boxes.forEach(([x0, z, x1]) => {
@@ -1272,7 +1284,7 @@
     });
     if (cols.length) dunGroup.add(stoneMesh(cols, dunStone.pillar, 1.2));
     // たいまつ: 壁の鉄の金具に、斜めに差した木の柄と炎。部屋のまわりと通路にも置く
-    const torchMat = new THREE.MeshBasicMaterial({ color: 0xffa040 }), torchWood = new THREE.MeshStandardMaterial({ color: 0x3a2414, roughness: 0.9 }), iron = new THREE.MeshStandardMaterial({ color: 0x2a2a2e, roughness: 0.5, metalness: 0.7 });
+    const torchMat = new THREE.MeshBasicMaterial({ color: theme.flameC }), torchWood = new THREE.MeshStandardMaterial({ color: 0x3a2414, roughness: 0.9 }), iron = new THREE.MeshStandardMaterial({ color: 0x2a2a2e, roughness: 0.5, metalness: 0.7 });
     dunLights.torches = [];
     const torchAt = (tx, tzz, nx, nz) => {
       const [wx, wz] = R.tileToWorld(tx, tzz);
@@ -1282,7 +1294,7 @@
       const arm = new THREE.Mesh(new THREE.BoxGeometry(nx ? 0.3 : 0.05, 0.05, nz ? 0.3 : 0.05), iron); arm.position.set(wx + nx * 1.15, 2.72, wz + nz * 1.15); dunGroup.add(arm);
       const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.035, 0.7, 6), torchWood); stick.position.copy(p).add(new V3(-nx * 0.05, -0.22, -nz * 0.05)); stick.rotation.set(nz ? Math.sign(nz) * 0.35 : 0, 0, nx ? -Math.sign(nx) * 0.35 : 0); dunGroup.add(stick);
       const fl = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.3, 7), torchMat); fl.position.copy(p).add(new V3(nx * 0.06, 0.16, nz * 0.06)); dunGroup.add(fl);
-      const gl = FX.glowSprite('#ff8a2a', 1.0); gl.material = gl.material.clone(); gl.material.opacity = 0.75; gl.position.copy(p).add(new V3(nx * 0.06, 0.2, nz * 0.06)); dunGroup.add(gl);
+      const gl = FX.glowSprite(theme.flame, 1.0); gl.material = gl.material.clone(); gl.material.opacity = 0.75; gl.position.copy(p).add(new V3(nx * 0.06, 0.2, nz * 0.06)); dunGroup.add(gl);
       dunAnim.push({ torch: gl, ph: rand(0, 10) });
       dunLights.torches.push({ x: p.x + nx * 0.4, y: p.y + 0.2, z: p.z + nz * 0.4, ph: rand(0, 10) });
     };
@@ -1308,7 +1320,7 @@
       for (let i = 0; i < 6; i++) { const l = new THREE.PointLight(0xff8a3e, 0, 10, 1.8); dunLights.pool.push(l); }
       dunLights.player = new THREE.PointLight(0xffe2b8, 0.55, 9, 1.8);
     }
-    dunLights.pool.forEach((l) => dunGroup.add(l)); dunGroup.add(dunLights.player);
+    dunLights.pool.forEach((l) => { l.color.set(theme.torch); dunGroup.add(l); }); dunGroup.add(dunLights.player);
     // (x, z) のまわりで、壁からいちばん離れた床（看板を立てる場所。2.4〜3m 離す）
     const clearance = (wx, wz) => { const [tx, tz2] = R.worldToTile(wx, wz); let best = 9; for (let dz = -3; dz <= 3; dz++) for (let dx = -3; dx <= 3; dx++) if (!isFloor(tx + dx, tz2 + dz)) best = Math.min(best, Math.hypot(dx, dz)); return best; };
     const openSpot = (x, z) => {
@@ -1337,7 +1349,28 @@
     swirl.position.y = 2.2; pg.add(swirl);
     const pgl = FX.glowSprite('#2f68b8', 4); pgl.position.y = 2.2; pg.add(pgl);
     dunAnim.push({ m: swirl, spin: 1.4 }, { face: pg });
-    W.dun = { signs: [], data: d, start, stairs, portal, stairsOpen: !d.boss, stairsParts, portalGroup: pg, torches: dunLights.torches.length, pillars: cols.length / 3 };
+    // 第36版: 地域の飾り。溶岩の深層は床に光る溶岩だまり、凍てつく玉座は壁ぎわに氷の結晶
+    if (d.area === 3 || d.area === 4) {
+      const lavaM = new THREE.MeshBasicMaterial({ color: 0xff5a10, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false });
+      const iceM = new THREE.MeshStandardMaterial({ color: 0xbfefff, emissive: 0x3aa8ff, emissiveIntensity: 0.9, roughness: 0.05, transparent: true, opacity: 0.85, flatShading: true });
+      let placed = 0;
+      for (let k = 0; k < 300 && placed < 16; k++) {
+        const [x, z] = floorTiles[Math.floor(Math.random() * floorTiles.length)], [wx, wz] = R.tileToWorld(x, z);
+        if ([start, stairs, portal].some((p) => Math.hypot(p.x - wx, p.z - wz) < 4)) continue;
+        if (d.area === 3) {
+          let open = true; for (let dz = -1; dz <= 1 && open; dz++) for (let dx = -1; dx <= 1; dx++) if (!isFloor(x + dx, z + dz)) { open = false; break; }
+          if (!open) continue;
+          const pool = new THREE.Mesh(new THREE.CircleGeometry(rand(0.6, 1.3), 18), lavaM); pool.rotation.x = -Math.PI / 2; pool.position.set(wx + rand(-0.4, 0.4), 0.05, wz + rand(-0.4, 0.4)); dunGroup.add(pool);
+          const gl = FX.glowSprite('#ff6a1a', 2.6); gl.position.set(pool.position.x, 0.5, pool.position.z); dunGroup.add(gl); dunAnim.push({ torch: gl, ph: rand(0, 10) });
+        } else {
+          const nb = [[1, 0], [-1, 0], [0, 1], [0, -1]].find(([a2, b2]) => !isFloor(x + a2, z + b2)); if (!nb) continue;
+          const cg = new THREE.Group(); cg.position.set(wx + nb[0] * 0.7, 0, wz + nb[1] * 0.7); dunGroup.add(cg);
+          for (let j = 0; j < 5; j++) { const c = new THREE.Mesh(new THREE.OctahedronGeometry(rand(0.15, 0.3), 0), iceM); c.scale.y = rand(2.2, 4); c.position.set(rand(-0.35, 0.35), rand(0.3, 0.7), rand(-0.35, 0.35)); c.rotation.set(rand(-0.4, 0.4), rand(0, 6), rand(-0.4, 0.4)); cg.add(c); }
+        }
+        placed++;
+      }
+    }
+    W.dun = { signs: [], data: d, start, stairs, portal, stairsOpen: !d.boss, stairsParts, portalGroup: pg, torches: dunLights.torches.length, pillars: cols.length / 3, area: d.area || 0, theme };
     W.setStairsOpen(!d.boss);
     if (W.stage === 'dungeon') { solids = stageSolids.dungeon; applyTime(timeK); } // 階ごとに霧の濃さが変わる（守護者の階）
     return W.dun;
