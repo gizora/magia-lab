@@ -79,7 +79,7 @@
   R.ENEMIES = {
     slime:    { label: 'スライム',     hp: 45,  dmg: 8,  speed: 3.0, range: 1.7, atkCd: 1.6, xp: 6,   gold: 3,  r: 0.85, cy: 0.6 },
     skeleton: { label: '骸骨兵',       hp: 70,  dmg: 12, speed: 4.3, range: 2.1, atkCd: 1.3, xp: 10,  gold: 5,  r: 0.7,  cy: 1.1 },
-    bat:      { label: '影コウモリ',   hp: 30,  dmg: 6,  speed: 6.0, range: 1.6, atkCd: 1.0, xp: 7,   gold: 3,  r: 0.6,  cy: 2.2, fly: true },
+    bat:      { label: '影コウモリ',   hp: 30,  dmg: 6,  speed: 6.0, range: 1.6, atkCd: 1.0, xp: 7,   gold: 3,  r: 0.6,  cy: 0.1, fly: true }, // cy は飛ぶ高さからの体の中心（第33版で 2.2 → 0.1）
     mage:     { label: '闇の魔導士',   hp: 50,  dmg: 10, speed: 3.2, range: 15,  atkCd: 2.2, xp: 12,  gold: 6,  r: 0.7,  cy: 1.1, ranged: true },
     boss:     { label: '石の守護者',   hp: 480, dmg: 26, speed: 2.6, range: 4.2, atkCd: 2.4, xp: 160, gold: 120, r: 2.4, cy: 2.6, boss: true },
   };
@@ -170,6 +170,20 @@
     // 宝箱と敵
     const chests = [], spawns = [];
     const boss = R.isBossFloor(floor);
+    if (boss) {
+      // 第33版: 守護者の部屋を広くする。1 マスずつ四方へ広げ、ほかの大事な部屋（入口・ポータル）に 2 マスより近づいたら止める
+      const keep = [start, portal].filter((r) => r && r !== stairs);
+      const hits = (x0, z0, x1, z1) => keep.some((r) => x0 <= r.x0 + r.w + 1 && x1 >= r.x0 - 2 && z0 <= r.z0 + r.h + 1 && z1 >= r.z0 - 2);
+      let x0 = stairs.x0, z0 = stairs.z0, x1 = stairs.x0 + stairs.w - 1, z1 = stairs.z0 + stairs.h - 1;
+      for (let k = 0; k < 20; k++) {
+        if (x1 - x0 + 1 < 18 && x0 > 1 && !hits(x0 - 1, z0, x0 - 1, z1)) x0--;
+        if (x1 - x0 + 1 < 18 && x1 < N - 2 && !hits(x1 + 1, z0, x1 + 1, z1)) x1++;
+        if (z1 - z0 + 1 < 18 && z0 > 1 && !hits(x0, z0 - 1, x1, z0 - 1)) z0--;
+        if (z1 - z0 + 1 < 18 && z1 < N - 2 && !hits(x0, z1 + 1, x1, z1 + 1)) z1++;
+      }
+      Object.assign(stairs, { x0, z0, w: x1 - x0 + 1, h: z1 - z0 + 1, small: false, bossRoom: true });
+      for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) carve(x, z);
+    }
     const tilePos = (r) => [ri(r.x0, r.x0 + r.w - 1), ri(r.z0, r.z0 + r.h - 1)];
     const others = rooms.filter((r) => r !== start);
     const nChest = 2 + Math.floor(rnd() * 2);

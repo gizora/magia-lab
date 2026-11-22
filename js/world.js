@@ -48,7 +48,7 @@
     LC(a.fog, b.fog, scene.fog.color);
     scene.fog.density = L(a.fogD, b.fogD);
     if (W.skyTextured && W.stage === 'arena' && PRESET.auroraFog) scene.fog.color.lerp(PRESET.auroraFog, k);
-    if (W.stage === 'dungeon') { scene.fog.color.setRGB(0.012, 0.01, 0.009); scene.fog.density = 0.07; } // 第32版: 薄暗く
+    if (W.stage === 'dungeon') { scene.fog.color.setRGB(0.012, 0.01, 0.009); scene.fog.density = W.dun && W.dun.data && W.dun.data.boss ? 0.045 : 0.07; } // 第32版: 薄暗く（第33版: 守護者の階は、広い部屋の奥まで見えるよう少し薄く）
     LC(a.hemiSky, b.hemiSky, hemi.color); LC(a.hemiGround, b.hemiGround, hemi.groundColor); hemi.intensity = L(a.hemiI, b.hemiI) * (W.stage === 'dungeon' ? 0.16 : 1);
     if (W.stage === 'dungeon') { hemi.color.setRGB(0.75, 0.62, 0.5); hemi.groundColor.setRGB(0.15, 0.1, 0.08); }
     if (sky) sky.visible = W.stage !== 'dungeon';
@@ -758,10 +758,11 @@
     town: [
       { id: 'temple', label: '神殿', x: 0, z: -25, r: 4.5, hint: '神殿に入る（レベルと能力を見る）' },
       { id: 'shop', label: '杖の店', x: 23.5, z: -4, r: 4.5, hint: '杖の店に入る' },
-      { id: 'dungeon', label: 'ダンジョン', x: -24, z: -4, r: 4.5, hint: 'ダンジョンに挑む' },
-      { id: 'practice', label: '練習場', x: 0, z: 30, r: 4.5, hint: '練習場へ行く' },
+      // 第33版: ダンジョンと練習場は、門のポータルに触れると入る（touch: 体がこの範囲に入ったら移動する）
+      { id: 'dungeon', label: 'ダンジョン', x: -24, z: -4, r: 4.5, hint: 'ダンジョンに挑む', touch: { x: -35.6, z: -4, hx: 1.1, hz: 2.2 } },
+      { id: 'practice', label: '練習場', x: 0, z: 30, r: 4.5, hint: '練習場へ行く', touch: { x: 0, z: 37, hx: 2.4, hz: 0.7 } },
     ],
-    practice: [{ id: 'town', label: '村', x: 0, z: 46, r: 4.5, hint: '村へ戻る' }],
+    practice: [{ id: 'town', label: '村', x: 0, z: 46, r: 4.5, hint: '村へ戻る', touch: { x: 0, z: 49.5, hx: 2.6, hz: 0.8 } }],
   };
   W.TOWN_SPAWN = [0, 12, 0];
   W.TEMPLE_SPAWN = [0, -20, Math.PI];
@@ -1248,8 +1249,13 @@
         if (!isFloor(tx, tzz) && isFloor(tx + nx, tzz + nz)) torchAt(tx, tzz, nx, nz);
       });
     });
+    // 第33版: 守護者の広い部屋は、壁ぞいに 3 マスおきにたいまつを並べる（奥まで見えるように）
+    d.rooms.filter((r) => r.bossRoom).forEach((r) => {
+      for (let x = r.x0 + 1; x < r.x0 + r.w - 1; x += 3) { if (!isFloor(x, r.z0 - 1)) torchAt(x, r.z0 - 1, 0, 1); if (!isFloor(x, r.z0 + r.h)) torchAt(x, r.z0 + r.h, 0, -1); }
+      for (let z = r.z0 + 1; z < r.z0 + r.h - 1; z += 3) { if (!isFloor(r.x0 - 1, z)) torchAt(r.x0 - 1, z, 1, 0); if (!isFloor(r.x0 + r.w, z)) torchAt(r.x0 + r.w, z, -1, 0); }
+    });
     // 通路: 床のマスの横の壁に、間をあけて置く
-    for (let k = 0; k < 400 && dunLights.torches.length < 60; k++) {
+    for (let k = 0; k < 400 && dunLights.torches.length < 80; k++) {
       const [x, z] = floorTiles[Math.floor(Math.random() * floorTiles.length)];
       const opts = [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([a2, b2]) => !isFloor(x + a2, z + b2));
       if (opts.length < 2) continue; // 通路（両側が壁）だけ
@@ -1278,10 +1284,9 @@
     hole.rotation.x = -Math.PI / 2; hole.position.set(stairs.x, 0.07, stairs.z); dunGroup.add(hole);
     const sbeam = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 1.6, 6, 24, 1, true), new THREE.MeshBasicMaterial({ color: 0xffb84a, transparent: true, opacity: 0.18, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
     sbeam.position.set(stairs.x, 3, stairs.z); dunGroup.add(sbeam);
-    const slab = makeSignboard('下の階へ', { sub: '↓ DOWN', w: 2.2, h: 0.9, posts: 0.9, bg: '#3a2410', bg2: '#22140a', border: '#ffb84a' });
-    const sp1 = openSpot(stairs.x, stairs.z); slab.position.set(sp1.x, 0, sp1.z); slab.rotation.y = Math.atan2(stairs.x - sp1.x, stairs.z - sp1.z); dunGroup.add(slab);
+    // 第33版: 「下の階へ」「帰還ポータル」の看板はなくした（穴とポータルに触れると使える）
     dunAnim.push({ m: st1, spin: -0.6 });
-    const stairsParts = [st1, hole, sbeam, slab];
+    const stairsParts = [st1, hole, sbeam];
     // 帰還ポータル: 立った青い渦
     const pg = new THREE.Group(); pg.position.set(portal.x, 0, portal.z); dunGroup.add(pg);
     const ring = new THREE.Mesh(new THREE.TorusGeometry(1.8, 0.16, 8, 40), new THREE.MeshStandardMaterial({ color: 0x3a5a7a, emissive: 0x2f78d8, emissiveIntensity: 0.7 }));
@@ -1289,12 +1294,10 @@
     const swirl = new THREE.Mesh(new THREE.CircleGeometry(1.7, 40), new THREE.MeshBasicMaterial({ map: FX.circleTex, color: 0x2f78d8, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
     swirl.position.y = 2.2; pg.add(swirl);
     const pgl = FX.glowSprite('#2f68b8', 4); pgl.position.y = 2.2; pg.add(pgl);
-    const plab = makeSignboard('帰還ポータル', { sub: '村へ帰る', w: 2.6, h: 0.95, posts: 0.9, bg: '#102a4a', border: '#7fd8ff' });
-    const sp2 = openSpot(portal.x, portal.z); plab.position.set(sp2.x, 0, sp2.z); plab.rotation.y = Math.atan2(portal.x - sp2.x, portal.z - sp2.z); dunGroup.add(plab);
     dunAnim.push({ m: swirl, spin: 1.4 }, { face: pg });
-    W.dun = { signs: [sp1, sp2], data: d, start, stairs, portal, stairsOpen: !d.boss, stairsParts, portalGroup: pg, torches: dunLights.torches.length, pillars: cols.length / 3 };
+    W.dun = { signs: [], data: d, start, stairs, portal, stairsOpen: !d.boss, stairsParts, portalGroup: pg, torches: dunLights.torches.length, pillars: cols.length / 3 };
     W.setStairsOpen(!d.boss);
-    if (W.stage === 'dungeon') solids = stageSolids.dungeon;
+    if (W.stage === 'dungeon') { solids = stageSolids.dungeon; applyTime(timeK); } // 階ごとに霧の濃さが変わる（守護者の階）
     return W.dun;
   };
   // ボスの階では、ボスを倒すまで階段が閉じている

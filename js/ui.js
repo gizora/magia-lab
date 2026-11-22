@@ -1162,8 +1162,8 @@
       document.body.classList.remove('stage-town', 'stage-practice', 'stage-dungeon', 'stage-arena');
       document.body.classList.add('stage-' + name);
       $('spot-prompt').hidden = true;
-      if (name === 'town') toast('村: 神殿・杖の店・ダンジョンの門・練習場の門に近づいて F キー', 3200);
-      else if (name === 'practice') toast('練習場（門に近づいて F キーで村へ戻る）', 2600);
+      if (name === 'town') toast('村: 神殿・杖の店は近づいて F キー。ダンジョンと練習場は、門の渦（ポータル）に触れると入れる', 3600);
+      else if (name === 'practice') toast('練習場（北の門の渦に触れると村へ戻る）', 2600);
     },
     onSpot(sp) {
       const el = $('spot-prompt');
@@ -1174,7 +1174,7 @@
       $('dun-floor').textContent = `地下 ${fl} 階${boss ? '（守護者の階）' : ''}`;
       $('dun-floor').classList.toggle('boss', !!boss);
       $('dun-down').hidden = true;
-      toast(boss ? `地下 ${fl} 階: 守護者を倒すと、下の階への道が開く` : `地下 ${fl} 階: 下の階への穴と、村へ帰る帰還ポータルを探そう`, 3200);
+      toast(boss ? `地下 ${fl} 階: 広い部屋に守護者がいる。倒すと、下の階への穴が開く` : `地下 ${fl} 階: 下の階への穴（オレンジの光）に入ると次の階へ、青い帰還ポータルに触れると村へ帰る`, 3200);
       saveProgress();
     },
     onDungeonDown(name) {

@@ -3870,7 +3870,7 @@
     updatePlayer(dt);
     updateTargets(dt);
     updateDungeon(dt);
-    updateSpot();
+    updateSpot(dt);
     updateProjs(dt);
     updateFields(dt);
     updateBarriers(dt);
@@ -4070,20 +4070,34 @@
   // 近くにある「入れる場所」（村の神殿・店・門、練習場の門、ダンジョンの階段・ポータル）
   function spotsHere() {
     if (W.stage === 'dungeon' && D.on && W.dun) {
-      const out = [{ id: 'portal', label: '帰還ポータル', x: W.dun.portal.x, z: W.dun.portal.z, r: 2.8, hint: '村へ帰る（拾った物を持ち帰る）' }];
-      if (W.dun.stairsOpen) out.push({ id: 'stairs', label: '下の階', x: W.dun.stairs.x, z: W.dun.stairs.z, r: 2.6, hint: `下の階へ進む（地下 ${D.floor + 1} 階）` });
+      // 第33版: 帰還ポータルは輪の中、下の階への穴は穴の上に入ると使える
+      const out = [{ id: 'portal', label: '帰還ポータル', x: W.dun.portal.x, z: W.dun.portal.z, r: 2.8, hint: '村へ帰る（拾った物を持ち帰る）', touch: { x: W.dun.portal.x, z: W.dun.portal.z, r: 1.4 } }];
+      if (W.dun.stairsOpen) out.push({ id: 'stairs', label: '下の階', x: W.dun.stairs.x, z: W.dun.stairs.z, r: 2.6, hint: `下の階へ進む（地下 ${D.floor + 1} 階）`, touch: { x: W.dun.stairs.x, z: W.dun.stairs.z, r: 1.4 } });
       return out;
     }
     return (W.SPOTS && W.SPOTS[W.stage]) || [];
   }
-  function updateSpot() {
+  // 体が「触れると入る」範囲に入っているか
+  const inTouch = (s) => { const t = s.touch, p = player.pos; if (!t) return false; if (t.r) return Math.hypot(p.x - t.x, p.z - t.z) < t.r && p.y < 3; return Math.abs(p.x - t.x) < t.hx && Math.abs(p.z - t.z) < t.hz && p.y < 4; };
+  let touchCd = 0; // 移動した直後は、少しのあいだ触れても移動しない（行ったり来たりしないように）
+  function updateSpot(dt) {
+    touchCd = Math.max(0, touchCd - (dt || 0));
     let best = null, bd = 1e9;
-    for (const s of spotsHere()) { const d = Math.hypot(player.pos.x - s.x, player.pos.z - s.z); if (d < s.r && d < bd) { bd = d; best = s; } }
+    for (const s of spotsHere()) {
+      if (s.touch) { if (touchCd <= 0 && !M.on && !st.paused && inTouch(s)) { touchCd = 1.2; enterSpot(s); return; } continue; } // ポータルや穴は、触れたらすぐ入る
+      const d = Math.hypot(player.pos.x - s.x, player.pos.z - s.z); if (d < s.r && d < bd) { bd = d; best = s; }
+    }
     if ((best && best.id) !== (st.spot && st.spot.id)) { st.spot = best; if (MG.UI && MG.UI.onSpot) MG.UI.onSpot(best); }
   }
-  // F キー: 近くの場所に入る
-  G.interact = function () {
-    const s = st.spot; if (!s || !st.running || st.paused || M.on) return false;
+  // F キー: 近くの場所（神殿・杖の店）に入る。all（動作確認用）なら、触れて入る場所も近ければ使う
+  G.interact = function (all) {
+    let s = st.spot;
+    if (all && !s) { let bd = 1e9; for (const q of spotsHere()) { const d = Math.hypot(player.pos.x - q.x, player.pos.z - q.z); if (d < q.r && d < bd) { bd = d; s = q; } } }
+    if (!s || !st.running || st.paused || M.on) return false;
+    touchCd = 1.2;
+    return enterSpot(s);
+  };
+  function enterSpot(s) {
     AU.click();
     if (s.id === 'temple' || s.id === 'shop') { if (MG.UI) MG.UI.open(s.id); return true; }
     if (s.id === 'practice') return G.goStage('practice', W.PRACTICE_SPAWN);
@@ -4770,7 +4784,8 @@
     },
     faceEnemies(x, z) { targets.filter((t) => t.isEnemy && t.alive).forEach((t) => { t.yaw = Math.atan2(x - t.pos.x, z - t.pos.z); t.face.rotation.y = t.yaw; }); },
     spot: () => (st.spot ? st.spot.id : null),
-    interact: () => G.interact(),
+    interact: () => G.interact(true),
+    touchAt: (id) => { const s = spotsHere().find((q) => q.id === id); if (!s || !s.touch) return null; return s.touch.r ? [s.touch.x, s.touch.z] : [s.touch.x, s.touch.z]; }, // 動作確認用: 触れて入る場所の中心
     nextFloor: () => nextFloor(D.floor + 1),
     setInvul(v) { D.invul = v; },
     dilations: () => dilations.filter((d) => d.alive).map((d) => ({ owner: d.owner, x: d.c.x, z: d.c.z, R: d.R })),
