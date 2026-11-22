@@ -141,6 +141,44 @@
       return im;
     });
   };
+  // ---- 建物（第34版。背景ガチャ）: 色ごとの形を、頂点の色を使って 1 つの形にまとめる（描く回数を減らす）。
+  // 窓（glass）は winMat（夜に明かりがともる材質）、明かり（lit）は光る材質で別に作る。戻り値は Group（足もとが y=0、中心が原点、正面は +z）
+  const bldgGeo = {};
+  A.bldgInfo = (name) => (D && D.bldg && D.bldg[name]) || null;
+  A.building = function (name, winMat) {
+    const B = A.bldgInfo(name); if (!B) return null;
+    if (!bldgGeo[name]) {
+      const parts = { solid: { pos: [], col: [], nor: [], idx: [], hasNor: true }, glass: { pos: [], col: [], nor: [], idx: [], hasNor: true }, lit: { pos: [], col: [], nor: [], idx: [], hasNor: true } };
+      B.groups.forEach((g) => {
+        const P = parts[g.k === 'glass' ? 'glass' : g.k === 'lit' ? 'lit' : 'solid'], base = P.pos.length / 3;
+        const q = new Uint16Array(b64(g.pos)), nr = g.nor ? new Int8Array(b64(g.nor)) : null;
+        const c = g.c;
+        for (let i = 0; i < q.length; i++) { const k = i % 3; P.pos.push(g.min[k] + (q[i] / 65535) * (g.max[k] - g.min[k])); P.nor.push(nr ? nr[i] / 127 : 0); }
+        for (let i = 0; i < g.n; i++) P.col.push(c[0], c[1], c[2]);
+        if (!nr) P.hasNor = false;
+        const id = g.idx32 ? new Uint32Array(b64(g.idx)) : new Uint16Array(b64(g.idx));
+        for (let i = 0; i < id.length; i++) P.idx.push(base + id[i]);
+      });
+      bldgGeo[name] = {};
+      Object.entries(parts).forEach(([k, P]) => {
+        if (!P.idx.length) return;
+        // 頂点の向き（法線）は、粗くまとめた形にはないので、三角形ごとに面の向きを使う（角ばった見た目）
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(P.pos, 3));
+        geo.setAttribute('color', new THREE.Float32BufferAttribute(P.col, 3));
+        geo.setIndex(P.idx);
+        const flat = geo.toNonIndexed(); geo.dispose(); flat.computeVertexNormals(); flat.computeBoundingBox(); flat.computeBoundingSphere();
+        bldgGeo[name][k] = flat;
+      });
+    }
+    const G = bldgGeo[name], grp = new THREE.Group();
+    const mats = A._bldgMats || (A._bldgMats = { solid: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.88, metalness: 0.02, side: THREE.DoubleSide }), lit: new THREE.MeshStandardMaterial({ vertexColors: true, emissive: 0xffa040, emissiveIntensity: 1.2, roughness: 0.5 }) });
+    if (G.solid) grp.add(new THREE.Mesh(G.solid, mats.solid));
+    if (G.glass) grp.add(new THREE.Mesh(G.glass, winMat || mats.solid));
+    if (G.lit) grp.add(new THREE.Mesh(G.lit, mats.lit));
+    grp.userData.size = B.size; grp.userData.tris = B.tris; grp.userData.asset = name;
+    return grp;
+  };
   // 岩の形を 1 つだけ取り出す（壊せる岩用。けずるので形は毎回複製する）。中心を原点に、半径 r ほどの大きさにする
   A.rockGeometry = function (name, r, stretch) {
     const mdl = A.model(name); if (!mdl) return null;

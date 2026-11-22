@@ -67,6 +67,7 @@
     const lampK = L(a.lamp, b.lamp);
     lamps.forEach((l) => { l.glow.material.opacity = lampK; });
     if (typeof townWinMats !== 'undefined') townWinMats.forEach((m) => { m.emissiveIntensity = 0.12 + 0.9 * lampK; });
+    if (castleMat) { castleMat.color.setScalar(0.5); castleMat.emissive.copy(scene.fog.color).multiplyScalar(0.62); }
     if (W.stage === 'dungeon') { dirLight.intensity *= 0.04; amb.intensity = 0.14; amb.color.setRGB(0.32, 0.27, 0.24); }
     circleMat.opacity = L(a.circle, b.circle);
   }
@@ -798,6 +799,7 @@
     return g;
   }
   let townWinMats = []; // 夜に明かりがともる窓（applyTime で明るさを変える）
+  let castleMat = null; // 遠くの城（第34版）
   let signStage = 'practice'; // 今作っている看板が、どのステージのものか（動作確認用に数える）
   // ======================================================================
   //  村（第28版）: 中世ヨーロッパ風。草地と土の小道、石畳の広場と井戸、木組みの家、礼拝堂（神殿）、
@@ -866,7 +868,7 @@
     if (S) {
       // 広場のふち（道のあいだ）にツツジ、礼拝堂の前と練習場の門の左右・杖の店の前にツバキ、柵ぞいにツツジ
       for (let k = 0; k < 8; k++) { const a = ((k + 0.5) / 8) * Math.PI * 2; bush.tree3.push({ x: Math.cos(a) * 10.9, z: -4 + Math.sin(a) * 10.9, s: 1.15 + rr() * 0.3, ry: rr() * 6.28, tint: leafTint() }); }
-      [[-4.6, -26.2], [-6.4, -26.4], [6.4, -26.4], [-5, 35.6], [5, 35.6], [27.2, -9.6], [27.2, 2.2]].forEach(([x, z]) => { bush.tree4.push({ x, z, s: 0.85 + rr() * 0.25, ry: rr() * 6.28, tint: leafTint() }); addSolid(S, x, z, 0.6, 0.6, 2.4); });
+      [[-4.6, -26.2], [-6.4, -26.4], [6.4, -26.4], [-5, 35.6], [5, 35.6]].concat(W.townBldg ? [[24.2, -10.6], [24.2, 4.6]] : [[27.2, -9.6], [27.2, 2.2]]).forEach(([x, z]) => { bush.tree4.push({ x, z, s: 0.85 + rr() * 0.25, ry: rr() * 6.28, tint: leafTint() }); addSolid(S, x, z, 0.6, 0.6, 2.4); });
       [-9, -14, -19, -25, 9, 14, 25].forEach((x) => bush.tree3.push({ x, z: 35.8, s: 1 + rr() * 0.4, ry: rr() * 6.28, tint: leafTint() }));
       bush.tree3.forEach((b) => addSolid(S, b.x, b.z, 0.55, 0.55, 1.2));
     }
@@ -899,6 +901,9 @@
     groundTex.town = { inner: gIn, outer: gOut };
     const AS = MG.Assets, hasTex = !!(AS && AS.texInfo('grass'));
     if (hasTex) groundTex.town = { inner: AS.tex('grass', { rx: 5 }), outer: AS.tex('grass', { rx: 5 / CH_SIZE }) };
+    // 第34版: 背景ガチャの建物（教会・洋館・家・城）があれば、それで村を組む
+    const useB = !!(AS && AS.bldgInfo && ['church', 'shop', 'house1', 'house2', 'house3'].every((k) => AS.bldgInfo(k)));
+    W.townBldg = useB; W.townBuildings = [];
     const M = (o) => new THREE.MeshStandardMaterial(o);
     const box = (w, h, d, m, x, y, z, parent) => { const geo = new THREE.BoxGeometry(w, h, d); if (m.userData.tile) tileBox(geo, w, h, d, m.userData.tile[0], m.userData.tile[1]); const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); (parent || g).add(o); return o; };
     const cyl = (r0, r1, h, m, x, y, z, seg, parent) => { const geo = new THREE.CylinderGeometry(r0, r1, h, seg || 12); if (m.userData.tile) tileCyl(geo, (r0 + r1) / 2, h, m.userData.tile[0], m.userData.tile[1]); const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); (parent || g).add(o); return o; };
@@ -934,7 +939,7 @@
       m.position.set((x0 + x1) / 2, 0.025, (z0 + z1) / 2); g.add(m);
     };
     path(0, -27, 0, -9, 5); path(0, 1, 0, 37, 5); path(5, -4, 27, -4, 5); path(-5, -4, -29, -4, 5);
-    path(0, 37, 0, 46, 4); path(12, 10, 30, 28, 3); path(-12, 10, -28, 26, 3);
+    path(0, 37, 0, 46, 4); if (!useB) { path(12, 10, 30, 28, 3); path(-12, 10, -28, 26, 3); }
     const cob = FX.canvasTex(256, 256, (c, w) => {
       c.fillStyle = '#6a6460'; c.fillRect(0, 0, w, w);
       for (let i = 0; i < 90; i++) { const v = rand(120, 175) | 0; c.fillStyle = `rgb(${v},${(v * 0.96) | 0},${(v * 0.9) | 0})`; c.beginPath(); c.ellipse(rand(0, w), rand(0, w), rand(9, 16), rand(7, 12), rand(0, 3), 0, Math.PI * 2); c.fill(); c.strokeStyle = 'rgba(40,36,32,0.6)'; c.lineWidth = 2; c.stroke(); }
@@ -977,6 +982,7 @@
       addSolid(S, x, z, (w / 2) * c + (d / 2) * s2 + 0.15, (w / 2) * s2 + (d / 2) * c + 0.15, 0.6 + h);
     };
     const faceTo = (x, z, tx, tz) => Math.atan2(tx - x, tz - z);
+    if (!useB) {
     [[-14, -14, 6, 5, 2], [14, -16, 7, 5, 2], [-17, 8, 6, 5, 1], [16, 9, 6, 5, 2], [-22, -20, 5, 5, 1], [22, -22, 6, 5, 1], [-11, 20, 6, 5, 1], [11, 22, 5, 5, 2], [-27, 12, 5, 4.5, 1], [26, 14, 5, 4.5, 1], [-9, -26, 5, 4.5, 2], [9, -27, 5, 4.5, 1]].forEach(([x, z, w, d, fl]) => {
       // 道や広場のほうを向く
       const tx = Math.abs(x) > Math.abs(z) ? 0 : x, tz = Math.abs(x) > Math.abs(z) ? z : -4;
@@ -996,8 +1002,33 @@
     const arch = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 0.16, 16, 1, false, 0, Math.PI), woodD); arch.rotation.x = Math.PI / 2; arch.rotation.z = Math.PI / 2; arch.position.set(0, 3, tz + 10.76); g.add(arch);
     [-3, 0, 3].forEach((zz) => [-1, 1].forEach((sd) => box(0.1, 2.4, 1, glass, sd * 5.05, 3.8, tz + zz)));
     const aglow = FX.glowSprite('#ffe9a0', 4); aglow.position.set(0, 3, tz + 11.2); g.add(aglow);
+    } else {
+      // 家 6 軒: 南北の道の両側に、道へ正面を向けて置く（背景ガチャの家 3 種類を 2 回ずつ）
+      const winB = M({ color: 0x2a2018, emissive: 0xffb860, emissiveIntensity: 1, roughness: 0.25, metalness: 0.1 }); townWinMats.push(winB);
+      const putB = (name, x, z, ry, solidH) => {
+        const b = AS.building(name, winB); if (!b) return null;
+        b.position.set(x, 0, z); b.rotation.y = ry; g.add(b);
+        const sz = b.userData.size, rot = Math.abs(Math.sin(ry)) > 0.5;
+        addSolid(S, x, z, (rot ? sz[2] : sz[0]) / 2, (rot ? sz[0] : sz[2]) / 2, solidH || sz[1]);
+        W.townBuildings.push({ name, x, z, ry, size: sz, tris: b.userData.tris });
+        return b;
+      };
+      [['house2', -18, -17, Math.PI / 2], ['house3', 18, -17, -Math.PI / 2], ['house1', -17, 14, Math.PI / 2], ['house2', 17, 14, -Math.PI / 2], ['house3', -16, 29, Math.PI / 2], ['house1', 16, 29, -Math.PI / 2]].forEach(([n, x, z, ry]) => putB(n, x, z, ry));
+      // 神殿: 教会（正面を広場へ。入口は今までの神殿の場所の前）
+      const ch = AS.bldgInfo('church').size;
+      putB('church', 0, -27 - ch[2] / 2, 0);
+      const aglow = FX.glowSprite('#ffe9a0', 5); aglow.position.set(0, 3, -26.6); g.add(aglow);
+      // 遠くに見える城（北西の森の向こう。霧の色を混ぜて、遠くにかすんで見えるようにする）
+      if (AS.bldgInfo('castle')) {
+        const cs = AS.building('castle', winB);
+        cs.position.set(-118, 0, -118); cs.rotation.y = Math.PI / 4; g.add(cs);
+        castleMat = cs.children[0].material.clone(); castleMat.fog = false; cs.children[0].material = castleMat;
+        W.townBuildings.push({ name: 'castle', x: -118, z: -118, size: AS.bldgInfo('castle').size, tris: cs.userData.tris });
+      }
+    }
     place(Object.assign(makeSignboard('神殿', Object.assign({ sub: '祈りと蘇りの場', w: 2.8, h: 1.1, posts: 1.1 }, WOOD_SIGN))), 4.2, 0, -24.5, -0.25);
     // ---- 杖の店（東）: 木組みの 2 階建て。大きなショーウィンドウと、吊り看板 ----
+    if (!useB) {
     const sx = 31, sz = -4;
     const shop = new THREE.Group(); place(shop, sx, 0, sz, -Math.PI / 2);
     box(9.6, 0.6, 8.6, stoneD, 0, 0.3, 0, shop);
@@ -1012,10 +1043,19 @@
     box(0.12, 0.12, 1.6, woodD, 3.2, 4.6, 4.8, shop);
     const hang = makeSignboard('杖の店', Object.assign({ sub: 'WAND SHOP', w: 2.2, h: 0.9 }, WOOD_SIGN)); hang.position.set(3.2, 3.6, 5.5); hang.rotation.y = Math.PI / 2; shop.add(hang);
     addSolid(S, sx, sz, 4.3, 4.8, 6.8);
+    } else {
+      const sh = AS.bldgInfo('shop').size;
+      const winS = M({ color: 0x2a1a10, emissive: 0xffb860, emissiveIntensity: 1, roughness: 0.2 }); townWinMats.push(winS);
+      const shopB = AS.building('shop', winS);
+      shopB.position.set(26 + sh[2] / 2, 0, -4); shopB.rotation.y = -Math.PI / 2; g.add(shopB);
+      addSolid(S, 26 + sh[2] / 2, -4, sh[2] / 2, sh[0] / 2, sh[1]);
+      W.townBuildings.push({ name: 'shop', x: 26 + sh[2] / 2, z: -4, size: sh, tris: shopB.userData.tris });
+    }
     place(makeSignboard('杖の店', Object.assign({ sub: '杖・回復薬', w: 2.2, h: 0.9, posts: 1 }, WOOD_SIGN)), 24.5, 0, 0.6, -Math.PI / 2 + 0.5);
     // たる・木箱
     const barrel = (x, z) => { cyl(0.42, 0.42, 1, wood, x, 0.5, z, 10); cyl(0.44, 0.44, 0.08, woodD, x, 0.25, z, 10); cyl(0.44, 0.44, 0.08, woodD, x, 0.75, z, 10); addSolid(S, x, z, 0.42, 0.42, 1); };
-    barrel(25.5, -9); barrel(26.4, -8.6); barrel(-6.5, 3.5); box(1, 1, 1, woodMat, 26, 0.5, 1.2); addSolid(S, 26, 1.2, 0.5, 0.5, 1);
+    if (!useB) { barrel(25.5, -9); barrel(26.4, -8.6); box(1, 1, 1, woodMat, 26, 0.5, 1.2); addSolid(S, 26, 1.2, 0.5, 0.5, 1); } else { barrel(23.6, -12.5); barrel(23.2, -13.6); }
+    barrel(-6.5, 3.5);
     // ---- ダンジョンの入口（西）: 岩山にあいた洞窟の口。木の枠と、奥に紫の渦 ----
     const rockM = M({ color: 0x4a463e, roughness: 1, flatShading: true });
     const rockAt = (x, z, r, sy) => { const rk = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 1), rockM); const pa = rk.geometry.attributes.position; for (let i = 0; i < pa.count; i++) pa.setXYZ(i, pa.getX(i) * rand(0.85, 1.15), pa.getY(i) * rand(0.85, 1.15), pa.getZ(i) * rand(0.85, 1.15)); rk.geometry.computeVertexNormals(); rk.position.set(x, r * 0.35, z); rk.scale.y = sy || 1; g.add(rk); return rk; };
@@ -1063,7 +1103,7 @@
     };
     field(-30, 25, 12, 9); field(30, 26, 12, 9); field(-34, -30, 10, 8);
     const hay = M({ color: 0xd8b860, roughness: 1 });
-    [[-21, 30], [21, 31], [36, 18]].forEach(([x, z]) => { const hb = cyl(0.9, 0.9, 1.4, hay, x, 0.9, z, 14); hb.rotation.z = Math.PI / 2; addSolid(S, x, z, 0.9, 0.8, 1.8); });
+    (useB ? [[-27, 31.5], [27, 33], [36, 18]] : [[-21, 30], [21, 31], [36, 18]]).forEach(([x, z]) => { const hb = cyl(0.9, 0.9, 1.4, hay, x, 0.9, z, 14); hb.rotation.z = Math.PI / 2; addSolid(S, x, z, 0.9, 0.8, 1.8); });
     // ---- 風車（東の丘） ----
     const mill = new THREE.Group(); place(mill, 40, 0, 32, -0.6);
     const tgeo = new THREE.CylinderGeometry(2, 3, 11, hasTex ? 16 : 10); if (hasTex) tileCyl(tgeo, 2.5, 11, 1.6, 1.6);
@@ -1079,7 +1119,9 @@
     const oak = (x, z, s) => { cyl(0.22 * s, 0.32 * s, 2.6 * s, bark, x, 1.3 * s, z, 6); [[0, 3.6, 0, 1.9], [1, 3.2, 0.5, 1.4], [-0.9, 3.3, -0.4, 1.5], [0.2, 4.5, -0.3, 1.3]].forEach(([dx, dy, dz, r]) => { const c = new THREE.Mesh(new THREE.IcosahedronGeometry(r * s, 1), leafB); c.position.set(x + dx * s, dy * s, z + dz * s); g.add(c); }); addSolid(S, x, z, 0.35 * s, 0.35 * s, 3 * s); };
     let seed = 777; const rr = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
     if (hasTex && AS.modelInfo('tree1') && AS.modelInfo('tree2')) {
-      W.townTrees = plantTrees(g, S, rr, [[-6, -16], [6, 14], [-20, 1.5], [20, -12], [-25, 34.5], [8, 30]], (x, z) => Math.abs(x) < 7 && z > 36);
+      const castleDir = Math.atan2(-1, -1);
+      const skipT = useB ? (x, z) => (Math.abs(x) < 7 && z > 36) || (Math.abs(x) < 17 && z < -22 && z > -75) || (Math.hypot(x, z) > 36 && Math.abs(Math.atan2(z, x) - castleDir) < 0.26) : (x, z) => Math.abs(x) < 7 && z > 36;
+      W.townTrees = plantTrees(g, S, rr, useB ? [[-7, -22], [7, -22], [-26, 1.5], [24, 7.5], [-27, 35], [7, 33]] : [[-6, -16], [6, 14], [-20, 1.5], [20, -12], [-25, 34.5], [8, 30]], skipT);
     } else {
       for (let i = 0; i < 90; i++) {
         const a = rr() * Math.PI * 2, r = 47 + rr() * 30, x = Math.cos(a) * r, z = Math.sin(a) * r;
