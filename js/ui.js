@@ -1154,8 +1154,15 @@
     }
   }
 
+  // 第37版: 帰還ポータルの確認
+  $('portal-yes').addEventListener('click', () => { AU.click(); close(false); G.leaveByPortal(); });
+  $('portal-no').addEventListener('click', () => { AU.click(); close(); });
   MG.UI = {
     toast,
+    confirmPortal(run) {
+      $('portal-confirm-body').textContent = run ? `拾った ${run.gold} G・回復薬 ${run.potGain} 個と、この回の経験値を持って村へ帰ります。` : '村へ帰ります。';
+      open('portal-confirm');
+    },
     onProgress() { saveProgress(); updateLvBox(); if (current === 'shop') renderShop(); if (current === 'temple') renderTemple(); renderSlots(); if (current === 'crafter') renderCrafter(); },
     onLevelUp(u) { showLevelUp(u); saveProgress(); renderSlots(); },
     onStage(name) {

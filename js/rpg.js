@@ -81,7 +81,7 @@
     skeleton: { label: '骸骨兵',       hp: 70,  dmg: 12, speed: 4.3, range: 2.1, atkCd: 1.3, xp: 10,  gold: 5,  r: 0.7,  cy: 1.1 },
     bat:      { label: '影コウモリ',   hp: 30,  dmg: 6,  speed: 6.0, range: 1.6, atkCd: 1.0, xp: 7,   gold: 3,  r: 0.6,  cy: 0.1, fly: true }, // cy は飛ぶ高さからの体の中心（第33版で 2.2 → 0.1）
     mage:     { label: '闇の魔導士',   hp: 50,  dmg: 10, speed: 3.2, range: 15,  atkCd: 2.2, xp: 12,  gold: 6,  r: 0.7,  cy: 1.1, ranged: true },
-    boss:     { label: '石の守護者',   hp: 480, dmg: 26, speed: 2.6, range: 4.2, atkCd: 2.4, xp: 160, gold: 120, r: 2.4, cy: 2.6, boss: true },
+    boss:     { label: '石の守護者',   hp: 480, dmg: 26, speed: 2.6, range: 4.2, atkCd: 2.4, xp: 160, gold: 120, r: 2.4, cy: 2.6, boss: true, farShot: 26, rock: true, bolt: ['#a89070'] }, // 第37版: 離れた相手に岩を投げる
     // 第36版: 深い階の敵（地下 6 階から）。bolt は撃つ弾の色、spread は一度に撃つ弾の数、flyY は飛ぶ高さ、barY は HP のバーの高さ
     spider:     { label: '大グモ',       hp: 60,  dmg: 12, speed: 5.4, range: 1.9, atkCd: 1.1, xp: 14,  gold: 7,   r: 0.9,  cy: 0.6 },
     goblin:     { label: 'ゴブリン',     hp: 72,  dmg: 13, speed: 4.6, range: 2.0, atkCd: 1.2, xp: 14,  gold: 9,   r: 0.6,  cy: 0.85 },
@@ -209,6 +209,38 @@
       }
       Object.assign(stairs, { x0, z0, w: x1 - x0 + 1, h: z1 - z0 + 1, small: false, bossRoom: true });
       for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) carve(x, z);
+      // 第37版: 外周のマスのうち、外側も床（通路がつながっている）マスを入口の候補にし、辺ごとに続いているものを 1 つの入口にまとめる
+      const isF = (x, z) => x >= 0 && z >= 0 && x < N && z < N && tiles[z * N + x] === 1;
+      const sides = [
+        { side: 'N', cells: [], at: (i) => [x0 + i, z0], out: [0, -1], n: x1 - x0 + 1 },
+        { side: 'S', cells: [], at: (i) => [x0 + i, z1], out: [0, 1], n: x1 - x0 + 1 },
+        { side: 'W', cells: [], at: (i) => [x0, z0 + i], out: [-1, 0], n: z1 - z0 + 1 },
+        { side: 'E', cells: [], at: (i) => [x1, z0 + i], out: [1, 0], n: z1 - z0 + 1 },
+      ];
+      const doors = [];
+      sides.forEach((sd) => {
+        let run = [];
+        // 入口は 2 マス（4m）。1 マスしかないときは、となりのマスもあける（角の 1 マスは使わない）
+        const flush = () => {
+          if (run.length) {
+            let keep;
+            if (run.length >= 2) { const mid = Math.floor((run.length - 2) / 2); keep = run.slice(mid, mid + 2); }
+            else { const i = run[0].i, j = i >= sd.n - 2 ? i - 1 : i + 1; keep = [run[0], { i: j, xz: sd.at(j) }]; }
+            doors.push({ side: sd.side, cells: keep.map((c) => c.xz).sort((a, b) => a[0] - b[0] || a[1] - b[1]), out: sd.out });
+          }
+          run = [];
+        };
+        for (let i = 0; i < sd.n; i++) { const [x, z] = sd.at(i); if (isF(x + sd.out[0], z + sd.out[1])) { const ci = Math.min(Math.max(i, 1), sd.n - 2); if (!run.length || run[run.length - 1].i !== ci) run.push({ i: ci, xz: sd.at(ci) }); } else flush(); }
+        flush();
+      });
+      // 外周を壁にして、入口の 2 マスだけ床に戻す
+      for (let x = x0; x <= x1; x++) { tiles[z0 * N + x] = 0; tiles[z1 * N + x] = 0; }
+      for (let z = z0; z <= z1; z++) { tiles[z * N + x0] = 0; tiles[z * N + x1] = 0; }
+      doors.forEach((dr) => dr.cells.forEach(([x, z]) => { tiles[z * N + x] = 1; }));
+      // 全部の部屋に行けるか調べる。行けない部屋があれば、外周の壁と扉をやめる（元の床に戻す）
+      const reach = () => { const [sx, sz] = center(start), seen = new Uint8Array(N * N), q = [[sx, sz]]; seen[sz * N + sx] = 1; while (q.length) { const [x, z] = q.pop(); [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(([a, b]) => { const X = x + a, Z = z + b; if (X < 0 || Z < 0 || X >= N || Z >= N || seen[Z * N + X] || !tiles[Z * N + X]) return; seen[Z * N + X] = 1; q.push([X, Z]); }); } return rooms.every((r) => { const [cx, cz] = center(r); return seen[cz * N + cx]; }); };
+      if (reach()) { Object.assign(stairs, { x0: x0 + 1, z0: z0 + 1, w: x1 - x0 - 1, h: z1 - z0 - 1 }); stairs.doors = doors; } // 部屋の中は外周の壁の内側
+      else { for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) carve(x, z); stairs.doors = []; }
     }
     const tilePos = (r) => [ri(r.x0, r.x0 + r.w - 1), ri(r.z0, r.z0 + r.h - 1)];
     const others = rooms.filter((r) => r !== start);
@@ -224,7 +256,7 @@
       const n = Math.min(3, Math.floor(rnd() * (r.small ? 1.6 : 2.6)) + (floor >= 12 && rnd() < 0.4 ? 1 : 0)); // 第36版: 深い階でも増えすぎないように（前は 6 階ごとに 1 体ずつ増えた）
       for (let k = 0; k < n; k++) spawns.push({ type: R.pick(pool, rnd), room: r.id, t: tilePos(r) });
     });
-    return { area: R.areaOf(floor).id, floor, seed, N, tiles, rooms, start: start.id, stairs: stairs.id, portal: portal ? portal.id : stairs.id, chests, spawns, boss, center };
+    return { doors: boss ? stairs.doors || [] : [], area: R.areaOf(floor).id, floor, seed, N, tiles, rooms, start: start.id, stairs: stairs.id, portal: portal ? portal.id : stairs.id, chests, spawns, boss, center };
   };
   // タイル → 世界の座標（タイルの中心）
   R.tileToWorld = (x, z) => [(x + 0.5) * R.TILE - (R.GRID * R.TILE) / 2, (z + 0.5) * R.TILE - (R.GRID * R.TILE) / 2];

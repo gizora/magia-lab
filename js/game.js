@@ -4072,6 +4072,9 @@
     if (W.stage === 'dungeon' && D.on && W.dun) {
       // 第33版: 帰還ポータルは輪の中、下の階への穴は穴の上に入ると使える
       const out = [{ id: 'portal', label: '帰還ポータル', x: W.dun.portal.x, z: W.dun.portal.z, r: 2.8, hint: '村へ帰る（拾った物を持ち帰る）', touch: { x: W.dun.portal.x, z: W.dun.portal.z, r: 1.4 } }];
+      out[0].confirm = true; // 第37版: 帰還ポータルは、触れると確認画面を出す
+      // 第37版: 守護者の部屋の重い扉（F キーで開ける・閉める）
+      (W.dun.doors || []).forEach((d, i) => out.push({ id: 'door' + i + (d.open ? 'o' : 'c'), door: i, label: '扉', x: d.x, z: d.z, r: 3.4, hint: d.open ? '扉を閉める' : '重い扉を開ける' }));
       if (W.dun.stairsOpen) out.push({ id: 'stairs', label: '下の階', x: W.dun.stairs.x, z: W.dun.stairs.z, r: 2.6, hint: `下の階へ進む（地下 ${D.floor + 1} 階）`, touch: { x: W.dun.stairs.x, z: W.dun.stairs.z, r: 1.4 } });
       return out;
     }
@@ -4080,11 +4083,19 @@
   // 体が「触れると入る」範囲に入っているか
   const inTouch = (s) => { const t = s.touch, p = player.pos; if (!t) return false; if (t.r) return Math.hypot(p.x - t.x, p.z - t.z) < t.r && p.y < 3; return Math.abs(p.x - t.x) < t.hx && Math.abs(p.z - t.z) < t.hz && p.y < 4; };
   let touchCd = 0; // 移動した直後は、少しのあいだ触れても移動しない（行ったり来たりしないように）
+  let portalHold = false; // 帰還ポータルの確認画面を出したあと、外へ出るまで出さない
+  G.leaveByPortal = () => (D.on ? leaveDungeon('portal') : false); // 確認画面の「帰る」
   function updateSpot(dt) {
     touchCd = Math.max(0, touchCd - (dt || 0));
     let best = null, bd = 1e9;
     for (const s of spotsHere()) {
-      if (s.touch) { if (touchCd <= 0 && !M.on && !st.paused && inTouch(s)) { touchCd = 1.2; enterSpot(s); return; } continue; } // ポータルや穴は、触れたらすぐ入る
+      if (s.touch) {
+        const inside = inTouch(s);
+        // 帰還ポータル: 触れると確認画面。いったん外へ出るまでは、もう一度は出さない
+        if (s.confirm) { if (inside && !portalHold && touchCd <= 0 && !M.on && !st.paused) { portalHold = true; if (MG.UI && MG.UI.confirmPortal) MG.UI.confirmPortal(D.run); else enterSpot(s); } if (!inside) portalHold = false; continue; }
+        if (touchCd <= 0 && !M.on && !st.paused && inside) { touchCd = 1.2; enterSpot(s); return; }
+        continue;
+      } // ポータルや穴は、触れたらすぐ入る
       const d = Math.hypot(player.pos.x - s.x, player.pos.z - s.z); if (d < s.r && d < bd) { bd = d; best = s; }
     }
     if ((best && best.id) !== (st.spot && st.spot.id)) { st.spot = best; if (MG.UI && MG.UI.onSpot) MG.UI.onSpot(best); }
@@ -4099,6 +4110,11 @@
   };
   function enterSpot(s) {
     AU.click();
+    if (s.door != null) { // 第37版: 重い扉を開ける・閉める
+      W.toggleDoor(s.door);
+      const p = new V3(s.x, 1.5, s.z); AU.step('heavy', ap(p), 1.8); AU.impact('earth', 1.2, ap(p)); st.shake = Math.max(st.shake, 0.12);
+      return true;
+    }
     if (s.id === 'temple' || s.id === 'shop') { if (MG.UI) MG.UI.open(s.id); return true; }
     if (s.id === 'practice') return G.goStage('practice', W.PRACTICE_SPAWN);
     if (s.id === 'town') return G.goStage('town', [0, 27, 0]);
@@ -4335,7 +4351,7 @@
     if (foe.alive) { foe.flash = 0.1; return damage(foe, dmg, null, false); }
     return 0;
   }
-  function enemyAttack(t, foe) {
+  function enemyAttack(t, foe, farShot) {
     const E = t.E, [c1, c2] = ENEMY_COL[t.kind];
     t.windup = E.boss ? 0.7 : 0.4;
     const fc = foe.center.clone();
@@ -4343,14 +4359,19 @@
       if (!t.alive || !D.on) return;
       const cur = foe.player ? new V3(player.pos.x, player.pos.y + 1, player.pos.z) : foe.center;
       const every = E.rangedEvery == null ? 3 : E.rangedEvery;
-      if (E.ranged || (E.boss && every > 0 && t.shots % every === every - 1)) {
+      if (farShot || E.ranged || (E.boss && every > 0 && t.shots % every === every - 1)) {
         // 魔弾（よけられる）。石の守護者は 3 回に 1 回、岩を投げる。第36版: 弾の色（bolt）、扇形に広がる数（spread）、撃つ高さ（boltY）
         const from = t.center.clone().add(new V3(0, E.boltY != null ? E.boltY : (E.boss ? 2.5 : 0.6), 0));
         const dir0 = cur.clone().sub(from).normalize(), n = E.spread || 1;
         for (let i = 0; i < n; i++) {
           const dir = dir0.clone().applyAxisAngle(UP, (i - (n - 1) / 2) * 0.13);
           const col = E.bolt ? E.bolt[i % E.bolt.length] : (E.boss ? '#ffb07a' : c1);
-          const glow = FX.glowSprite(col, E.boss ? 2.6 : 1.4), core = FX.glowSprite('#ffffff', E.boss ? 1 : 0.5);
+          let glow = FX.glowSprite(col, E.boss ? 2.6 : 1.4), core = FX.glowSprite('#ffffff', E.boss ? 1 : 0.5);
+          if (E.rock) { // 第37版: 石の守護者が投げる岩（回りながら飛ぶ）
+            const geo = new THREE.DodecahedronGeometry(0.75, 0), pa = geo.attributes.position; for (let q = 0; q < pa.count; q++) pa.setXYZ(q, pa.getX(q) * rand(0.8, 1.2), pa.getY(q) * rand(0.8, 1.2), pa.getZ(q) * rand(0.8, 1.2)); geo.computeVertexNormals();
+            glow = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: 0x6a645a, roughness: 1, flatShading: true })); glow.userData.rock = true;
+            core = FX.glowSprite('#ff8a3a', 1.2);
+          }
           glow.position.copy(from); core.position.copy(from); scene.add(glow); scene.add(core);
           D.ebolts.push({ pos: from.clone(), vel: dir.multiplyScalar(E.boss ? 16 : 19), dmg: t.dmg * (E.boss ? 0.8 : 1) * (n > 1 ? 0.7 : 1), life: 3, glow, core, r: E.boss ? 1.2 : 0.7, name: E.label, c1: col });
         }
@@ -4392,7 +4413,10 @@
     if (t.burnT > 0) { t.burnT -= dt; t.burnAcc += t.burnDps * dt; if (Math.random() < 0.4) FX.emit(t.center, { count: 1, c1: '#ff6a1a', c2: '#ffd24a', speed: 0.6, up: 2.5, jitter: t.r * 0.7, life: 0.6, size: 0.4, drag: 0.5 }); if (t.burnAcc >= 4) { const d = Math.floor(t.burnAcc); t.burnAcc -= d; const dd = damage(t, d, null, false); if (t.burnRec) t.burnRec.add(dd); if (!t.alive) return false; } }
     if (t.freezeT > 0) { t.freezeT -= dt; if (t.freezeT <= 0) t.frozenHard = false; }
     if (t.vulnT > 0) t.vulnT -= dt;
-    if (t.hp < t.maxHp) t.awake = true;
+    // 攻撃を受けたら、プレイヤーのいる場所に気づく（第37版: 前は一度でも傷つくと、ずっと追い続けた）
+    if (t.prevHp != null && t.hp < t.prevHp && !E.mimic) { if (!t.awake) { t.awake = true; t.bar.visible = true; } t.lastSeen = new V3(player.pos.x, player.pos.y + 1, player.pos.z); t.lostT = 0; }
+    if (E.mimic && t.hp < t.maxHp) t.awake = true;
+    t.prevHp = t.hp;
     const slow = t.freezeT > 0 ? (t.frozenHard ? 0.08 : 0.45) : 1;
     const eye = new V3(player.pos.x, player.pos.y + 1.4, player.pos.z);
     const pd = Math.hypot(player.pos.x - t.pos.x, player.pos.z - t.pos.z);
@@ -4404,6 +4428,11 @@
       t.bar.visible = true;
       const foe = fr.foe, goal = foe.center;
       const sight = W.solidOnSegment(t.center, goal) == null;
+      // 第37版: プレイヤーが見えているあいだは追う。1.2 秒見えなければ見失い、最後に見た場所を探しに行く
+      if (foe.player && !E.mimic) {
+        if (sight) { t.lastSeen = goal.clone(); t.lostT = 0; }
+        else { t.lostT = (t.lostT || 0) + dt; if (t.lostT > 1.2) { t.awake = false; t.searchT = 4.5; t.lostT = 0; popup(t.center.clone().add(new V3(0, 1.2, 0)), '?', 'pvp'); } }
+      }
       let want = 0;
       if (E.ranged) want = !sight || fr.d > 13 ? 1 : fr.d < 7 ? -0.7 : 0;
       else want = fr.d > E.range * 0.85 + (foe.player ? 0.4 : foe.r * 0.7) ? 1 : 0;
@@ -4426,7 +4455,38 @@
       t.detourT = Math.max(0, t.detourT - dt);
       t.atkT -= dt * slow;
       const inRange = E.ranged ? fr.d < E.range && sight : fr.d <= E.range + (foe.player ? 0.5 : foe.r);
-      if (inRange && t.atkT <= 0 && t.windup <= 0 && D.invul <= 0) { enemyAttack(t, foe); t.atkT = E.atkCd * (0.85 + Math.random() * 0.3); }
+      const far = !inRange && E.farShot && sight && fr.d < E.farShot; // 第37版: 石の守護者は、離れた相手に岩を投げる
+      if ((inRange || far) && t.atkT <= 0 && t.windup <= 0 && D.invul <= 0) { enemyAttack(t, foe, far); t.atkT = E.atkCd * (0.85 + Math.random() * 0.3); }
+    } else if (!t.awake && D.alive && !E.mimic) {
+      // 第37版: 見張り中は持ち場のまわりを歩き回る（徘徊）。見失った直後は、最後に見た場所まで行ってあたりを見回す
+      let tgt = null, spd = E.speed * 0.4;
+      if (t.searchT > 0) {
+        t.searchT -= dt; spd = E.speed * 0.7;
+        if (t.lastSeen && Math.hypot(t.lastSeen.x - t.pos.x, t.lastSeen.z - t.pos.z) > 1.0) tgt = t.lastSeen; else t.yaw += dt * 1.6;
+        if (t.searchT <= 0) { t.wTarget = null; t.wWait = 0.5; }
+      } else {
+        t.wWait = (t.wWait == null ? Math.random() * 2 : t.wWait) - dt;
+        if (t.wTarget && (Math.hypot(t.wTarget.x - t.pos.x, t.wTarget.z - t.pos.z) < 0.8 || (t.wTime -= dt) <= 0)) { t.wTarget = null; t.wWait = 1 + Math.random() * 2.5; }
+        if (!t.wTarget && t.wWait <= 0) {
+          const R0 = E.boss ? 5 : 6;
+          for (let k = 0; k < 6; k++) { const a = Math.random() * Math.PI * 2, r = 1.5 + Math.random() * R0, c = new V3(t.home.x + Math.cos(a) * r, t.center.y, t.home.z + Math.sin(a) * r); if (W.solidOnSegment(t.center, c) == null) { t.wTarget = c; t.wTime = 7; break; } }
+          if (!t.wTarget) t.wWait = 1;
+        }
+        tgt = t.wTarget;
+      }
+      if (tgt) {
+        const dir = new V3(tgt.x - t.pos.x, 0, tgt.z - t.pos.z), L = dir.length();
+        if (L > 0.05) {
+          dir.multiplyScalar(1 / L);
+          let dy = Math.atan2(dir.x, dir.z) - t.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+          t.yaw += Math.sign(dy) * Math.min(Math.abs(dy), dt * 3);
+          if (Math.abs(dy) < 1.2) {
+            const before = t.pos.clone(), v = spd * slow;
+            t.pos.addScaledVector(dir, v * dt); W.pushOut(t.pos, t.r * 0.8); speed = v;
+            if (Math.hypot(t.pos.x - before.x, t.pos.z - before.z) < v * dt * 0.3) { t.wTarget = null; t.wWait = 0.6; if (t.searchT > 0) t.searchT = Math.min(t.searchT, 1.5); }
+          }
+        }
+      }
     }
     t.windup = Math.max(0, t.windup - dt);
     // 吹き飛ばし
@@ -4458,12 +4518,17 @@
       const prev = b.pos.clone();
       b.pos.addScaledVector(b.vel, dt * timeK(b.pos, 'enemy'));
       b.glow.position.copy(b.pos); b.core.position.copy(b.pos);
+      if (b.glow.userData.rock) { b.glow.rotation.x += dt * 7; b.glow.rotation.z += dt * 4; }
       let done = b.life <= 0;
       const pc = new V3(player.pos.x, player.pos.y + 1, player.pos.z);
       if (!done && D.alive && b.pos.distanceTo(pc) < b.r + 0.5) { hurtPlayer(b.dmg, prev, b.name); done = true; }
       if (!done) { const bh = W.barrierOnSegment(prev, b.pos, 0.2, 'enemy'); if (bh) { if (bh.barrier.game) damageBarrier(bh.barrier.game, b.dmg, b.pos.clone(), { element: 'void', colors: [b.c1, '#ffffff'] }); done = true; } }
       if (!done && (W.collide(b.pos, 0.2) || b.pos.y <= W.heightAt(b.pos.x, b.pos.z))) done = true;
-      if (done) { FX.emit(b.pos, { count: 14, c1: b.c1, c2: '#ffffff', speed: 4, life: 0.3, size: 0.3, drag: 4 }); scene.remove(b.glow); scene.remove(b.core); D.ebolts.splice(i, 1); }
+      if (done) {
+        if (b.glow.userData.rock) { FX.emit(b.pos, { count: 40, c1: '#7a7468', c2: '#c8c0b0', speed: 7, up: 4, gravity: 16, life: 1, size: 0.4 }); AU.crumble(ap(b.pos)); b.glow.geometry.dispose(); }
+        else FX.emit(b.pos, { count: 14, c1: b.c1, c2: '#ffffff', speed: 4, life: 0.3, size: 0.3, drag: 4 });
+        scene.remove(b.glow); scene.remove(b.core); D.ebolts.splice(i, 1);
+      }
     }
   }
   function updateDungeon(dt) {
@@ -4785,7 +4850,7 @@
     goStage: (n, sp) => G.goStage(n, sp),
     dun: () => ({ on: D.on, floor: D.floor, hp: Math.round(D.hp), maxHp: D.maxHp, alive: D.alive, run: D.run ? { gold: D.run.gold, xp: D.run.xp, kills: D.run.kills, potGain: D.run.potGain } : null, chests: D.chests.length, opened: D.chests.filter((c) => c.open).length, ebolts: D.ebolts.length, stairsOpen: W.dun ? W.dun.stairsOpen : false, explored: D.explored ? D.explored.reduce((a, v) => a + v, 0) : 0 }),
     dunPos: () => (W.dun ? { start: [W.dun.start.x, W.dun.start.z], stairs: [W.dun.stairs.x, W.dun.stairs.z], portal: [W.dun.portal.x, W.dun.portal.z] } : null),
-    enemies: () => targets.filter((t) => t.isEnemy && t.alive).map((t) => ({ id: t.id, kind: t.kind, hp: t.hp, maxHp: t.maxHp, x: Math.round(t.pos.x * 10) / 10, y: Math.round(t.pos.y * 10) / 10, z: Math.round(t.pos.z * 10) / 10, awake: t.awake, dmg: t.dmg, xp: t.xp })),
+    enemies: () => targets.filter((t) => t.isEnemy && t.alive).map((t) => ({ id: t.id, kind: t.kind, hp: t.hp, maxHp: t.maxHp, x: Math.round(t.pos.x * 10) / 10, y: Math.round(t.pos.y * 10) / 10, z: Math.round(t.pos.z * 10) / 10, awake: t.awake, search: t.searchT > 0, dmg: t.dmg, xp: t.xp })),
     killEnemies(kind) { targets.filter((t) => t.isEnemy && t.alive && (!kind || t.kind === kind)).forEach((t) => { t.hp = 0; killTarget(t); }); },
     spawnEnemy(kind, x, z, f) { const t = spawnEnemy(kind, new V3(x, 0, z), f || 1, RP.scale(f || 1)); t.spawnT = 1; return t.id; },
     hurt: (d) => hurtPlayer(d, null, 'テスト'),

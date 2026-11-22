@@ -1221,6 +1221,70 @@
     geo.setIndex(idx); geo.computeBoundingSphere();
     return new THREE.Mesh(geo, mat);
   }
+  // 第37版: 守護者の部屋の重い扉。幅 4m（左右 2 枚の扉）、高さ 3.8m の扉の上に半円の板、まわりに石の柱とアーチ
+  let doorMats = null;
+  function doorMaterials() {
+    if (doorMats) return doorMats;
+    const plank = FX.canvasTex(256, 512, (c, w, h) => {
+      c.fillStyle = '#6a4228'; c.fillRect(0, 0, w, h);
+      const n = 5, pw = w / n;
+      for (let i = 0; i < n; i++) { const v = 0.85 + Math.random() * 0.3; c.fillStyle = `rgb(${(110 * v) | 0},${(70 * v) | 0},${(42 * v) | 0})`; c.fillRect(i * pw + 2, 0, pw - 4, h); c.strokeStyle = 'rgba(40,22,10,0.45)'; c.lineWidth = 1.2; for (let k = 0; k < 10; k++) { c.beginPath(); let x = i * pw + 5 + Math.random() * (pw - 10); c.moveTo(x, 0); for (let y = 0; y <= h; y += 20) { x += (Math.random() - 0.5) * 2.5; c.lineTo(x, y); } c.stroke(); } }
+      c.fillStyle = 'rgba(20,10,4,0.9)'; for (let i = 0; i <= n; i++) c.fillRect(i * pw - 2, 0, 4, h);
+    });
+    doorMats = {
+      wood: new THREE.MeshStandardMaterial({ map: plank, roughness: 0.8 }),
+      iron: new THREE.MeshStandardMaterial({ color: 0x26262a, roughness: 0.45, metalness: 0.4 }),
+      stone: dunStone.pillar || new THREE.MeshStandardMaterial({ color: 0x8a8478, roughness: 0.95, flatShading: true }),
+    };
+    return doorMats;
+  }
+  function makeDoorLeaf(side) {
+    const M = doorMaterials(), g = new THREE.Group(), W2 = 1.98, H = 3.8;
+    const leaf = new THREE.Mesh(new THREE.BoxGeometry(W2, H, 0.2), M.wood); leaf.position.set(-side * W2 / 2, H / 2, 0); g.add(leaf);
+    const put = (geo, x, y, z, rz) => { const m = new THREE.Mesh(geo, M.iron); m.position.set(x, y, z); if (rz) m.rotation.z = rz; g.add(m); };
+    [1, -1].forEach((zs) => { // 表と裏の両方に
+      // 鉄の帯（3 本、端は渦巻き）と鋲
+      [0.55, 1.75, 3.1].forEach((y) => {
+        put(new THREE.BoxGeometry(W2 * 0.86, 0.13, 0.04), -side * W2 * 0.46, y, zs * 0.12);
+        put(new THREE.TorusGeometry(0.1, 0.025, 5, 12, Math.PI * 1.4), -side * (W2 * 0.89), y, zs * 0.12, side > 0 ? Math.PI * 0.3 : Math.PI * 1.3);
+        for (let k = 0; k < 5; k++) put(new THREE.SphereGeometry(0.03, 6, 4), -side * (0.15 + k * 0.35), y, zs * 0.15);
+      });
+      // 上の飾り（渦巻きの鉄細工）と、輪の取っ手
+      for (let k = 0; k < 3; k++) put(new THREE.TorusGeometry(0.16 - k * 0.04, 0.018, 5, 16, Math.PI * 1.6), -side * W2 * 0.5, 2.45 + k * 0.12, zs * 0.12, k * 1.3);
+      put(new THREE.TorusGeometry(0.12, 0.022, 6, 16), -side * 0.32, 1.45, zs * 0.16);
+      const plate = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.03, 10), M.iron); plate.rotation.x = Math.PI / 2; plate.position.set(-side * 0.32, 1.58, zs * 0.12); g.add(plate);
+    });
+    return g;
+  }
+  function makeDoor(cx, cz, out) {
+    const M = doorMaterials(), g = new THREE.Group();
+    g.position.set(cx, 0, cz); g.rotation.y = Math.atan2(out[0], out[1]); // 扉の +z が部屋の中の向き
+    const leaves = [1, -1].map((side) => { const p = new THREE.Group(); p.position.set(side * 2.0, 0, 0); p.add(makeDoorLeaf(side)); g.add(p); return { p, side }; });
+    // 扉の上は石でふさぎ、両面に半円の木の板。まわりに石の柱とアーチ（壁の面から少し出る厚み）
+    const top = new THREE.Mesh(new THREE.BoxGeometry(4.0, 2.4, 1.6), M.stone); top.position.set(0, 5.0, 0); g.add(top);
+    [1, -1].forEach((zs) => { const t = new THREE.Mesh(new THREE.CircleGeometry(1.95, 24, 0, Math.PI), M.wood); t.position.set(0, 3.8, zs * 0.81); if (zs < 0) t.rotation.y = Math.PI; g.add(t); });
+    for (let k = 0; k < 11; k++) { const a = (k / 10) * Math.PI, st = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.42, 1.8), M.stone); st.position.set(Math.cos(a) * 2.15, 3.8 + Math.sin(a) * 2.15, 0); st.rotation.z = a - Math.PI / 2; g.add(st); }
+    [-1, 1].forEach((sd) => { const pl = new THREE.Mesh(new THREE.BoxGeometry(0.5, 3.9, 2.3), M.stone); pl.position.set(sd * 2.25, 1.95, 0); g.add(pl); const cap = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.22, 2.4), M.stone); cap.position.set(sd * 2.25, 3.85, 0); g.add(cap); });
+    const lintel = new THREE.Mesh(new THREE.BoxGeometry(5.2, 0.4, 2.3), M.stone); lintel.position.set(0, 6.05, 0); g.add(lintel);
+    return { g, leaves };
+  }
+  // F キーで開け閉めする（閉じているあいだは固い壁として、人も敵も魔法も通さない。向こうも見えない）
+  W.toggleDoor = function (i) {
+    const d = W.dun && W.dun.doors && W.dun.doors[i]; if (!d) return null;
+    d.open = !d.open;
+    if (!d.open && !stageSolids.dungeon.includes(d.solid)) stageSolids.dungeon.push(d.solid); // 閉めるときは、すぐに通れなくする
+    return d.open;
+  };
+  function updateDoors(dt) {
+    if (!W.dun || !W.dun.doors) return;
+    for (const d of W.dun.doors) {
+      const tgt = d.open ? 1 : 0; if (d.k === tgt) continue;
+      d.k += Math.sign(tgt - d.k) * Math.min(Math.abs(tgt - d.k), dt / 1.5); // 重い扉: 1.5 秒かけて動く
+      const e = d.k * d.k * (3 - 2 * d.k);
+      d.leaves.forEach((L) => { L.p.rotation.y = L.side * e * 1.7; }); // 部屋の中へ向かって開く
+      if (d.open && d.k > 0.6) { const i = stageSolids.dungeon.indexOf(d.solid); if (i >= 0) stageSolids.dungeon.splice(i, 1); }
+    }
+  }
   // たいまつの明かり（近い 6 本だけが本当に照らす）と、手に持った杖のほのかな光
   const dunLights = { pool: [], torches: [], player: null };
   // 第31版: ダンジョンの壁と床に、自然物ガチャの岩を使えるか
@@ -1370,7 +1434,16 @@
         placed++;
       }
     }
-    W.dun = { signs: [], data: d, start, stairs, portal, stairsOpen: !d.boss, stairsParts, portalGroup: pg, torches: dunLights.torches.length, pillars: cols.length / 3, area: d.area || 0, theme };
+    // 第37版: 守護者の部屋の入口に、重い扉（はじめは閉まっている）
+    const doors = (d.doors || []).map((dr) => {
+      const [ax, az] = R.tileToWorld(dr.cells[0][0], dr.cells[0][1]), [bx, bz] = R.tileToWorld(dr.cells[1][0], dr.cells[1][1]);
+      const cx = (ax + bx) / 2, cz = (az + bz) / 2, alongX = dr.out[1] !== 0;
+      const m = makeDoor(cx, cz, [-dr.out[0], -dr.out[1]]);
+      dunGroup.add(m.g);
+      const solid = addSolid(stageSolids.dungeon, cx, cz, alongX ? 2.0 : 0.45, alongX ? 0.45 : 2.0, WALL_H);
+      return { x: cx, z: cz, out: dr.out, open: false, k: 0, leaves: m.leaves, solid, g: m.g };
+    });
+    W.dun = { doors, signs: [], data: d, start, stairs, portal, stairsOpen: !d.boss, stairsParts, portalGroup: pg, torches: dunLights.torches.length, pillars: cols.length / 3, area: d.area || 0, theme };
     W.setStairsOpen(!d.boss);
     if (W.stage === 'dungeon') { solids = stageSolids.dungeon; applyTime(timeK); } // 階ごとに霧の濃さが変わる（守護者の階）
     return W.dun;
@@ -1958,6 +2031,7 @@
       const near = dunLights.torches.map((t) => [t, (t.x - playerPos.x) ** 2 + (t.z - playerPos.z) ** 2]).sort((a, b) => a[1] - b[1]);
       dunLights.pool.forEach((l, i) => { const e = near[i]; if (!e) { l.intensity = 0; return; } const t = e[0]; l.position.set(t.x, t.y, t.z); l.intensity = 1.05 * (1 + Math.sin(clock * 9 + t.ph) * 0.08 + Math.sin(clock * 23 + t.ph * 2) * 0.05); });
     }
+    if (W.stage === 'dungeon') updateDoors(dt);
     if (W.stage === 'dungeon') for (const a of dunAnim) {
       if (a.torch) { a.torch.scale.setScalar(1.0 * (1 + Math.sin(clock * 9 + a.ph) * 0.1 + Math.sin(clock * 23 + a.ph) * 0.05)); continue; }
       if (a.face) { if (playerPos) a.face.rotation.y = Math.atan2(playerPos.x - a.face.position.x, playerPos.z - a.face.position.z); continue; }
