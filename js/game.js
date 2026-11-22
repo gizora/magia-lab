@@ -4005,6 +4005,7 @@
   G.getProgress = () => ({ prog: RP.cloneProgress(P.prog), gold: P.gold, potions: P.potions, wands: P.wands.slice(), bestFloor: P.bestFloor });
   G.playerPos = () => player.pos;
   G.playerYaw = () => player.yaw;
+  G.enemyYaw = (id) => { const t = targets.find((q) => q.id === id); return t ? t.yaw : null; }; // 動作確認用（第38版）
   G.enemyDots = () => targets.filter((t) => t.isEnemy && t.alive && (!t.E.mimic || t.awake)).map((t) => ({ x: t.pos.x, z: t.pos.z, boss: !!t.E.boss }));
   G.ownsWand = (id) => id === 'bare' || P.wands.includes(id);
   // 杖を買う。戻り値: 'ok' | 'owned' | 'gold' | 'invalid'
@@ -4158,7 +4159,11 @@
     D.invul = 1.5;
     // 敵と宝箱
     const sc = RP.scale(f);
-    data.spawns.forEach((e) => { const [x, z] = RP.tileToWorld(e.t[0], e.t[1]); spawnEnemy(e.type, new V3(x + rand(-0.5, 0.5), 0, z + rand(-0.5, 0.5)), f, sc); });
+    data.spawns.forEach((e) => {
+      const [x, z] = RP.tileToWorld(e.t[0], e.t[1]);
+      const t = spawnEnemy(e.type, e.face ? new V3(x, 0, z) : new V3(x + rand(-0.5, 0.5), 0, z + rand(-0.5, 0.5)), f, sc);
+      if (t && e.face) { t.yaw = Math.atan2(e.face[0], e.face[1]); t.postYaw = t.yaw; } // 第38版: 守護者は扉の方を向いて、その場で待つ
+    });
     data.chests.forEach((c) => { const [x, z] = RP.tileToWorld(c.t[0], c.t[1]); spawnChest(new V3(x, 0, z), f); });
     if (f > P.bestFloor) P.bestFloor = f;
     st.spot = null; if (MG.UI && MG.UI.onSpot) MG.UI.onSpot(null);
@@ -4464,6 +4469,10 @@
         t.searchT -= dt; spd = E.speed * 0.7;
         if (t.lastSeen && Math.hypot(t.lastSeen.x - t.pos.x, t.lastSeen.z - t.pos.z) > 1.0) tgt = t.lastSeen; else t.yaw += dt * 1.6;
         if (t.searchT <= 0) { t.wTarget = null; t.wWait = 0.5; }
+      } else if (t.postYaw != null) {
+        // 第38版: 守護者は徘徊せず、待つ場所で扉の方を向いている（見失ったあとも、ここへ戻って向き直る）
+        if (Math.hypot(t.home.x - t.pos.x, t.home.z - t.pos.z) > 0.8) { tgt = t.home; spd = E.speed * 0.6; }
+        else { let dy = t.postYaw - t.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); t.yaw += Math.sign(dy) * Math.min(Math.abs(dy), dt * 1.5); }
       } else {
         t.wWait = (t.wWait == null ? Math.random() * 2 : t.wWait) - dt;
         if (t.wTarget && (Math.hypot(t.wTarget.x - t.pos.x, t.wTarget.z - t.pos.z) < 0.8 || (t.wTime -= dt) <= 0)) { t.wTarget = null; t.wWait = 1 + Math.random() * 2.5; }

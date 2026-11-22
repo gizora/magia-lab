@@ -209,38 +209,74 @@
       }
       Object.assign(stairs, { x0, z0, w: x1 - x0 + 1, h: z1 - z0 + 1, small: false, bossRoom: true });
       for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) carve(x, z);
-      // 第37版: 外周のマスのうち、外側も床（通路がつながっている）マスを入口の候補にし、辺ごとに続いているものを 1 つの入口にまとめる
-      const isF = (x, z) => x >= 0 && z >= 0 && x < N && z < N && tiles[z * N + x] === 1;
-      const sides = [
-        { side: 'N', cells: [], at: (i) => [x0 + i, z0], out: [0, -1], n: x1 - x0 + 1 },
-        { side: 'S', cells: [], at: (i) => [x0 + i, z1], out: [0, 1], n: x1 - x0 + 1 },
-        { side: 'W', cells: [], at: (i) => [x0, z0 + i], out: [-1, 0], n: z1 - z0 + 1 },
-        { side: 'E', cells: [], at: (i) => [x1, z0 + i], out: [1, 0], n: z1 - z0 + 1 },
-      ];
-      const doors = [];
-      sides.forEach((sd) => {
-        let run = [];
-        // 入口は 2 マス（4m）。1 マスしかないときは、となりのマスもあける（角の 1 マスは使わない）
-        const flush = () => {
-          if (run.length) {
-            let keep;
-            if (run.length >= 2) { const mid = Math.floor((run.length - 2) / 2); keep = run.slice(mid, mid + 2); }
-            else { const i = run[0].i, j = i >= sd.n - 2 ? i - 1 : i + 1; keep = [run[0], { i: j, xz: sd.at(j) }]; }
-            doors.push({ side: sd.side, cells: keep.map((c) => c.xz).sort((a, b) => a[0] - b[0] || a[1] - b[1]), out: sd.out });
-          }
-          run = [];
-        };
-        for (let i = 0; i < sd.n; i++) { const [x, z] = sd.at(i); if (isF(x + sd.out[0], z + sd.out[1])) { const ci = Math.min(Math.max(i, 1), sd.n - 2); if (!run.length || run[run.length - 1].i !== ci) run.push({ i: ci, xz: sd.at(ci) }); } else flush(); }
-        flush();
-      });
-      // 外周を壁にして、入口の 2 マスだけ床に戻す
+      // 第38版: 入口は 1 か所だけ。外周をすべて壁でふさぎ、それで切れた通路は部屋をよけて掘り直し、入口の部屋に近い辺に 2 マスの入口をあける
+      const inB = (x, z) => x >= x0 && x <= x1 && z >= z0 && z <= z1;
       for (let x = x0; x <= x1; x++) { tiles[z0 * N + x] = 0; tiles[z1 * N + x] = 0; }
       for (let z = z0; z <= z1; z++) { tiles[z * N + x0] = 0; tiles[z * N + x1] = 0; }
-      doors.forEach((dr) => dr.cells.forEach(([x, z]) => { tiles[z * N + x] = 1; }));
-      // 全部の部屋に行けるか調べる。行けない部屋があれば、外周の壁と扉をやめる（元の床に戻す）
-      const reach = () => { const [sx, sz] = center(start), seen = new Uint8Array(N * N), q = [[sx, sz]]; seen[sz * N + sx] = 1; while (q.length) { const [x, z] = q.pop(); [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(([a, b]) => { const X = x + a, Z = z + b; if (X < 0 || Z < 0 || X >= N || Z >= N || seen[Z * N + X] || !tiles[Z * N + X]) return; seen[Z * N + X] = 1; q.push([X, Z]); }); } return rooms.every((r) => { const [cx, cz] = center(r); return seen[cz * N + cx]; }); };
-      if (reach()) { Object.assign(stairs, { x0: x0 + 1, z0: z0 + 1, w: x1 - x0 - 1, h: z1 - z0 - 1 }); stairs.doors = doors; } // 部屋の中は外周の壁の内側
-      else { for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) carve(x, z); stairs.doors = []; }
+      const DIR4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+      // 部屋の外の床を、つながりごとに番号をつける
+      const label = () => {
+        const lab = new Int32Array(N * N).fill(-1); let n = 0;
+        for (let i = 0; i < N * N; i++) {
+          if (!tiles[i] || lab[i] >= 0 || inB(i % N, (i / N) | 0)) continue;
+          const q = [i]; lab[i] = n;
+          while (q.length) { const j = q.pop(), jx = j % N, jz = (j / N) | 0; for (const [dx, dz] of DIR4) { const X = jx + dx, Z = jz + dz; if (X < 0 || Z < 0 || X >= N || Z >= N) continue; const k = Z * N + X; if (!tiles[k] || lab[k] >= 0 || inB(X, Z)) continue; lab[k] = n; q.push(k); } }
+          n++;
+        }
+        return lab;
+      };
+      // 2 マス幅で掘る（守護者の部屋と、そのまわり 1 マスには掘らない）
+      const nearB = (x, z) => x >= x0 - 1 && x <= x1 + 1 && z >= z0 - 1 && z <= z1 + 1;
+      const dig = (x, z) => { [[0, 0], [1, 0], [0, 1], [1, 1]].forEach(([dx, dz]) => { const X = x + dx, Z = z + dz; if (X > 0 && Z > 0 && X < N - 1 && Z < N - 1 && !inB(X, Z)) tiles[Z * N + X] = 1; }); };
+      // 番号 c のつながりから、番号 main のつながりまで、部屋をよけて最短の道を掘る
+      const route = (lab, c, main) => {
+        const prev = new Int32Array(N * N).fill(-2), q = [];
+        for (let i = 0; i < N * N; i++) if (lab[i] === c) { prev[i] = -1; q.push(i); }
+        let head = 0, hit = -1;
+        while (head < q.length) { const j = q[head++]; if (lab[j] === main) { hit = j; break; } const jx = j % N, jz = (j / N) | 0; for (const [dx, dz] of DIR4) { const X = jx + dx, Z = jz + dz; if (X < 1 || Z < 1 || X > N - 3 || Z > N - 3 || nearB(X, Z)) continue; const k = Z * N + X; if (prev[k] !== -2) continue; prev[k] = j; q.push(k); } }
+        if (hit < 0) return false;
+        for (let j = hit; j >= 0; j = prev[j]) dig(j % N, (j / N) | 0);
+        return true;
+      };
+      const [sx, sz] = center(start);
+      for (let tries = 0; tries < 8; tries++) {
+        const lab = label(), main = lab[sz * N + sx];
+        // 部屋の代表のマス: 中心（守護者の部屋に重なっているときは、部屋の中で外側に残った床）
+        const rep = (r) => { const [cx, cz] = center(r); if (!inB(cx, cz) && tiles[cz * N + cx]) return [cx, cz]; for (let z = r.z0; z < r.z0 + r.h; z++) for (let x = r.x0; x < r.x0 + r.w; x++) if (!inB(x, z) && tiles[z * N + x]) return [x, z]; return null; };
+        const lost = rooms.filter((r) => r !== stairs).map(rep).filter((p) => p && lab[p[1] * N + p[0]] !== main);
+        if (!lost.length) break;
+        const [lx, lz] = lost[0];
+        if (lab[lz * N + lx] < 0) { dig(lx, lz); continue; }
+        route(lab, lab[lz * N + lx], main);
+      }
+      // 入口: 外周の各辺（角を除く）で、外側が入口の部屋とつながった床のところ。入口の部屋に近いものを選ぶ
+      const sides = [
+        { side: 'N', at: (i) => [x0 + i, z0], out: [0, -1], n: x1 - x0 + 1 },
+        { side: 'S', at: (i) => [x0 + i, z1], out: [0, 1], n: x1 - x0 + 1 },
+        { side: 'W', at: (i) => [x0, z0 + i], out: [-1, 0], n: z1 - z0 + 1 },
+        { side: 'E', at: (i) => [x1, z0 + i], out: [1, 0], n: z1 - z0 + 1 },
+      ];
+      let lab = label(), main = lab[sz * N + sx], best = null;
+      const outLab = (sd, x, z) => { const X = x + sd.out[0], Z = z + sd.out[1]; return X >= 0 && Z >= 0 && X < N && Z < N ? lab[Z * N + X] : -1; };
+      sides.forEach((sd) => { for (let i = 2; i < sd.n - 3; i++) { const p = sd.at(i), q2 = sd.at(i + 1), oa = outLab(sd, p[0], p[1]) === main, ob = outLab(sd, q2[0], q2[1]) === main; if (!oa && !ob) continue; const d = Math.hypot(p[0] - sx, p[1] - sz) + (oa && ob ? 0 : 2); if (!best || d < best.d) best = { d, sd, cells: [p, q2] }; } });
+      if (!best) {
+        // 外側に床がなければ、入口の部屋に近い辺のまん中から外へ掘って、つなぐ
+        let bs = null; sides.forEach((sd) => { const m = Math.floor(sd.n / 2), p = sd.at(m), d = Math.hypot(p[0] - sx, p[1] - sz); if (!bs || d < bs.d) bs = { d, sd, m }; });
+        const sd = bs.sd, p = sd.at(bs.m - 1), q2 = sd.at(bs.m);
+        [p, q2].forEach(([x, z]) => { const X = x + sd.out[0], Z = z + sd.out[1]; if (X > 0 && Z > 0 && X < N - 1 && Z < N - 1) tiles[Z * N + X] = 1; });
+        lab = label(); main = lab[sz * N + sx];
+        const c = outLab(sd, p[0], p[1]); if (c >= 0 && c !== main) route(lab, c, main);
+        best = { sd, cells: [p, q2] };
+      }
+      // 入口の 2 マスをあけ、その外側も床にする（扉の前に立てるように）
+      best.cells.forEach(([x, z]) => { tiles[z * N + x] = 1; const X = x + best.sd.out[0], Z = z + best.sd.out[1]; if (X > 0 && Z > 0 && X < N - 1 && Z < N - 1) tiles[Z * N + X] = 1; });
+      Object.assign(stairs, { x0: x0 + 1, z0: z0 + 1, w: x1 - x0 - 1, h: z1 - z0 - 1 }); // 部屋の中は外周の壁の内側
+      stairs.doors = [{ side: best.sd.side, cells: best.cells.slice().sort((p, q2) => p[0] - q2[0] || p[1] - q2[1]), out: best.sd.out }];
+      // 守護者の待つ場所: 扉と反対側の壁の近く（壁から 2 マス）。扉の方を向く
+      const dc = [(best.cells[0][0] + best.cells[1][0]) / 2, (best.cells[0][1] + best.cells[1][1]) / 2], o = best.sd.out;
+      const ix0 = x0 + 1, ix1 = x1 - 1, iz0 = z0 + 1, iz1 = z1 - 1, cl = (v, lo, hi) => Math.max(lo, Math.min(hi, Math.round(v)));
+      stairs.bossAt = o[1] !== 0 ? [cl(dc[0], ix0 + 2, ix1 - 2), o[1] < 0 ? iz1 - 2 : iz0 + 2] : [o[0] < 0 ? ix1 - 2 : ix0 + 2, cl(dc[1], iz0 + 2, iz1 - 2)];
+      stairs.bossFace = o; // 守護者から見た扉の向き（扉は、部屋の外へ向かう向き out の側にある）
     }
     const tilePos = (r) => [ri(r.x0, r.x0 + r.w - 1), ri(r.z0, r.z0 + r.h - 1)];
     const others = rooms.filter((r) => r !== start);
@@ -252,10 +288,12 @@
     }
     const pool = R.enemyPool(floor);
     others.forEach((r) => {
-      if (boss && r === stairs) { spawns.push({ type: R.bossFor(floor), room: r.id, t: center(r) }); return; } // 第36版: 地域ごとの守護者
+      if (boss && r === stairs) { spawns.push({ type: R.bossFor(floor), room: r.id, t: r.bossAt || center(r), face: r.bossFace || null }); return; } // 第36版: 地域ごとの守護者（第38版: 扉の反対側で、扉の方を向いて待つ）
       const n = Math.min(3, Math.floor(rnd() * (r.small ? 1.6 : 2.6)) + (floor >= 12 && rnd() < 0.4 ? 1 : 0)); // 第36版: 深い階でも増えすぎないように（前は 6 階ごとに 1 体ずつ増えた）
       for (let k = 0; k < n; k++) spawns.push({ type: R.pick(pool, rnd), room: r.id, t: tilePos(r) });
     });
+    for (let i = spawns.length - 1; i >= 0; i--) { const t = spawns[i].t, inBoss = boss && stairs.bossRoom && !R.ENEMIES[spawns[i].type].boss && t[0] >= stairs.x0 - 1 && t[0] < stairs.x0 + stairs.w + 1 && t[1] >= stairs.z0 - 1 && t[1] < stairs.z0 + stairs.h + 1; if (!tiles[t[1] * N + t[0]] || inBoss) spawns.splice(i, 1); } // 守護者の部屋の中は守護者だけ
+    for (let i = chests.length - 1; i >= 0; i--) if (!tiles[chests[i].t[1] * N + chests[i].t[0]]) chests.splice(i, 1);
     return { doors: boss ? stairs.doors || [] : [], area: R.areaOf(floor).id, floor, seed, N, tiles, rooms, start: start.id, stairs: stairs.id, portal: portal ? portal.id : stairs.id, chests, spawns, boss, center };
   };
   // タイル → 世界の座標（タイルの中心）
