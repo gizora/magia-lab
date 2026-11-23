@@ -2733,10 +2733,10 @@
         }
         if (t >= 1.1) {
           scene.remove(star); scene.remove(star2);
-          explode(p, 15, 170, spec, null, { silent: true });
-          FX.emit(p, { count: 400, c1: '#ffffff', c2: '#ffb84a', speed: 30, life: 1.2, size: 1.4, drag: 2.5 });
-          FX.ring(new V3(p.x, 0.1, p.z), '#ffd24a', 1, 34, 1.2);
-          FX.ring(p.clone(), '#ffffff', 1, 26, 0.9, { vertical: true, lookAt: camera.position.clone() });
+          explode(p, 19, 230, spec, null, { silent: true }); // 第41版: 4 語になったので、半径 15 → 19m・ダメージ 170 → 230
+          FX.emit(p, { count: 500, c1: '#ffffff', c2: '#ffb84a', speed: 36, life: 1.3, size: 1.6, drag: 2.5 });
+          FX.ring(new V3(p.x, 0.1, p.z), '#ffd24a', 1, 42, 1.3);
+          FX.ring(p.clone(), '#ffffff', 1, 32, 1.0, { vertical: true, lookAt: camera.position.clone() });
           FX.flash(p, '#ffe0a0', 14, 90, 1.0);
           whiteFlash('#fff4d6', 0.9);
           st.shake = 1.1;

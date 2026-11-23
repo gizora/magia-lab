@@ -45,6 +45,17 @@
     save.secrets = Array.isArray(save.secrets) ? save.secrets.filter((id) => MG.SECRETS.some((s) => s.id === id)) : [];
     // 第40版: 隠し魔法になる前の版で同じ並びを放っていると、発見していないのに名前が出て、放っても発見にならなかった。
     // 隠し魔法の並びは、発見の記録があるときだけ「放ったことがある」とみなす（発見の記録だけあるときは、放った記録を足す）
+    // 第41版: 並びを変えた隠し魔法（超新星）は、前の並びの記録・お気に入り・スロットを新しい並びへ移す（前の並びは、ふつうの魔法になる）
+    Object.keys(MG.SECRET_OLD_SEQ || {}).forEach((id) => {
+      const sec = MG.SECRETS.find((x) => x.id === id), oldK = keyOf(MG.SECRET_OLD_SEQ[id]), newK = keyOf(sec.seq);
+      if (!save.secrets.includes(id) || !save.known[oldK]) return;
+      if (!save.known[newK]) save.known[newK] = save.known[oldK];
+      delete save.known[oldK];
+      if (save.fav && save.fav[oldK]) { save.fav[newK] = true; delete save.fav[oldK]; }
+      const swap = (a) => a.map((q) => (Array.isArray(q) && keyOf(q) === oldK ? sec.seq.slice() : q));
+      save.slots = swap(save.slots);
+      Object.keys(save.wandSlots).forEach((w) => { save.wandSlots[w] = swap(save.wandSlots[w]); });
+    });
     MG.SECRETS.forEach((s) => {
       const k = keyOf(s.seq), found = save.secrets.includes(s.id);
       if (!found) delete save.known[k];

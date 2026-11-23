@@ -154,8 +154,9 @@
       desc: '酸化と還元は、必ずセットで起こる。的から的へ、赤と青の稲妻が8回はね移る。', hint: '必ずセットで起こる、2つの反応' },
     { id: 'cumulo',    seq: ['evaporation', 'discharge'], kanji: '積乱雷雲', kana: 'キュムロニンバス', elem: 'lightning', cost: 80,
       desc: '水が蒸発して空へのぼると、やがて雷雲になる。狙った場所に雷雲を呼び、雷を落とし続ける。', hint: '水が空へのぼると、やがて雷が鳴る（2語）' },
-    { id: 'supernova', seq: ['compression', 'expansion', 'combustion'], kanji: '超新星', kana: 'スーパーノヴァ', elem: 'fire', cost: 70,
-      desc: '重い星が一生の最後に起こす大爆発。狙った場所に星を生み、巨大な爆発を起こす。', hint: '押し縮めて、ふくらませて、燃やす（3語）' },
+    // 第41版: 4 語にして強くした（前は 圧縮 → 膨張 → 燃焼 の 3 語・消費 MP 70）
+    { id: 'supernova', seq: ['gravity', 'compression', 'expansion', 'combustion'], kanji: '超新星', kana: 'スーパーノヴァ', elem: 'fire', cost: 85,
+      desc: '重い星は一生の最後に、自分の重さに負けてつぶれ、はね返って大爆発を起こす（重力崩壊）。狙った場所に星を生み、まわり 19m を吹き飛ばす巨大な爆発を起こす。', hint: '重さに負けてつぶれた星は、はね返って燃え上がる（4語）' },
     { id: 'horizon',   seq: ['compression', 'gravity', 'refraction'], kanji: '事象の地平', kana: 'イベント・ホライズン', elem: 'void', cost: 70,
       desc: '押し縮められた重さは、光さえ曲げて飲み込む。狙った場所にブラックホールを生む。', hint: '押し縮めた重さは、光さえ曲げる（3語）' },
     { id: 'aurora',    seq: ['ionization', 'luminescence', 'refraction'], kanji: '極光天幕', kana: 'オーロラ・カーテン', elem: 'prism', cost: 65,
@@ -187,6 +188,7 @@
     { id: 'blades', seq: ['reduction', 'crystallization', 'decomposition', 'acceleration'], kanji: '千刃の門', kana: 'サウザンド・ゲート', elem: 'metal', cost: 85, pvp: 0.35,
       desc: '鉱石から金属を取り出し（還元）、刃の形にそろえ（結晶）、いくつにも分け（分解）、撃ち出す（加速）。背後から左右の空中に 14 の魔法陣を開き、剣・槍・斧を 2.6 秒のあいだ雨のように撃ち続ける。外れた刃は地面や壁に突き刺さる。', hint: '門が開くたび、鋼の雨が降る（4語）' },
   ];
+  MG.SECRET_OLD_SEQ = { supernova: ['compression', 'expansion', 'combustion'] }; // 第41版で並びを変えた隠し魔法の、前の並び
   MG.SECRET_PVP = {};
   MG.SECRETS.forEach((s) => { if (s.pvp) MG.SECRET_PVP[s.id] = s.pvp; });
 
@@ -443,7 +445,7 @@
     power *= (1 + s.echo) * (1 + s.crit * 1.5) * (1 + s.pulses * 0.3);
     if (s.support) power = s.dmg * (1 + s.echo);
     if (formId === 'fly') power = s.dur;
-    if (sec) power = { redox: 240, cumulo: 330, supernova: 200, horizon: 290, aurora: 70 * 8, zero: 320, fusion: 260, erase: 999 }[sec.id] || power;
+    if (sec) power = { redox: 240, cumulo: 330, supernova: 270, horizon: 290, aurora: 70 * 8, zero: 320, fusion: 260, erase: 999 }[sec.id] || power;
     s.power = Math.round(power);
     if (formId === 'summon') power = s.dmg * (MG.SUMMONS[s.summonType] || MG.SUMMONS.spirit).dmgMul * 8 * (s.summonCount || 1);
     s.power = Math.round(power);
