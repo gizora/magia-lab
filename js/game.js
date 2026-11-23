@@ -2390,7 +2390,7 @@
   // 木や鳥など、いくつもの部品でできた物を片づける（光の玉の材質は色ごとに共有しているので消さない）
   function disposeObj(o) {
     scene.remove(o);
-    o.traverse((m) => { if (m.isMesh) { if (m.geometry) m.geometry.dispose(); if (m.material) m.material.dispose(); } });
+    o.traverse((m) => { if (m.isMesh || m.isPoints) { if (m.geometry) m.geometry.dispose(); if (m.material) m.material.dispose(); } }); // 第40版: 光の粒（Points）も片づける
   }
   // 大地震のひび割れ模様
   let crackTexC = null;
@@ -2427,75 +2427,203 @@
         }`,
     });
   }
-  // 世界樹（高さ 20m）。幹・根・枝・光る葉のかたまり・幹を流れる光の筋
+  // ---- 第40版: 世界樹と不死鳥の見た目を作り直した（参考: ゲーム素材/ユグドラシル.jpg・フェニックス.webp・フェニックス２.jpg。絵そのものはゲームに入れない） ----
+  // 色の数値を、画面で見える色として扱う（そのままだと白っぽく薄く出る）
+  const lin = (hex) => new THREE.Color(hex).convertSRGBToLinear();
+  // 先細りの管（太さ r0 → r1）。曲線の点を通る
+  function taperTube(pts, r0, r1, seg, radial) {
+    const curve = new THREE.CatmullRomCurve3(pts), geo = new THREE.TubeGeometry(curve, seg, 1, radial, false);
+    const pa = geo.attributes.position, P = new V3(), v = new V3();
+    for (let i = 0; i <= seg; i++) {
+      curve.getPointAt(i / seg, P); const r = r0 + (r1 - r0) * (i / seg);
+      for (let j = 0; j <= radial; j++) { const k = i * (radial + 1) + j; v.fromBufferAttribute(pa, k).sub(P).multiplyScalar(r).add(P); pa.setXYZ(k, v.x, v.y, v.z); }
+    }
+    geo.computeVertexNormals();
+    return geo;
+  }
+  // 光の粒の雲（加算で光る点）。make(i) が [x, y, z, 色] を返す
+  function glowPoints(n, size, opacity, make) {
+    const pos = [], col = [], c = new THREE.Color();
+    for (let i = 0; i < n; i++) { const [x, y, z, hex] = make(i); pos.push(x, y, z); c.set(hex).convertSRGBToLinear(); col.push(c.r, c.g, c.b); }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    return new THREE.Points(geo, new THREE.PointsMaterial({ size, map: FX.glowTex, vertexColors: true, transparent: true, opacity, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
+  }
+  // 世界樹（高さ 20m）。チェック項目: 何本もの筋がねじれ合った幹／四方へ這う根と、地面に光る細い根／
+  // 上で大きく広がり、先へ行くほど金色に光る枝／樹冠の中の金の渦（輪と結び目）／てっぺんの金の花のつぼみ／
+  // 樹冠の金の光の粒／木を取り巻く青緑の光の渦（左右に広がる帯）
   function makeYggdrasil() {
     const g = new THREE.Group();
-    const bark = new THREE.MeshStandardMaterial({ color: 0x5e3c26, roughness: 0.9, flatShading: true, emissive: 0x2a170a, emissiveIntensity: 0.6 });
-    const vein = new THREE.MeshBasicMaterial({ color: 0xc8ff8a, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false });
-    const leaf = new THREE.MeshStandardMaterial({ color: 0x2f9a3a, emissive: 0x38c24a, emissiveIntensity: 0.45, roughness: 0.6, flatShading: true });
-    const leaf2 = new THREE.MeshStandardMaterial({ color: 0xd8b040, emissive: 0xffb830, emissiveIntensity: 0.5, roughness: 0.5, flatShading: true });
-    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.85, 2.0, 13, 9, 5), bark); trunk.position.y = 6.5; g.add(trunk);
-    // 少しねじれた幹（頂点を回す）
-    const pa = trunk.geometry.attributes.position;
-    for (let i = 0; i < pa.count; i++) { const y = pa.getY(i), a = (y + 6.5) * 0.06, x = pa.getX(i), z = pa.getZ(i); pa.setX(i, x * Math.cos(a) - z * Math.sin(a)); pa.setZ(i, x * Math.sin(a) + z * Math.cos(a)); }
-    trunk.geometry.computeVertexNormals();
+    const bark = new THREE.MeshStandardMaterial({ color: lin(0x5c3c24), roughness: 0.85, emissive: lin(0x3a1c08), emissiveIntensity: 1.0 });
+    const goldB = new THREE.MeshStandardMaterial({ color: lin(0xd8a040), emissive: lin(0xd08418), emissiveIntensity: 1.1, roughness: 0.45, metalness: 0.3 });
+    const goldG = new THREE.MeshBasicMaterial({ color: lin(0xffb040), toneMapped: false, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false });
+    const put = (geo, mat, x, y, z) => { const m = new THREE.Mesh(geo, mat); if (x != null) m.position.set(x, y, z); g.add(m); return m; };
+    // 幹: 中の芯と、ねじれ合う 7 本の筋（2 本は金色に光る）
+    put(taperTube([new V3(0, 0, 0), new V3(0, 4, 0), new V3(0, 8, 0), new V3(0, 11.5, 0)], 1.25, 0.75, 8, 9), bark);
     for (let k = 0; k < 7; k++) {
-      const a = (k / 7) * Math.PI * 2 + rand(-0.2, 0.2);
-      const p = new THREE.Group(); p.rotation.y = a; g.add(p);
-      const root = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.75, 4.6, 6), bark); root.position.set(2.0, 0.55, 0); root.rotation.z = 1.25; p.add(root);
-      const rv = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.07, 0.07), vein); rv.position.set(2.1, 0.62, 0.32); rv.rotation.z = -0.32; p.add(rv);
+      const a0 = (k / 7) * Math.PI * 2, pts = [];
+      for (let i = 0; i <= 12; i++) { const y = i * 0.95, a = a0 + y * 0.32, rr = 1.55 - Math.sin(Math.min(1, y / 11) * Math.PI) * 0.75 + (y > 8 ? (y - 8) * 0.18 : 0); pts.push(new V3(Math.cos(a) * rr, y, Math.sin(a) * rr)); }
+      put(taperTube(pts, 0.62, 0.38, 40, 6), k % 3 === 1 ? goldB : bark);
     }
+    // 根: 四方へ這う太い根と、地面を光って走る細い根
+    for (let k = 0; k < 10; k++) {
+      const a = (k / 10) * Math.PI * 2 + rand(-0.15, 0.15), c = Math.cos(a), s = Math.sin(a), L = rand(5, 7);
+      put(taperTube([new V3(c * 1.1, 1.6, s * 1.1), new V3(c * 2.4, 0.7, s * 2.4), new V3(c * L * 0.7, 0.15, s * L * 0.7), new V3(c * L, -0.25, s * L)], 0.7, 0.08, 16, 6), bark);
+      for (let j = 0; j < 2; j++) {
+        const b = a + (j ? 1 : -1) * rand(0.2, 0.45), L2 = L + rand(1.5, 4);
+        put(taperTube([new V3(c * L * 0.5, 0.25, s * L * 0.5), new V3(Math.cos(b) * L2 * 0.75, 0.08, Math.sin(b) * L2 * 0.75), new V3(Math.cos(b) * L2, 0.05, Math.sin(b) * L2)], 0.09, 0.02, 10, 4), goldG);
+      }
+    }
+    // 枝: 幹の上から 8 本。2 本ずつに分かれながら広がり、先ほど金色に光る
+    const branch = (p0, dir, len, r, depth) => {
+      const mid = p0.clone().addScaledVector(dir, len * 0.5).add(new V3(rand(-0.5, 0.5), rand(0, 0.6), rand(-0.5, 0.5)));
+      const end = p0.clone().addScaledVector(dir, len); end.y += len * 0.15;
+      put(taperTube([p0, mid, end], r, r * 0.62, 8, depth < 2 ? 6 : 4), depth < 1 ? bark : depth < 2 ? goldB : goldG);
+      if (depth >= 3) return;
+      const n = depth === 0 ? 3 : 2;
+      for (let k = 0; k < n; k++) {
+        const d = dir.clone().applyAxisAngle(new V3(0, 1, 0), (k - (n - 1) / 2) * rand(0.5, 0.8)); d.y += rand(0.0, 0.22); d.normalize();
+        branch(end, d, len * rand(0.55, 0.7), r * 0.6, depth + 1);
+      }
+    };
     for (let k = 0; k < 8; k++) {
-      const a = (k / 8) * Math.PI * 2 + rand(-0.3, 0.3);
-      const p = new THREE.Group(); p.position.y = 9.5 + (k % 3) * 1.1; p.rotation.y = a; g.add(p);
-      const tilt = new THREE.Group(); tilt.rotation.z = -rand(0.75, 1.05); p.add(tilt);
-      const br = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.48, 6.2, 6), bark); br.position.y = 3.1; tilt.add(br);
+      const a = (k / 8) * Math.PI * 2 + rand(-0.2, 0.2), el = rand(0.25, 0.55);
+      branch(new V3(Math.cos(a) * 0.9, 10.2 + (k % 3) * 0.7, Math.sin(a) * 0.9), new V3(Math.cos(a) * Math.cos(el), Math.sin(el), Math.sin(a) * Math.cos(el)), rand(4.6, 5.6), 0.5, 0);
     }
-    // 光る葉のかたまり（下の輪・上の輪・てっぺん）
-    const blobs = [];
-    const addBlob = (x, y, z, r, m) => { const b = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 1), m); b.position.set(x, y, z); b.rotation.set(rand(0, 6), rand(0, 6), 0); g.add(b); blobs.push(b); };
-    for (let k = 0; k < 7; k++) { const a = (k / 7) * Math.PI * 2; addBlob(Math.cos(a) * 5.6, 14.2 + rand(-0.4, 0.4), Math.sin(a) * 5.6, rand(2.6, 3.3), k % 3 ? leaf : leaf2); }
-    for (let k = 0; k < 5; k++) { const a = (k / 5) * Math.PI * 2 + 0.5; addBlob(Math.cos(a) * 3.2, 17, Math.sin(a) * 3.2, rand(2.5, 3), k % 2 ? leaf : leaf2); }
-    addBlob(0, 18.6, 0, 2.8, leaf);
-    // 幹を流れる光の筋
-    for (let k = 0; k < 5; k++) { const a = (k / 5) * Math.PI * 2; const v = new THREE.Mesh(new THREE.BoxGeometry(0.08, 12, 0.08), vein); v.position.set(Math.cos(a) * 1.35, 6.2, Math.sin(a) * 1.35); v.rotation.z = Math.cos(a) * 0.08; v.rotation.x = -Math.sin(a) * 0.08; g.add(v); }
-    const crown = FX.glowSprite('#b8ff7a', 18); crown.position.y = 16; g.add(crown);
+    // 樹冠の金の渦（傾いた輪と、まん中の結び目）と、てっぺんの金のつぼみ
+    const spin = [];
+    for (let k = 0; k < 9; k++) { const m = put(new THREE.TorusGeometry(rand(1.2, 3.2), 0.08, 6, 40), goldB, rand(-1.5, 1.5), 12.8 + k * 0.6, rand(-1.5, 1.5)); m.rotation.set(rand(-1.2, 1.2), rand(0, 6), rand(-1.2, 1.2)); }
+    for (let k = 0; k < 16; k++) { // 渦巻きの金の糸
+      const a = rand(0, Math.PI * 2), r = rand(2.5, 7), cx = Math.cos(a) * r, cz = Math.sin(a) * r, cy = rand(12, 17.5), rr = rand(0.5, 1.1), pts = [];
+      for (let i = 0; i <= 14; i++) { const u = i / 14, b = u * Math.PI * 3.2; pts.push(new V3(cx + Math.cos(b + a) * rr * (1 - u * 0.5), cy + u * 1.4, cz + Math.sin(b + a) * rr * (1 - u * 0.5))); }
+      put(taperTube(pts, 0.07, 0.02, 28, 4), k % 2 ? goldB : goldG);
+    }
+    const knot2 = put(new THREE.TorusKnotGeometry(2.6, 0.08, 160, 5, 3, 5), goldG, 0, 13.6, 0); knot2.rotation.x = Math.PI / 2; spin.push(knot2);
+    const knot = put(new THREE.TorusKnotGeometry(1.5, 0.12, 140, 6, 2, 3), goldB, 0, 15.6, 0); spin.push(knot);
+    const bud = new THREE.Group(); bud.position.set(0, 20.2, 0); bud.scale.setScalar(1.35); g.add(bud);
+    const budCore = new THREE.Mesh(new THREE.SphereGeometry(1.0, 16, 12), goldB); budCore.scale.set(1, 1.25, 1); bud.add(budCore);
+    for (let k = 0; k < 14; k++) { const a = (k / 14) * Math.PI * 2, row = k % 2, p = new THREE.Mesh(new THREE.ConeGeometry(0.42, 1.5, 6), goldB); p.position.set(Math.cos(a) * 0.75, -0.2 + row * 0.55, Math.sin(a) * 0.75); p.rotation.set(Math.sin(a) * (0.7 - row * 0.25), 0, -Math.cos(a) * (0.7 - row * 0.25)); bud.add(p); }
+    const budGlow = FX.glowSprite('#ffe6a0', 7); bud.add(budGlow);
+    // 樹冠の金の光の粒
+    const crownPts = glowPoints(520, 0.55, 0.9, () => { const a = rand(0, Math.PI * 2), r = Math.sqrt(Math.random()) * 8, y = 12 + rand(0, 7.5) * (1 - r / 12); return [Math.cos(a) * r, y, Math.sin(a) * r, Math.random() < 0.7 ? (Math.random() < 0.5 ? '#ffb030' : '#ffd070') : '#fff0c0']; });
+    g.add(crownPts); spin.push(crownPts);
+    // 木を取り巻く青緑の光の渦: 傾けた 2 本の帯（それぞれ回る）
+    [-1, 1].forEach((sd) => {
+      const tilt = new THREE.Group(); tilt.position.y = 11; tilt.rotation.set(sd * 0.32, 0, sd * 0.22); g.add(tilt);
+      const band = glowPoints(700, 0.85, 0.4, (i) => { const a = (i / 700) * Math.PI * 2 * 3 + rand(-0.05, 0.05), r = 9.5 + Math.sin(a * 2.5) * 1.2 + rand(-1, 1); return [Math.cos(a) * r, rand(-1.4, 1.4) + Math.sin(a * 1.5) * 1.2, Math.sin(a) * r, ['#14d8a0', '#28f088', '#18b0e0', '#60ffd8'][i % 4]]; });
+      tilt.add(band); spin.push(band);
+    });
+    const crown = FX.glowSprite('#c88a28', 13); crown.position.y = 15; g.add(crown);
+    const aura = FX.glowSprite('#0c8a78', 24); aura.position.y = 11; g.add(aura);
     const base = FX.glowSprite('#fff3b8', 7); base.position.y = 1.5; g.add(base);
     // 足もとの輪（つるが届く範囲 12m）
     const ring = new THREE.Mesh(new THREE.PlaneGeometry(24, 24), new THREE.MeshBasicMaterial({ map: FX.circleTex, color: 0x9dff6a, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false }));
     ring.rotation.x = -Math.PI / 2; ring.position.y = 0.06; g.add(ring);
-    return { g, blobs, ring };
+    // 同じ材質の部品をまとめて、描く回数を減らす（回す部品と、つぼみ・輪は残す）
+    if (MG.Monsters && MG.Monsters.util && MG.Monsters.util.bake) MG.Monsters.util.bake(g, { spin, bud, ring });
+    return { g, blobs: spin, ring };
   }
-  // 不死鳥（+Z が前）。翼は羽ばたき用の軸に付ける
+  // 羽根 1 枚の形（+Y へ長さ L・幅 w。先がとがり、curl だけ横に曲がる）
+  function featherGeo(L, w, curl) {
+    const s = new THREE.Shape();
+    s.moveTo(0, 0);
+    s.quadraticCurveTo(w * 0.62, L * 0.28, w * 0.42 + curl * 0.3, L * 0.7);
+    s.quadraticCurveTo(w * 0.22 + curl * 0.65, L * 0.93, curl, L);
+    s.quadraticCurveTo(-w * 0.18 + curl * 0.5, L * 0.86, -w * 0.4 + curl * 0.2, L * 0.64);
+    s.quadraticCurveTo(-w * 0.58, L * 0.28, 0, 0);
+    return new THREE.ShapeGeometry(s, 5);
+  }
+  // 羽根を 1 つの形にまとめる。羽根ごとに、根元 → まん中 → 先 の 3 色で色を変える
+  function featherSet(list) {
+    const pos = [], col = [], v = new V3(), c = new THREE.Color();
+    list.forEach(({ L, w, curl, m, cols }) => {
+      const geo = featherGeo(L, w, curl || 0).toNonIndexed(), p = geo.attributes.position;
+      const C = cols.map((h) => lin(h));
+      for (let i = 0; i < p.count; i++) {
+        v.fromBufferAttribute(p, i); const t = Math.max(0, Math.min(1, v.y / L));
+        if (t < 0.5) c.copy(C[0]).lerp(C[1], t * 2); else c.copy(C[1]).lerp(C[2], (t - 0.5) * 2);
+        v.applyMatrix4(m); pos.push(v.x, v.y, v.z); col.push(c.r, c.g, c.b);
+      }
+      geo.dispose();
+    });
+    const out = new THREE.BufferGeometry();
+    out.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    out.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    return out;
+  }
+  // 羽根の置き方: 根元 (x, y, z)、翼の面（XZ）の中で向き phi（0 = 後ろ、-π/2 = 外）。lift は面からの持ち上げ
+  const featherAt = (x, y, z, phi, lift) => new THREE.Matrix4().makeTranslation(x, y, z)
+    .multiply(new THREE.Matrix4().makeRotationY(phi)).multiply(new THREE.Matrix4().makeRotationX(-Math.PI / 2 + (lift || 0)));
+  // 不死鳥（+Z が前）。チェック項目: 大きく広げた翼／根元は赤く、先へ行くほど金色に光る何層もの羽根（雨覆・次列風切・初列風切）／
+  // 金色の胸と、炎のような冠羽・曲がったくちばし・光る目／長く流れる尾羽と、先の金の目玉模様／たたんだ足の爪／まわりの光
   function makePhoenix() {
     const g = new THREE.Group();
-    const add = (m, mat) => new THREE.Mesh(m, mat);
-    const body = new THREE.MeshBasicMaterial({ color: 0xff6a18 });
-    const hot = new THREE.MeshBasicMaterial({ color: 0xffd24a });
-    const b = add(new THREE.SphereGeometry(0.5, 14, 10), body); b.scale.set(0.75, 0.7, 1.7); g.add(b);
-    const h = add(new THREE.SphereGeometry(0.36, 12, 8), hot); h.position.set(0, 0.25, 1.05); g.add(h);
-    const beak = add(new THREE.ConeGeometry(0.11, 0.45, 6), hot); beak.rotation.x = Math.PI / 2; beak.position.set(0, 0.2, 1.5); g.add(beak);
-    const crest = add(new THREE.ConeGeometry(0.08, 0.7, 5), body); crest.position.set(0, 0.7, 0.85); crest.rotation.x = -0.7; g.add(crest);
-    // 翼: 外へ広がる羽の形（2枚重ねて、内側を明るく）
-    const shape = new THREE.Shape();
-    [[0, 0.5], [1.4, 0.75], [3.0, 0.5], [4.4, -0.1], [3.6, -0.45], [3.9, -0.8], [2.8, -0.85], [3.0, -1.2], [1.8, -1.05], [0.6, -0.7], [0, -0.4]].forEach(([x, y], i) => (i ? shape.lineTo(x, y) : shape.moveTo(x, y)));
-    const wingGeo = new THREE.ShapeGeometry(shape);
-    const wingMat = new THREE.MeshBasicMaterial({ color: 0xff4a10, transparent: true, opacity: 0.92, side: THREE.DoubleSide, depthWrite: false });
-    const wingMat2 = new THREE.MeshBasicMaterial({ color: 0xffc040, transparent: true, opacity: 0.6, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false });
+    const bm = (hex) => new THREE.MeshBasicMaterial({ color: lin(hex), toneMapped: false });
+    const featherMat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, toneMapped: false });
+    const add = (geo, mat, x, y, z, parent) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); (parent || g).add(m); return m; };
+    // 翼（右の翼を作り、左は鏡に映す）。外へ +X
+    const lerp2 = (a, b, u) => [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u];
+    const F = [];
+    const S = [0, 0.1], Wr = [2.7, 0.25], Tip = [3.5, -0.1];
+    for (let i = 0; i < 10; i++) { const u = i / 9, p = lerp2(Wr, Tip, u); F.push({ L: 1.9 + u * 0.55, w: 0.38, curl: 0.12, m: featherAt(p[0], 0, p[1], -0.75 - u * (Math.PI / 2 - 0.65)), cols: ['#c41a0a', '#ff7a12', '#ffe680'] }); } // 初列風切（先の羽根ほど外を向いて長い）
+    for (let i = 0; i < 9; i++) { const u = i / 8, p = lerp2(S, Wr, u); F.push({ L: 1.75 + u * 0.25, w: 0.42, curl: 0.06, m: featherAt(p[0] + 0.2, 0.012, p[1] - 0.05, -0.05 - u * 0.55), cols: ['#b0120a', '#ff5a10', '#ffc040'] }); } // 次列風切
+    for (let i = 0; i < 13; i++) { const u = i / 12, p = lerp2(S, [3.3, 0.05], u); F.push({ L: 0.95 + u * 0.25, w: 0.34, m: featherAt(p[0] + 0.1, 0.03, p[1], -0.15 - u * 1.1), cols: ['#a01208', '#ff4a10', '#ffb030'] }); } // 雨覆
+    for (let i = 0; i < 11; i++) { const u = i / 10, p = lerp2(S, Wr, u); F.push({ L: 0.55, w: 0.28, m: featherAt(p[0] + 0.1, 0.05, p[1] + 0.12, -0.3 - u * 0.5), cols: ['#ff7a1a', '#ffc040', '#fff2a8'] }); } // 前のふちの小さな羽根
+    const wingGeo = featherSet(F);
     const wings = [-1, 1].map((sd) => {
-      const p = new THREE.Group(); p.position.set(sd * 0.3, 0.1, 0.1); g.add(p);
-      [[wingMat, 1], [wingMat2, 0.7]].forEach(([m, k]) => { const w = add(wingGeo, m); w.rotation.x = Math.PI / 2; w.scale.set(sd * k, k, k); w.position.y = k < 1 ? 0.02 : 0; p.add(w); });
+      const p = new THREE.Group(); p.position.set(sd * 0.32, 0.12, 0.15); g.add(p);
+      const w = new THREE.Mesh(wingGeo, featherMat); w.scale.x = sd; p.add(w);
+      [[1.4, -0.7, 2.2], [2.9, -0.9, 2.6], [4.2, -0.8, 2]].forEach(([x, z, s]) => { const gl = FX.glowSprite('#ff8a20', s); gl.position.set(sd * x, 0.05, z); p.add(gl); });
       return p;
     });
-    // 長い尾羽
-    const tails = [];
-    for (let k = -2; k <= 2; k++) {
-      const t = add(new THREE.ConeGeometry(0.14, 2.6 - Math.abs(k) * 0.35, 5), k % 2 ? body : wingMat);
-      t.rotation.x = -Math.PI / 2 + 0.12; t.position.set(k * 0.18, -0.05 - Math.abs(k) * 0.04, -1.9 + Math.abs(k) * 0.15); t.rotation.z = k * 0.18; g.add(t); tails.push(t);
+    // 胴・金色の胸・首・頭
+    add(new THREE.SphereGeometry(0.5, 16, 12), bm(0xff5a10), 0, 0, 0).scale.set(0.62, 0.6, 1.3);
+    add(new THREE.SphereGeometry(0.42, 14, 10), bm(0xffb838), 0, -0.06, 0.38).scale.set(0.82, 0.88, 1);
+    add(new THREE.CylinderGeometry(0.2, 0.3, 0.65, 10), bm(0xff8a20), 0, 0.32, 0.86).rotation.x = 0.95;
+    const bodyF = [];
+    for (let row = 0; row < 5; row++) {
+      const z = 0.55 - row * 0.3, sc = Math.sqrt(Math.max(0.05, 1 - (z / 0.66) * (z / 0.66)));
+      for (let k = -3; k <= 3; k++) {
+        const th = k * 0.5 + (row % 2) * 0.25;
+        const m = new THREE.Matrix4().makeTranslation(Math.sin(th) * 0.33 * sc, Math.cos(th) * 0.31 * sc, z).multiply(new THREE.Matrix4().makeRotationZ(-th)).multiply(new THREE.Matrix4().makeRotationX(-Math.PI / 2 + 0.12));
+        bodyF.push({ L: 0.5, w: 0.3, m, cols: ['#e8380c', '#ff8a20', '#ffd050'] });
+      }
     }
-    const glow = FX.glowSprite('#ff5a10', 4.5); g.add(glow);
-    const core = FX.glowSprite('#ffd070', 1.4); core.position.z = 0.4; g.add(core);
-    g.scale.setScalar(1.6);
+    g.add(new THREE.Mesh(featherSet(bodyF), featherMat));
+    const head = new THREE.Group(); head.position.set(0, 0.62, 1.16); g.add(head);
+    add(new THREE.SphereGeometry(0.3, 14, 10), bm(0xffa830), 0, 0, 0, head).scale.set(0.9, 0.95, 1.15);
+    add(new THREE.ConeGeometry(0.1, 0.42, 8), bm(0xffe080), 0, -0.06, 0.36, head).rotation.x = Math.PI / 2;
+    add(new THREE.ConeGeometry(0.05, 0.16, 6), bm(0xffd060), 0, -0.14, 0.53, head).rotation.x = Math.PI;
+    [-1, 1].forEach((sd) => { add(new THREE.SphereGeometry(0.055, 8, 6), bm(0xfff6c0), sd * 0.16, 0.06, 0.16, head); add(new THREE.SphereGeometry(0.03, 6, 4), bm(0x3a0800), sd * 0.18, 0.06, 0.2, head); });
+    // 冠羽: 頭の後ろへ流れる炎のような羽根（横から見える向き）
+    const crestF = [];
+    for (let k = 0; k < 6; k++) {
+      const m = new THREE.Matrix4().makeTranslation(0, 0.18, -0.05).multiply(new THREE.Matrix4().makeRotationZ((k - 2.5) * 0.12)).multiply(new THREE.Matrix4().makeRotationX(-0.55 - k * 0.12)).multiply(new THREE.Matrix4().makeRotationY(Math.PI / 2));
+      crestF.push({ L: 0.9 + (k % 3) * 0.3, w: 0.26, curl: -0.12, m, cols: ['#ff5a10', '#ffb030', '#fff2a8'] });
+    }
+    head.add(new THREE.Mesh(featherSet(crestF), featherMat));
+    // 長い尾羽（1 本ずつ揺れる）と、先の金の目玉模様
+    const tails = [], eyeO = bm(0xffd24a), eyeI = bm(0xc8200a);
+    for (let k = -3; k <= 3; k++) {
+      const piv = new THREE.Group(); piv.position.set(k * 0.07, -0.05, -0.85); piv.rotation.set(-0.1 - Math.abs(k) * 0.03, k * 0.17, 0); g.add(piv);
+      const L = 4.0 - Math.abs(k) * 0.35;
+      const t = new THREE.Mesh(featherSet([{ L, w: 0.34, curl: (k % 2 ? 0.35 : -0.35), m: new THREE.Matrix4().makeRotationX(-Math.PI / 2), cols: ['#d8200a', '#ff7a12', '#ffd050'] }]), featherMat); t.rotation.z = (k % 2 ? 1 : -1) * (0.5 + Math.abs(k) * 0.12); piv.add(t);
+      const e1 = add(new THREE.CircleGeometry(0.17, 16), eyeO, (k % 2 ? 0.35 : -0.35) * 0.85, 0.02, -L * 0.9, t); e1.rotation.x = -Math.PI / 2; e1.material.side = THREE.DoubleSide;
+      const e2 = add(new THREE.CircleGeometry(0.08, 12), eyeI, (k % 2 ? 0.35 : -0.35) * 0.85, 0.03, -L * 0.9, t); e2.rotation.x = -Math.PI / 2; e2.material.side = THREE.DoubleSide;
+      tails.push(t);
+    }
+    // たたんだ足と爪
+    const claw = bm(0x6a3008);
+    [-1, 1].forEach((sd) => {
+      const leg = new THREE.Group(); leg.position.set(sd * 0.16, -0.35, -0.15); leg.rotation.x = 0.9; g.add(leg);
+      add(new THREE.CylinderGeometry(0.04, 0.05, 0.45, 6), bm(0xc86a10), 0, -0.22, 0, leg);
+      for (let j = -1; j <= 1; j++) add(new THREE.ConeGeometry(0.025, 0.16, 5), claw, j * 0.05, -0.48, 0.05, leg).rotation.x = 2.4;
+    });
+    const glow = FX.glowSprite('#ff5a10', 6); g.add(glow);
+    const core = FX.glowSprite('#ffd070', 2); core.position.z = 0.4; g.add(core);
+    const hg = FX.glowSprite('#ffb040', 1.2); hg.position.set(0, 0.62, 1.16); g.add(hg);
+    g.scale.setScalar(1.35);
     return { g, wings, tails };
   }
   const bez = (a, b, c, d, u) => {
@@ -4005,11 +4133,11 @@
   G.setPaused = function (v) { st.paused = !!v; if (v) { input.mouseDown = false; input.keys = {}; input.move.x = input.move.y = 0; if (MG.Draw) MG.Draw.cancelStroke(); } };
 
   // ======================================================================
-  //  成長（第26版）: レベル・経験値・能力・お金・回復薬・持っている杖
+  //  成長（第26版）: レベル・経験値・能力・お金・持っている杖（回復薬は第40版でなくした）
   //  能力は対戦にも反映する（最大HP・最大MP・MPの回復・威力・足の速さ・待ち時間）
   // ======================================================================
   const RP = MG.RPG;
-  const P = (G.prog = { prog: RP.newProgress(), gold: RP.START_GOLD, potions: 0, wands: ['novice'], bestFloor: 0 });
+  const P = (G.prog = { prog: RP.newProgress(), gold: RP.START_GOLD, wands: ['novice'], bestFloor: 0 });
   let pendingRun = null; // 第39版: 途中で閉じた探索（今の階の最初から再開する）
   let DER = RP.derive(P.prog);
   G.derived = () => DER;
@@ -4027,7 +4155,9 @@
     o = o || {};
     P.prog = RP.validProgress(o.prog);
     P.gold = Math.max(0, Math.round(+o.gold) || 0);
-    P.potions = Math.max(0, Math.min(RP.POTION.max, Math.round(+o.potions) || 0));
+    // 第40版: 回復薬をなくした。持っていた回復薬は、買ったときの値段（1 個 30 G）でお金に戻す
+    const oldPot = Math.max(0, Math.min(9, Math.round(+o.potions) || 0));
+    if (oldPot) P.gold += oldPot * 30;
     P.wands = Array.isArray(o.wands) ? ['novice'].concat(o.wands.filter((id) => MG.WAND_MAP[id] && id !== 'novice' && id !== 'bare')) : ['novice'];
     P.wands = [...new Set(P.wands)];
     P.bestFloor = Math.max(0, Math.round(+o.bestFloor) || 0);
@@ -4035,11 +4165,11 @@
     applyProgress();
     st.mp = st.mpMax; D.hp = D.maxHp;
   };
-  const progNow = () => ({ prog: RP.cloneProgress(P.prog), gold: P.gold, potions: P.potions, wands: P.wands.slice(), bestFloor: P.bestFloor });
+  const progNow = () => ({ prog: RP.cloneProgress(P.prog), gold: P.gold, wands: P.wands.slice(), bestFloor: P.bestFloor });
   // 保存する中身。探索中は「今の階に着いた時点」を保存する。倒れて失うと決まったあとは、失ったあとの中身を保存する
   G.getProgress = function () {
     if (D.on && D.run) {
-      if (D.lost) return Object.assign(progNow(), { prog: RP.cloneProgress(D.run.snapshot), potions: Math.max(0, P.potions - D.run.potGain) });
+      if (D.lost) return Object.assign(progNow(), { prog: RP.cloneProgress(D.run.snapshot) });
       if (D.cp) return JSON.parse(JSON.stringify(D.cp));
     } else if (pendingRun) return Object.assign(progNow(), { run: pendingRun });
     return progNow();
@@ -4049,7 +4179,7 @@
     const n = (v, a, b) => Math.max(a, Math.min(b, Math.round(+v) || 0));
     if (!(+r.floor >= 1) || !Number.isFinite(+r.seed)) return null;
     return { floor: n(r.floor, 1, 999), seed: n(r.seed, 0, 1e9), hp: n(r.hp, 1, 1e5), mp: n(r.mp, 0, 1e5), snapshot: RP.validProgress(r.snapshot),
-      gold: n(r.gold, 0, 1e9), potGain: n(r.potGain, 0, RP.POTION.max), xp: n(r.xp, 0, 1e9), kills: n(r.kills, 0, 1e7), startLevel: n(r.startLevel, 1, 999), floors: n(r.floors, 1, 999) };
+      gold: n(r.gold, 0, 1e9), xp: n(r.xp, 0, 1e9), kills: n(r.kills, 0, 1e7), startLevel: n(r.startLevel, 1, 999), floors: n(r.floors, 1, 999) };
   }
   G.playerPos = () => player.pos;
   G.playerYaw = () => player.yaw;
@@ -4063,13 +4193,6 @@
     const price = RP.WAND_PRICE[id] || 0;
     if (P.gold < price) return 'gold';
     P.gold -= price; P.wands.push(id);
-    if (MG.UI && MG.UI.onProgress) MG.UI.onProgress();
-    return 'ok';
-  };
-  G.buyPotion = function () {
-    if (P.potions >= RP.POTION.max) return 'full';
-    if (P.gold < RP.POTION.price) return 'gold';
-    P.gold -= RP.POTION.price; P.potions++;
     if (MG.UI && MG.UI.onProgress) MG.UI.onProgress();
     return 'ok';
   };
@@ -4196,7 +4319,7 @@
     D.coop = !!party; CO.rev = null; CO.revTo = null;
     pendingRun = null;
     D.on = true; D.alive = true; D.lost = false; D.cp = null;
-    D.run = { snapshot: RP.cloneProgress(P.prog), gold: 0, potGain: 0, xp: 0, kills: 0, startLevel: P.prog.level, floors: 0 };
+    D.run = { snapshot: RP.cloneProgress(P.prog), gold: 0, xp: 0, kills: 0, startLevel: P.prog.level, floors: 0 };
     D.hp = D.maxHp; st.mp = st.mpMax;
     resetSup();
     nextFloor(1, party ? party.seed : null);
@@ -4211,14 +4334,14 @@
   function checkpoint() {
     const r = D.run;
     D.cp = Object.assign(progNow(), { run: { floor: D.floor, seed: D.seed, hp: Math.max(1, Math.round(D.hp)), mp: Math.round(st.mp), snapshot: RP.cloneProgress(r.snapshot),
-      gold: r.gold, potGain: r.potGain, xp: r.xp, kills: r.kills, startLevel: r.startLevel, floors: r.floors } });
+      gold: r.gold, xp: r.xp, kills: r.kills, startLevel: r.startLevel, floors: r.floors } });
   }
   function resumeRun() {
     const r = pendingRun;
     if (!r || M.on || D.on) return false;
     pendingRun = null;
     D.on = true; D.alive = true; D.lost = false; D.cp = null; D.coop = false;
-    D.run = { snapshot: RP.cloneProgress(r.snapshot), gold: r.gold, potGain: r.potGain, xp: r.xp, kills: r.kills, startLevel: r.startLevel, floors: r.floors };
+    D.run = { snapshot: RP.cloneProgress(r.snapshot), gold: r.gold, xp: r.xp, kills: r.kills, startLevel: r.startLevel, floors: r.floors };
     D.hp = Math.min(D.maxHp, r.hp); st.mp = Math.min(st.mpMax, r.mp);
     resetSup();
     nextFloor(r.floor, r.seed);
@@ -4230,7 +4353,7 @@
     if (!D.on) return;
     if (D.lost || !D.cp) { leaveDungeon('death', true); return; }
     const c = D.cp;
-    P.prog = RP.cloneProgress(c.prog); P.gold = c.gold; P.potions = c.potions; P.bestFloor = c.bestFloor;
+    P.prog = RP.cloneProgress(c.prog); P.gold = c.gold; P.bestFloor = c.bestFloor;
     pendingRun = c.run;
     D.on = false; D.alive = true; D.run = null; D.cp = null;
     clearDungeonThings();
@@ -4263,10 +4386,11 @@
       const [x, z] = RP.tileToWorld(e.t[0], e.t[1]);
       // 人数で増えるのは HP だけ（1人増えるごとに +60%、守護者は +80%）
       const hpK = coNow && RP.ENEMIES[e.type] ? 1 + (CO.n - 1) * (RP.ENEMIES[e.type].boss ? 0.8 : 0.6) : 1;
-      const t = spawnEnemy(e.type, e.face ? new V3(x, 0, z) : new V3(x + seeded(seed, i, 1) - 0.5, 0, z + seeded(seed, i, 2) - 0.5), f, Object.assign({}, sc, { hp: sc.hp * hpK }), 'e' + i);
+      const mw = e.type === 'mimic' && e.face ? 0.4 : 0; // 第40版: ミミックも宝箱と同じく壁に寄せる
+      const t = spawnEnemy(e.type, e.face ? new V3(x - (mw ? e.face[0] * mw : 0), 0, z - (mw ? e.face[1] * mw : 0)) : new V3(x + seeded(seed, i, 1) - 0.5, 0, z + seeded(seed, i, 2) - 0.5), f, Object.assign({}, sc, { hp: sc.hp * hpK }), 'e' + i);
       if (t && e.face) { t.yaw = Math.atan2(e.face[0], e.face[1]); t.postYaw = t.yaw; } // 第38版: 守護者は扉の方を向いて、その場で待つ
     });
-    data.chests.forEach((c, i) => { const [x, z] = RP.tileToWorld(c.t[0], c.t[1]); spawnChest(new V3(x, 0, z), f, i); });
+    data.chests.forEach((c, i) => { const [x, z] = RP.tileToWorld(c.t[0], c.t[1]); spawnChest(new V3(x, 0, z), f, i, c.face); });
     if (f > P.bestFloor) P.bestFloor = f;
     checkpoint();
     st.spot = null; if (MG.UI && MG.UI.onSpot) MG.UI.onSpot(null);
@@ -4279,13 +4403,12 @@
     if (!D.on) return false;
     const run = D.run;
     const wasCo = co();
-    const sum = { how, party: wasCo, floor: D.floor, gold: run.gold, xp: run.xp, kills: run.kills, startLevel: run.startLevel, level: P.prog.level, potions: run.potGain };
+    const sum = { how, party: wasCo, floor: D.floor, gold: run.gold, xp: run.xp, kills: run.kills, startLevel: run.startLevel, level: P.prog.level };
     if (how === 'portal' || how === 'host') { // host: 部屋主との通信が切れた（全員が持ち帰って帰還）
       P.gold += run.gold;
     } else {
-      // 倒れた: その回の経験値（上がったレベルも）と、拾ったお金・回復薬を失う
+      // 倒れた: その回の経験値（上がったレベルも）と、拾ったお金を失う
       P.prog = RP.cloneProgress(run.snapshot);
-      P.potions = Math.max(0, P.potions - run.potGain);
       sum.level = P.prog.level;
     }
     if (wasCo && CO.hook.left) CO.hook.left(how);
@@ -4324,24 +4447,13 @@
     if (MG.UI && MG.UI.onDungeonDown) MG.UI.onDungeonDown(name || '', wait);
     if (wait && CO.hook.life) CO.hook.life(false);
   }
-  G.usePotion = function () {
-    if (CO.rev) return false;
-    if (!D.on || !D.alive) { if (MG.UI) MG.UI.toast('回復薬はダンジョンの中で使えます'); AU.error(); return false; }
-    if (P.potions <= 0) { if (MG.UI) MG.UI.toast('回復薬を持っていません（村の杖の店で買えます）'); AU.error(); return false; }
-    if (D.hp >= D.maxHp) { if (MG.UI) MG.UI.toast('HP は満タンです'); return false; }
-    P.potions--;
-    const h = Math.min(RP.POTION.heal, D.maxHp - D.hp); D.hp += h;
-    popup(ahead(2.4, -0.3), '+' + h, 'heal'); whiteFlash('#9dffb0', 0.2); AU.heal ? AU.heal() : AU.reveal(3);
-    FX.emit(new V3(player.pos.x, player.pos.y + 0.5, player.pos.z), { count: 30, c1: '#9dffb0', c2: '#ffffff', speed: 1, up: 3, jitter: 0.6, life: 0.8, size: 0.25, drag: 1 });
-    if (MG.UI && MG.UI.onProgress) MG.UI.onProgress();
-    return true;
-  };
-
   // ---- 宝箱 ----
   let chestMats = null;
-  function spawnChest(p, f, idx) {
+  function spawnChest(p, f, idx, face) {
+    // 第40版: 壁ぎわのマスでは、背中を壁から 0.15m ほど離して置き、正面（+Z）を部屋の内側へ向ける
+    if (face) { p = p.clone(); p.x -= face[0] * 0.4; p.z -= face[1] * 0.4; }
     if (!chestMats) chestMats = { wood: new THREE.MeshStandardMaterial({ color: 0x7a4a24, roughness: 0.8, flatShading: true }), gold: new THREE.MeshStandardMaterial({ color: 0xe8b04a, emissive: 0x8a5a10, emissiveIntensity: 0.6, roughness: 0.35, metalness: 0.4 }) };
-    const g = new THREE.Group(); g.position.set(p.x, W.heightAt(p.x, p.z), p.z); g.rotation.y = seeded(D.seed, idx || 0, 3) * Math.PI * 2;
+    const g = new THREE.Group(); g.position.set(p.x, W.heightAt(p.x, p.z), p.z); g.rotation.y = face ? Math.atan2(face[0], face[1]) : seeded(D.seed, idx || 0, 3) * Math.PI * 2;
     let lidP;
     if (MG.Monsters && MG.Monsters.chest) { const ch = MG.Monsters.chest(null); g.add(ch.g); lidP = ch.lid; } // 第36版: 鉄の帯と鋲の宝箱
     else {
@@ -4371,7 +4483,6 @@
     const gold = Math.round((14 + seeded(D.seed, c.i, 4) * 26) * sc.gold);
     D.run.gold += gold;
     let msg = `宝箱: ${gold} G`;
-    if (seeded(D.seed, c.i, 5) < 0.32 && P.potions < RP.POTION.max) { P.potions++; D.run.potGain++; msg += ' と 回復薬'; }
     popup(new V3(c.x, 1.8, c.z), msg, 'score');
     FX.emit(new V3(c.x, 1, c.z), { count: 50, c1: '#ffd24a', c2: '#fff3b8', speed: 4, up: 4, gravity: 10, life: 1, size: 0.25 });
     AU.reveal(4);
@@ -5274,6 +5385,7 @@
     build: () => ({ state: st.build.state, words: st.build.words.slice(), need: st.build.need, rings: buildRings.filter((r) => r.on > 0.5).length, visible: buildGroup.visible }),
     wandVisible: () => wand.visible, handVisible: () => handGlow.visible,
     renderInfo: () => renderer.info.render,
+    sceneObjs: () => { let n = 0; scene.traverse(() => n++); return n; }, // 第40版: 片づけ忘れの確認用
     world: () => W.info(),
     ap: (x, y, z) => ap(new V3(x, y, z)),
     camOffset: () => ({ x: camera.position.x - player.pos.x, y: camera.position.y - player.pos.y - EYE, roll: camera.rotation.z, pitch: camera.rotation.x - player.pitch, yaw: camera.rotation.y - player.yaw }),
@@ -5285,13 +5397,15 @@
     hasCtx: () => CTX !== null,
     sup: SUP,
     meteorCircles: () => meteorCircles,
-    prog: () => ({ level: P.prog.level, xp: P.prog.xp, stats: Object.assign({}, P.prog.stats), gold: P.gold, potions: P.potions, wands: P.wands.slice(), bestFloor: P.bestFloor, der: Object.assign({}, DER) }),
+    prog: () => ({ level: P.prog.level, xp: P.prog.xp, stats: Object.assign({}, P.prog.stats), gold: P.gold, wands: P.wands.slice(), bestFloor: P.bestFloor, der: Object.assign({}, DER) }),
     setLevel(L, stats) { P.prog.level = L; P.prog.xp = 0; if (stats) Object.assign(P.prog.stats, stats); applyProgress(); st.mp = st.mpMax; D.hp = D.maxHp; },
     giveGold(n) { P.gold += n; if (MG.UI && MG.UI.onProgress) MG.UI.onProgress(); },
+    // 第40版: 見た目の確認用。世界樹・不死鳥をその場に止めて置く（戻り値を呼ぶと片づける）
+    preview(kind, x, y, z, yaw) { const o = kind === 'phoenix' ? makePhoenix() : makeYggdrasil(); o.g.position.set(x, y, z); o.g.rotation.y = yaw || 0; scene.add(o.g); if (o.wings) o.wings.forEach((w, i) => { w.rotation.z = (i ? 1 : -1) * 0.3; }); const kill = () => disposeObj(o.g); kill.obj = o.g; return kill; },
     unlockAll() { P.prog.level = Math.max(P.prog.level, 20); P.wands = MG.WANDS.map((w) => w.id).filter((id) => id !== 'bare'); applyProgress(); st.mp = st.mpMax; },
     goStage: (n, sp) => G.goStage(n, sp),
     coop: () => ({ on: CO.on, run: co(), me: CO.me, sim: CO.sim, ids: CO.ids.slice(), n: CO.n, rev: CO.rev ? CO.rev.t : 0, allies: [...avatars.values()].map((a) => ({ id: a.pid, shown: a.alive, down: !!a.netDown, hp: a.hp, x: a.pos.x, z: a.pos.z, inTargets: targets.includes(a) })) }),
-    dun: () => ({ on: D.on, floor: D.floor, hp: Math.round(D.hp), maxHp: D.maxHp, alive: D.alive, run: D.run ? { gold: D.run.gold, xp: D.run.xp, kills: D.run.kills, potGain: D.run.potGain } : null, chests: D.chests.length, opened: D.chests.filter((c) => c.open).length, ebolts: D.ebolts.length, stairsOpen: W.dun ? W.dun.stairsOpen : false, explored: D.explored ? D.explored.reduce((a, v) => a + v, 0) : 0 }),
+    dun: () => ({ on: D.on, floor: D.floor, hp: Math.round(D.hp), maxHp: D.maxHp, alive: D.alive, run: D.run ? { gold: D.run.gold, xp: D.run.xp, kills: D.run.kills } : null, chests: D.chests.length, opened: D.chests.filter((c) => c.open).length, ebolts: D.ebolts.length, stairsOpen: W.dun ? W.dun.stairsOpen : false, explored: D.explored ? D.explored.reduce((a, v) => a + v, 0) : 0 }),
     dunPos: () => (W.dun ? { start: [W.dun.start.x, W.dun.start.z], stairs: [W.dun.stairs.x, W.dun.stairs.z], portal: [W.dun.portal.x, W.dun.portal.z] } : null),
     enemies: () => targets.filter((t) => t.isEnemy && t.alive).map((t) => ({ id: t.id, kind: t.kind, hp: t.hp, maxHp: t.maxHp, x: Math.round(t.pos.x * 10) / 10, y: Math.round(t.pos.y * 10) / 10, z: Math.round(t.pos.z * 10) / 10, awake: t.awake, search: t.searchT > 0, dmg: t.dmg, xp: t.xp })),
     killEnemies(kind) { targets.filter((t) => t.isEnemy && t.alive && (!kind || t.kind === kind)).forEach((t) => { t.hp = 0; killTarget(t); }); },

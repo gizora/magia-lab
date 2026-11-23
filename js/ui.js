@@ -43,6 +43,13 @@
     if (!save.known || typeof save.known !== 'object' || Array.isArray(save.known)) save.known = {};
     for (const k in save.known) if (!MG.buildSpell(k.split('|')) || !save.known[k] || typeof save.known[k] !== 'object') delete save.known[k];
     save.secrets = Array.isArray(save.secrets) ? save.secrets.filter((id) => MG.SECRETS.some((s) => s.id === id)) : [];
+    // 第40版: 隠し魔法になる前の版で同じ並びを放っていると、発見していないのに名前が出て、放っても発見にならなかった。
+    // 隠し魔法の並びは、発見の記録があるときだけ「放ったことがある」とみなす（発見の記録だけあるときは、放った記録を足す）
+    MG.SECRETS.forEach((s) => {
+      const k = keyOf(s.seq), found = save.secrets.includes(s.id);
+      if (!found) delete save.known[k];
+      else if (!save.known[k]) save.known[k] = { best: 0, casts: 0, t: 0 };
+    });
     // お気に入り（図鑑の★）: 放ったことのある魔法だけ
     if (!save.fav || typeof save.fav !== 'object' || Array.isArray(save.fav)) save.fav = {};
     for (const k in save.fav) if (!save.known[k]) delete save.fav[k];
@@ -1100,16 +1107,13 @@
         <span class="si-price">${owned ? '' : price.toLocaleString() + ' G'}</span>
         <button type="button" class="${owned ? 'btn-secondary' : 'btn-primary'}" data-buy="${w.id}" ${owned || !can ? 'disabled' : ''}>${owned ? '持っている' : can ? '買う' : 'お金が足りない'}</button></div>`;
     });
-    const pp = RP.POTION;
-    items.push(`<div class="shop-item" style="--gem:#9dffb0"><span class="si-gem" aria-hidden="true"></span><div class="si-main"><div class="si-name">回復薬（持っている数 ${G.prog.potions} / ${pp.max}）</div><div class="si-desc">ダンジョンの中で Q キーを押すと、HP が ${pp.heal} 回復する</div></div>
-      <span class="si-price">${pp.price} G</span><button type="button" class="btn-primary" data-buy="potion" ${G.prog.gold < pp.price || G.prog.potions >= pp.max ? 'disabled' : ''}>${G.prog.potions >= pp.max ? 'これ以上持てない' : '買う'}</button></div>`);
     $('shop-list').innerHTML = items.join('');
   }
   $('shop-list').addEventListener('click', (e) => {
     const b = e.target.closest('[data-buy]'); if (!b || b.disabled) return;
     const id = b.dataset.buy;
-    const r = id === 'potion' ? G.buyPotion() : G.buyWand(id);
-    if (r === 'ok') { AU.register(); toast(id === 'potion' ? '回復薬を買いました' : `${MG.WAND_MAP[id].name}を買いました（T キーで持ちかえ）`); }
+    const r = G.buyWand(id);
+    if (r === 'ok') { AU.register(); toast(`${MG.WAND_MAP[id].name}を買いました（T キーで持ちかえ）`); }
     else { AU.error(); toast(r === 'gold' ? 'お金が足りません' : r === 'full' ? 'これ以上持てません' : 'すでに持っています'); }
     saveProgress(); renderShop();
     const again = document.querySelector(`[data-buy="${id}"]`); if (again && !again.disabled) again.focus();
@@ -1153,8 +1157,6 @@
       $('dun-hp-fill').parentElement.classList.toggle('low', D.hp < D.maxHp * 0.3);
       $('dun-hp-num').textContent = `${Math.max(0, Math.ceil(D.hp))} / ${D.maxHp}`;
       $('dun-loot').textContent = `${D.run ? D.run.gold : 0} G`;
-      $('dun-pot').textContent = `${D.run ? D.run.potGain : 0} 個`;
-      $('dun-pot-have').textContent = G.prog.potions;
       mapT -= dt || 0.016;
       if (mapT <= 0) { mapT = 0.2; drawMinimap(); }
     }
@@ -1167,7 +1169,7 @@
     toast,
     confirmPortal(run) {
       $('portal-confirm-note').hidden = !(G.coop.on && G.dun.coop);
-      $('portal-confirm-body').textContent = run ? `拾った ${run.gold} G・回復薬 ${run.potGain} 個と、この回の経験値を持って村へ帰ります。` : '村へ帰ります。';
+      $('portal-confirm-body').textContent = run ? `拾った ${run.gold} G と、この回の経験値を持って村へ帰ります。` : '村へ帰ります。';
       open('portal-confirm');
     },
     onProgress() { saveProgress(); updateLvBox(); if (current === 'shop') renderShop(); if (current === 'temple') renderTemple(); renderSlots(); if (current === 'crafter') renderCrafter(); },
@@ -1224,7 +1226,7 @@
       const lv = sum.level !== sum.startLevel ? `Lv ${sum.startLevel} → ${sum.level}` : `Lv ${sum.level}`;
       $('dun-result-body').innerHTML = won
         ? `<div class="dr-big">地下 ${sum.floor} 階から帰ってきた</div><div class="dr-gain">持ち帰ったお金: ${sum.gold} G</div><div>手に入れた経験値: ${sum.xp}（${lv}）</div><div>倒した敵: ${sum.kills} 体</div>`
-        : `<div class="dr-big">地下 ${sum.floor} 階で倒れた</div><div class="dr-lost">失ったお金: ${sum.gold} G・回復薬 ${sum.potions} 個</div><div class="dr-lost">失った経験値: ${sum.xp}（レベルは Lv ${sum.level} に戻った）</div><div>倒した敵: ${sum.kills} 体</div>`;
+        : `<div class="dr-big">地下 ${sum.floor} 階で倒れた</div><div class="dr-lost">失ったお金: ${sum.gold} G</div><div class="dr-lost">失った経験値: ${sum.xp}（レベルは Lv ${sum.level} に戻った）</div><div>倒した敵: ${sum.kills} 体</div>`;
       saveProgressNow();
       open('dun-result');
     },
@@ -1233,7 +1235,7 @@
     onCast(spec, via, rec, cast) {
       const key = keyOf(spec.seq);
       lastCastMode = cast && cast.castMode;
-      const first = !save.known[key];
+      const first = !save.known[key] || (spec.secret && !save.secrets.includes(spec.secret));
       if (first) {
         save.known[key] = { best: 0, casts: 0, t: Date.now() };
         if (spec.secret && !save.secrets.includes(spec.secret)) save.secrets.push(spec.secret);
@@ -1292,9 +1294,8 @@
         if ((e.code === 'KeyE' && current === 'crafter') || (e.code === 'KeyG' && current === 'book')) { close(); return true; }
         return false;
       }
-      // F: 入れる場所の近くでは入る（ほかでは今までどおり放つ）。Q: ダンジョンでは回復薬（ほかでは放つ）
+      // F: 入れる場所の近くでは入る（ほかでは今までどおり放つ）
       if (e.code === 'KeyF' && G.interact()) return true;
-      if (e.code === 'KeyQ' && G.dun.on) { G.usePotion(); return true; }
       if (e.code === 'KeyE') { open('crafter'); return true; }
       if (e.code === 'KeyG') { open('book'); return true; }
       if (e.code === 'KeyM') { setSound(!AU.enabled); return true; }

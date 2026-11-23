@@ -35,51 +35,104 @@
     return root;
   }
 
+  // 木の板目（横向きの板 4 枚・木目・節）。a は箱の側面用、b は丸い蓋用（板が蓋の幅の向きに走るように 90° 回す）
+  let chestTexC = null;
+  function chestTex() {
+    if (chestTexC) return chestTexC;
+    const a = FX.canvasTex(256, 256, (c, w, h) => {
+      c.fillStyle = '#2a1a0e'; c.fillRect(0, 0, w, h);
+      const n = 4, ph = h / n;
+      for (let i = 0; i < n; i++) {
+        const v = 0.8 + Math.random() * 0.35;
+        c.fillStyle = `rgb(${(118 * v) | 0},${(80 * v) | 0},${(48 * v) | 0})`; c.fillRect(0, i * ph + 3, w, ph - 6);
+        c.strokeStyle = 'rgba(40,20,8,0.4)'; c.lineWidth = 1.3;
+        for (let k = 0; k < 8; k++) { c.beginPath(); let y = i * ph + 6 + Math.random() * (ph - 12); c.moveTo(0, y); for (let x = 0; x <= w; x += 12) { y += (Math.random() - 0.5) * 2.2; c.lineTo(x, y); } c.stroke(); }
+        if (Math.random() < 0.7) { const cx = 30 + Math.random() * (w - 60), cy = i * ph + ph / 2; c.strokeStyle = 'rgba(40,20,8,0.55)'; for (let r = 3; r < 13; r += 3) { c.beginPath(); c.ellipse(cx, cy, r * 2, r * 0.7, 0, 0, Math.PI * 2); c.stroke(); } }
+      }
+    });
+    const b = a.clone(); b.needsUpdate = true; b.center.set(0.5, 0.5); b.rotation = Math.PI / 2;
+    chestTexC = { a, b };
+    return chestTexC;
+  }
   // ======================================================================
-  //  宝箱（参考: 鉄の帯と鋲を打った、黒ずんだ木の宝箱）
-  //  チェック項目: 丸い蓋／黒ずんだ木の板目／鉄の帯と鋲／正面の錠前の板と鍵穴／横の輪の取っ手
+  //  宝箱（参考: ゲーム素材/宝箱.jpg。鉄の帯と鋲を打った、木の宝箱）
+  //  チェック項目: かまぼこ形の丸い蓋（幅の向きに丸い）／横向きの板と木目／四隅の角金具と縦の鉄の帯・鋲／
+  //  張り出した底の枠／蓋の掛け金と、本体の錠前の板・鍵穴／横の輪の取っ手。正面は +Z（第40版で蓋の向きを直した）
   // ======================================================================
   function chestBody(std, g, P, mouth) {
-    const wood = std({ color: 0x4a3626, roughness: 0.85 });
-    const woodD = std({ color: 0x2e2218, roughness: 0.9 });
-    const iron = std({ color: 0x2a2a2c, roughness: 0.45, metalness: 0.4 });
-    const rivet = std({ color: 0x5a5a5e, roughness: 0.35, metalness: 0.4 });
-    const W = 1.3, H = 0.72, Dp = 0.86;
-    add(g, new THREE.BoxGeometry(W, H, Dp), wood, [0, H / 2, 0]);
-    for (let i = 1; i < 5; i++) add(g, new THREE.BoxGeometry(W + 0.005, 0.012, Dp + 0.005), woodD, [0, (H / 5) * i, 0]); // 板の継ぎ目
-    // 蓋（後ろの辺で開く）: 半円筒の丸い蓋
-    const lid = pivot(g, 0, H, -Dp / 2); P.lid = lid;
-    const lg = new THREE.CylinderGeometry(Dp / 2, Dp / 2, W, 16, 1, false, 0, Math.PI); lg.rotateZ(Math.PI / 2); lg.rotateY(Math.PI / 2);
-    add(lid, lg, wood, [0, 0, Dp / 2], [0, 0, 0], [1, 0.62, 1]);
-    // 鉄の帯（本体と蓋）と鋲
-    [-0.5, -0.17, 0.17, 0.5].forEach((x) => {
-      add(g, new THREE.BoxGeometry(0.07, H + 0.01, Dp + 0.02), iron, [x * W, H / 2, 0]);
-      add(lid, new THREE.TorusGeometry(Dp / 2 + 0.008, 0.03, 4, 16, Math.PI), iron, [x * W, 0, Dp / 2], [0, Math.PI / 2, 0], [1, 0.62, 1]);
-      for (let k = 0; k < 3; k++) add(g, new THREE.SphereGeometry(0.018, 6, 4), rivet, [x * W, 0.12 + k * 0.24, Dp / 2 + 0.012]);
+    const T = chestTex();
+    const wood = std({ map: T.a, color: 0xe0d0c0, roughness: 0.85 });
+    const woodL = std({ map: T.b, color: 0xe0d0c0, roughness: 0.85 });
+    const iron = std({ color: 0x3c3c42, roughness: 0.4, metalness: 0.6 });
+    const rivet = std({ color: 0x9a9aa2, roughness: 0.3, metalness: 0.7 });
+    const black = std({ color: 0x050505, roughness: 1 });
+    const W = 1.3, H = 0.6, Dp = 0.84, R = Dp / 2, LK = 0.85; // 幅・本体の高さ・奥行き・蓋の半径・蓋の丸みのつぶし
+    const B = (w, h, d) => new THREE.BoxGeometry(w, h, d);
+    const dot = (parent, x, y, z) => add(parent, new THREE.SphereGeometry(0.02, 6, 4), rivet, [x, y, z]);
+    // 本体と、張り出した底の枠・上のふち
+    add(g, B(W, H, Dp), wood, [0, H / 2, 0]);
+    add(g, B(W + 0.07, 0.09, Dp + 0.07), iron, [0, 0.045, 0]);
+    add(g, B(W + 0.03, 0.05, Dp + 0.03), iron, [0, H - 0.025, 0]);
+    // 四隅の角金具（縦）と、底の角の三角の金具
+    [-1, 1].forEach((sx) => [-1, 1].forEach((sz) => {
+      add(g, B(0.08, H, 0.08), iron, [sx * (W / 2 - 0.025), H / 2, sz * (Dp / 2 - 0.025)]);
+      add(g, B(0.13, 0.13, 0.02), iron, [sx * (W / 2 - 0.07), 0.12, sz * (Dp / 2 + 0.012)], [0, 0, Math.PI / 4]);
+      dot(g, sx * (W / 2 - 0.07), 0.13, sz * (Dp / 2 + 0.025));
+      for (let k = 0; k < 3; k++) dot(g, sx * (W / 2 + 0.017), 0.17 + k * 0.15, sz * (Dp / 2 - 0.025));
+    }));
+    // 縦の鉄の帯（前と後ろ）と鋲
+    [-0.24, 0.24].forEach((x) => {
+      add(g, B(0.08, H, Dp + 0.025), iron, [x * W, H / 2, 0]);
+      [1, -1].forEach((sz) => { for (let k = 0; k < 3; k++) dot(g, x * W, 0.16 + k * 0.14, sz * (Dp / 2 + 0.025)); });
     });
-    add(g, new THREE.BoxGeometry(W + 0.02, 0.06, Dp + 0.02), iron, [0, 0.03, 0]);
-    add(g, new THREE.BoxGeometry(W + 0.02, 0.05, Dp + 0.02), iron, [0, H - 0.025, 0]);
-    // 錠前と鍵穴、輪の取っ手
-    add(g, new THREE.BoxGeometry(0.2, 0.26, 0.04), iron, [0, H - 0.1, Dp / 2 + 0.02]);
-    add(g, new THREE.CylinderGeometry(0.018, 0.018, 0.05, 8), std({ color: 0x050505 }), [0, H - 0.1, Dp / 2 + 0.04], [Math.PI / 2, 0, 0]);
-    [-1, 1].forEach((sd) => { add(g, new THREE.TorusGeometry(0.09, 0.015, 6, 16), iron, [sd * (W / 2 + 0.02), H * 0.55, 0], [0, Math.PI / 2, 0]); add(g, new THREE.BoxGeometry(0.03, 0.08, 0.08), iron, [sd * (W / 2 + 0.01), H * 0.68, 0]); });
+    for (let k = 0; k < 7; k++) dot(g, -W / 2 + 0.12 + k * ((W - 0.24) / 6), 0.045, Dp / 2 + 0.04);
+    // 蓋（後ろの辺で開く）: 幅の向きに丸いかまぼこ形。裏には板を張る
+    const lid = pivot(g, 0, H, -Dp / 2); P.lid = lid;
+    const lg = new THREE.CylinderGeometry(R, R, W, 22, 1, false, 0, Math.PI); lg.rotateZ(Math.PI / 2);
+    add(lid, lg, woodL, [0, 0, R], null, [1, LK, 1]);
+    if (!mouth) add(lid, B(W - 0.02, 0.02, Dp - 0.02), std({ color: 0x3a2616, roughness: 0.9 }), [0, 0.012, R]);
+    // 蓋の鉄の帯（両はしと、本体の帯の上）と鋲。前のふちの帯
+    [-(W / 2 - 0.035), -0.24 * W, 0.24 * W, W / 2 - 0.035].forEach((x) => {
+      add(lid, new THREE.TorusGeometry(R + 0.008, 0.032, 5, 22, Math.PI), iron, [x, 0, R], [0, Math.PI / 2, 0], [1, LK, 1]);
+      for (let k = 1; k < 6; k++) { const a = (k / 6) * Math.PI; dot(lid, x, Math.sin(a) * (R + 0.035) * LK, R + Math.cos(a) * (R + 0.035)); }
+    });
+    add(lid, B(W + 0.03, 0.05, 0.04), iron, [0, 0.025, Dp + 0.005]);
+    // 掛け金（蓋から下がる板）と、本体の錠前の板・鍵穴
+    add(lid, B(0.17, 0.2, 0.025), iron, [0, -0.05, Dp + 0.02]);
+    add(lid, new THREE.CylinderGeometry(0.018, 0.018, 0.02, 10), black, [0, -0.08, Dp + 0.035], [Math.PI / 2, 0, 0]);
+    dot(lid, -0.055, 0.0, Dp + 0.035); dot(lid, 0.055, 0.0, Dp + 0.035);
+    add(g, B(0.24, 0.2, 0.03), iron, [0, H - 0.22, Dp / 2 + 0.016]);
+    add(g, new THREE.CylinderGeometry(0.022, 0.022, 0.02, 10), black, [0, H - 0.2, Dp / 2 + 0.033], [Math.PI / 2, 0, 0]);
+    add(g, B(0.018, 0.05, 0.02), black, [0, H - 0.235, Dp / 2 + 0.033]);
+    [-1, 1].forEach((sx) => [-1, 1].forEach((sy) => dot(g, sx * 0.09, H - 0.22 + sy * 0.07, Dp / 2 + 0.034)));
+    // 横の輪の取っ手（取り付けの金具つき）
+    [-1, 1].forEach((sd) => {
+      add(g, B(0.025, 0.12, 0.16), iron, [sd * (W / 2 + 0.012), H * 0.62, 0]);
+      add(g, new THREE.TorusGeometry(0.085, 0.016, 6, 18), iron, [sd * (W / 2 + 0.03), H * 0.62 - 0.085, 0], [0, Math.PI / 2, 0]);
+    });
+    if (!mouth) {
+      // 中のお金（蓋を開けたときに見える）
+      const gold = std({ color: 0xf0b838, emissive: 0x7a4a00, emissiveIntensity: 0.7, roughness: 0.3, metalness: 0.6 });
+      add(g, new THREE.SphereGeometry(0.5, 14, 6, 0, Math.PI * 2, 0, Math.PI / 2), gold, [0, H - 0.02, 0], null, [1.1, 0.18, 0.7]);
+      for (let k = 0; k < 9; k++) add(g, new THREE.CylinderGeometry(0.055, 0.055, 0.014, 10), gold, [rand(-0.45, 0.45), H + 0.06 + rand(0, 0.03), rand(-0.25, 0.25)], [rand(-0.5, 0.5), 0, rand(-0.5, 0.5)]);
+    }
     if (mouth) {
       // ミミック: 中は赤黒い口、ふちに並ぶ牙、長い舌、奥に光る目
       const flesh = std({ color: 0x3a0608, roughness: 0.6, emissive: 0x200000, emissiveIntensity: 0.5 });
       const tooth = std({ color: 0xe8e0c8, roughness: 0.4 });
       const tongue = std({ color: 0xa8303a, roughness: 0.45, emissive: 0x300008, emissiveIntensity: 0.4 });
-      add(g, new THREE.BoxGeometry(W - 0.1, 0.05, Dp - 0.1), flesh, [0, H - 0.04, 0]);
-      add(lid, new THREE.BoxGeometry(W - 0.1, 0.04, Dp - 0.1), flesh, [0, 0.02, Dp / 2]);
+      add(g, B(W - 0.1, 0.05, Dp - 0.1), flesh, [0, H - 0.04, 0]);
+      add(lid, B(W - 0.1, 0.04, Dp - 0.1), flesh, [0, 0.02, R]);
       for (let i = 0; i < 9; i++) {
-        const x = -W / 2 + 0.1 + i * ((W - 0.2) / 8);
-        add(g, new THREE.ConeGeometry(0.035, 0.13, 4), tooth, [x, H + 0.05, Dp / 2 - 0.06]);
-        add(lid, new THREE.ConeGeometry(0.035, 0.13, 4), tooth, [x, -0.05, Dp - 0.06], [Math.PI, 0, 0]);
+        const x = -W / 2 + 0.12 + i * ((W - 0.24) / 8);
+        add(g, new THREE.ConeGeometry(0.035, 0.13, 4), tooth, [x, H + 0.05, Dp / 2 - 0.07]);
+        add(lid, new THREE.ConeGeometry(0.035, 0.13, 4), tooth, [x, -0.05, Dp - 0.07], [Math.PI, 0, 0]);
       }
-      [-1, 1].forEach((sd) => { for (let i = 0; i < 4; i++) { add(g, new THREE.ConeGeometry(0.03, 0.11, 4), tooth, [sd * (W / 2 - 0.06), H + 0.04, -Dp / 2 + 0.15 + i * 0.18]); } });
+      [-1, 1].forEach((sd) => { for (let i = 0; i < 4; i++) add(g, new THREE.ConeGeometry(0.03, 0.11, 4), tooth, [sd * (W / 2 - 0.07), H + 0.04, -Dp / 2 + 0.15 + i * 0.17]); });
       const tg = pivot(g, 0, H - 0.02, 0.1); P.tongue = tg;
       add(tg, tube([[0, 0, 0], [0, 0.05, 0.25], [0, 0.02, 0.5], [0, -0.12, 0.72]], 0.07, 12), tongue, null, null, [1.6, 0.6, 1]);
-      [-1, 1].forEach((sd) => { add(lid, new THREE.SphereGeometry(0.035, 8, 6), std({ color: 0xffd040, emissive: 0xffa000, emissiveIntensity: 2 }), [sd * 0.25, -0.06, Dp / 2]); });
-      P.eyesGlow = glow(lid, '#ffb000', 0.3, [0, -0.08, Dp / 2]);
+      [-1, 1].forEach((sd) => { add(lid, new THREE.SphereGeometry(0.035, 8, 6), std({ color: 0xffd040, emissive: 0xffa000, emissiveIntensity: 2 }), [sd * 0.25, -0.06, R]); });
+      P.eyesGlow = glow(lid, '#ffb000', 0.3, [0, -0.08, R]);
     }
   }
   MON.chest = function (mats) {

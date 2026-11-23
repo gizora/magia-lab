@@ -71,7 +71,6 @@
 
   // ---- お店 ----
   R.WAND_PRICE = { novice: 0, gale: 250, pierce: 450, sage: 700, destruction: 1100 };
-  R.POTION = { price: 30, heal: 70, max: 9 };
   R.START_GOLD = 100;
 
   // ---- ダンジョン ----
@@ -280,11 +279,35 @@
     }
     const tilePos = (r) => [ri(r.x0, r.x0 + r.w - 1), ri(r.z0, r.z0 + r.h - 1)];
     const others = rooms.filter((r) => r !== start);
+    // 第40版: 宝箱は壁ぎわのマスに、背中を壁につけて置く（face は正面＝部屋の内側の向き）。
+    // 通路の入口の横・柱の前・部屋のまん中（入口・穴・ポータル）の近く・ほかの宝箱の隣は避ける
+    const isF = (x, z) => x >= 0 && z >= 0 && x < N && z < N && tiles[z * N + x] === 1;
+    const usedT = [];
+    const wallSpot = (r) => {
+      const c = center(r), list = [];
+      for (let z = r.z0; z < r.z0 + r.h; z++) for (let x = r.x0; x < r.x0 + r.w; x++) {
+        if (!isF(x, z) || Math.hypot(x - c[0], z - c[1]) < 2.5 || usedT.some(([ux, uz]) => Math.abs(ux - x) <= 1 && Math.abs(uz - z) <= 1)) continue;
+        [[0, -1], [0, 1], [-1, 0], [1, 0]].forEach(([bx, bz]) => {
+          if (isF(x + bx, z + bz) || !isF(x - bx, z - bz)) return; // 後ろが壁で、前が床
+          const lx = bz ? 1 : 0, lz = bx ? 1 : 0;
+          for (const sg of [1, -1]) { const ax = x + lx * sg, az = z + lz * sg; if (isF(ax, az) && isF(ax + bx, az + bz)) return; } // 横のマスの後ろに通路が開いていない
+          if (!r.small) { // 柱（部屋の壁に 3 マスおき）の前は避ける
+            if (bz && z === (bz < 0 ? r.z0 : r.z0 + r.h - 1) && (x - r.x0) % 3 === 0) return;
+            if (bx && x === (bx < 0 ? r.x0 : r.x0 + r.w - 1) && (z - r.z0) % 3 === 0) return;
+          }
+          list.push({ t: [x, z], face: [-bx, -bz] });
+        });
+      }
+      if (!list.length) return { t: tilePos(r), face: null };
+      const p = list[Math.floor(rnd() * list.length)]; usedT.push(p.t);
+      return p;
+    };
     const nChest = 2 + Math.floor(rnd() * 2);
     for (let k = 0; k < nChest; k++) {
       const r = others[Math.floor(rnd() * others.length)];
+      const sp = wallSpot(r);
       // 第36版: 古い坑道より深い階では、宝箱の 3 割はミミック（宝箱のふりをした敵）
-      if (floor > 5 && rnd() < 0.3) spawns.push({ type: 'mimic', room: r.id, t: tilePos(r) }); else chests.push({ room: r.id, t: tilePos(r) });
+      if (floor > 5 && rnd() < 0.3) spawns.push({ type: 'mimic', room: r.id, t: sp.t, face: sp.face }); else chests.push({ room: r.id, t: sp.t, face: sp.face });
     }
     const pool = R.enemyPool(floor);
     others.forEach((r) => {
