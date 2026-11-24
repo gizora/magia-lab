@@ -66,6 +66,24 @@
   const input = { keys: {}, locked: false, mouseDown: false, touch: false, move: { x: 0, y: 0 } };
 
   let shakePh = 0; // 画面の揺れの位相（第42版）
+  // 第42版: ヒットストップ（大きな一撃が当たった瞬間、ほんの少し世界の動きを止めて重さを出す）。ひとりで遊んでいるときだけ。
+  // 止める時間は実際の時間で数え、画面の揺れも実際の時間で収める（止まっている間に揺れが固まらないように）
+  let hitStopT = 0, realDt = 1 / 60;
+  const solo = () => !M.on && !CO.on && !(MG.Net && MG.Net.role);
+  function hitStop(sec) {
+    if (!solo() || hitStopT > 0) return; // 止まっている間の次の一撃では止め直さない（止まりっぱなしにしない）
+    hitStopT = sec;
+  }
+  // 第42版: 当たったときに、白く光って（前より強く）、ぐっと縮んでから弾んで元に戻る
+  const HIT_POP = 0.26;
+  function hitPop(t, big) { t.pop = HIT_POP; t.popAmp = big ? 0.3 : 0.18; }
+  function applyPop(t, dt) {
+    if (!(t.pop > 0)) return;
+    t.pop = Math.max(0, t.pop - dt);
+    const u = 1 - t.pop / HIT_POP, e = (1 - u) * (1 - u) * Math.cos(u * Math.PI * 2.4) * (t.popAmp || 0.18);
+    t.group.scale.x *= 1 + e * 0.6; t.group.scale.z *= 1 + e * 0.6; t.group.scale.y *= 1 - e;
+  }
+  const flashInt = (t) => 0.9 + Math.max(0, t.flash) * 6; // 当たった直後ほど強く光る
   const st = (G.state = {
     running: false, paused: true, time: 0, score: 0, kills: 0,
     mp: 150, mpMax: 150, mpRegen: 15, stamina: 100, staminaMax: 100, stamT: 0, tired: false, slot: 0, slots: [null, null, null, null], cds: [0, 0, 0, 0, 0], gcd: 0,
@@ -600,6 +618,7 @@
       t.spawnT = Math.min(1, t.spawnT + dt * 3);
       const pop = t.spawnT < 1 ? 1 - Math.pow(1 - t.spawnT, 3) * Math.cos(t.spawnT * 6) : 1;
       t.group.scale.setScalar(Math.max(0.01, pop));
+      applyPop(t, dt);
 
       const slow = t.still ? 0 : t.freezeT > 0 ? (t.frozenHard ? 0 : 0.35) : 1;
       t.phase += dt * slow;
@@ -647,7 +666,7 @@
 
       // 色（ヒット時の白・凍結の水色・燃焼のオレンジ）
       for (const m of t.mats) {
-        if (t.flash > 0) { m.emissive.setRGB(1, 1, 1); m.emissiveIntensity = 0.9; }
+        if (t.flash > 0) { m.emissive.setRGB(1, 1, 1); m.emissiveIntensity = flashInt(t); }
         else if (t.freezeT > 0) { m.emissive.setRGB(0.3, 0.75, 1); m.emissiveIntensity = 0.55; }
         else if (t.burnT > 0) { m.emissive.setRGB(1, 0.35, 0.05); m.emissiveIntensity = 0.35 + Math.random() * 0.25; }
         else if (t.goldT > 0) { m.emissive.setRGB(1, 0.7, 0.1); m.emissiveIntensity = 0.55; }
@@ -685,7 +704,9 @@
   function damage(t, d, color, crit, by) {
     if (!t.alive) return 0;
     d = Math.max(1, Math.round(d));
-    t.flash = 0.1;
+    t.flash = 0.16;
+    if (t.group) hitPop(t, crit || d >= 80);
+    if (crit || d >= 120 || (t.E && t.E.boss && d >= 50)) hitStop(d >= 200 ? 0.13 : 0.08);
     if (t.isEnemy && co()) {
       if (!isSim()) {
         // 受け持ちでない画面: 数字だけ出して、受け持ちへ送る（HP は受け持ちから届く）
@@ -3972,11 +3993,11 @@
     if (M.on || co()) { wand.visible = !dead && st.wand !== 'bare'; handGlow.visible = !dead && st.wand === 'bare'; }
     if (st.shake > 0.001) {
       // 第42版: 毎フレームでたらめに動かすとガタガタ震えて見えるので、速さのちがう sin を重ねてなめらかに揺らす（強さは前と同じ）
-      const k = H.scale, a = st.shake * k; shakePh += dt * 30;
+      const k = H.scale, a = st.shake * k; shakePh += realDt * 30;
       camera.position.x += Math.sin(shakePh * 1.7) * a * 0.25;
       camera.position.y += Math.sin(shakePh * 2.3 + 1.3) * a * 0.25;
       camera.rotation.z += Math.sin(shakePh * 1.1 + 0.7) * a * 0.02;
-      st.shake *= Math.pow(0.02, dt);
+      st.shake *= Math.pow(0.02, realDt);
     }
     const ho = H.offsets(dt);
     camera.translateX(ho.x); camera.translateY(ho.y); camera.rotation.z += ho.roll;
@@ -4069,6 +4090,8 @@
     let dt = clockLast ? now - clockLast : 0.016;
     clockLast = now;
     dt = Math.min(dt, 0.05);
+    realDt = dt;
+    if (hitStopT > 0) { hitStopT = Math.max(0, hitStopT - dt); if (solo()) dt *= 0.05; } // 第42版: ヒットストップの間は、世界の動きをほぼ止める
     // 対戦中は、メニューを開いていても世界は進み続ける（入力だけ止まる）
     if (st.running && (!st.paused || M.on || CO.on)) step(dt);
     else {
@@ -4439,6 +4462,8 @@
     if (D.hp <= 0) dungeonDeath(name);
     return d;
   }
+  // 第42版: パーティーで倒れて蘇生を待っている間は、ページを閉じる・開き直す前に確認を出す（開き直すと、ひとりで階の最初からになるため）
+  if (MG.Net) MG.Net.holdUnload = () => !!(D && D.on && co() && !D.alive && D.deadT === Infinity);
   function dungeonDeath(name) {
     const wait = co(); // パーティーでは、蘇生を待つ（全員が倒れたら全滅）
     D.hp = 0; D.alive = false; D.deadT = wait ? Infinity : 2.6;
@@ -4708,6 +4733,7 @@
     if (!t.alive) { t.dead += dt; t.group.scale.setScalar(Math.max(0.001, 1 - t.dead / 0.5)); t.group.position.y += dt * (E.fly ? -2 : 0.5); return t.dead > 0.5; }
     t.spawnT = Math.min(1, t.spawnT + dt * 2.5);
     t.group.scale.setScalar(Math.max(0.01, 1 - Math.pow(1 - t.spawnT, 3)));
+    applyPop(t, dt);
     if (t.flash > 0) t.flash -= dt;
     if (!isSim()) return enemyPuppet(t, dt);
     if (t.burnT > 0) { t.burnT -= dt; t.burnAcc += t.burnDps * dt; if (Math.random() < 0.4) FX.emit(t.center, { count: 1, c1: '#ff6a1a', c2: '#ffd24a', speed: 0.6, up: 2.5, jitter: t.r * 0.7, life: 0.6, size: 0.4, drag: 0.5 }); if (t.burnAcc >= 4) { const d = Math.floor(t.burnAcc); t.burnAcc -= d; const dd = damage(t, d, null, false, t.burnBy); if (t.burnRec) t.burnRec.add(dd); if (!t.alive) return false; } }
@@ -4811,7 +4837,7 @@
     t.group.position.copy(t.pos);
     updateCenter(t);
     for (const m of t.mats) {
-      if (t.flash > 0) { m.emissive.setRGB(1, 1, 1); m.emissiveIntensity = 0.9; }
+      if (t.flash > 0) { m.emissive.setRGB(1, 1, 1); m.emissiveIntensity = flashInt(t); }
       else if (t.windup > 0) { m.emissive.setRGB(1, 0.25, 0.1); m.emissiveIntensity = 0.4 + k * 0.6; }
       else if (t.freezeT > 0 || t.netFrz) { m.emissive.setRGB(0.3, 0.75, 1); m.emissiveIntensity = 0.55; }
       else if (t.burnT > 0 || t.netBrn) { m.emissive.setRGB(1, 0.35, 0.05); m.emissiveIntensity = 0.45; }
@@ -5331,7 +5357,7 @@
           t.netPos.set(clamp(p.x, -100, 100), clamp(p.y, -5, 20), clamp(p.z, -100, 100));
           t.netYaw = clamp(e[4], -1e5, 1e5);
           const hp = clamp(e[5], 0, t.maxHp);
-          if (hp !== t.hp) { if (hp < t.hp) t.flash = 0.1; t.hp = hp; drawBar(t); }
+          if (hp !== t.hp) { if (hp < t.hp) { t.flash = 0.16; if (t.group) hitPop(t, t.hp - hp >= 80); } t.hp = hp; drawBar(t); }
           const fl = Math.round(clamp(e[6], 0, 31));
           if ((fl & 1) && !t.awake) popup(t.center.clone().add(new V3(0, 1.2, 0)), t.E.mimic ? 'ミミックだ！' : '!', 'pvp');
           t.awake = !!(fl & 1);
@@ -5382,7 +5408,10 @@
     },
     setPlayer(x, z) { player.pos.set(x, 0, z); camera.position.set(x, EYE, z); camera.updateMatrixWorld(true); },
     cam() { return camera; }, // 第42版: 画面の揺れのテスト用
-    step(sec) { const n = Math.round(sec * 60); for (let i = 0; i < n; i++) step(1 / 60); camera.updateMatrixWorld(true); },
+    hitStopT() { return hitStopT; }, // 第42版: ヒットストップのテスト用
+    hitT(id, d, crit) { const t = targets.find((q) => q.id === id); return t ? damage(t, d, "#ffffff", !!crit) : -1; }, // 第42版: 当たったときの光と弾みのテスト用
+    popOf(id) { const t = targets.find((q) => q.id === id); return t ? { pop: t.pop || 0, flash: t.flash, sx: t.group.scale.x, sy: t.group.scale.y } : null; },
+    step(sec) { const n = Math.round(sec * 60); realDt = 1 / 60; for (let i = 0; i < n; i++) step(1 / 60); camera.updateMatrixWorld(true); },
     aim: () => { camera.updateMatrixWorld(true); const a = getAim(); return { target: a.target ? a.target.id : null, x: a.point.x, y: a.point.y, z: a.point.z }; },
     fillMp() { st.mp = st.mpMax; st.cds = [0, 0, 0, 0, 0]; st.gcd = 0; st.vcd = {}; for (const k in st.charges) { st.charges[k].n = st.charges[k].max || MG.SLOT_CHARGES; st.charges[k].t = 0; } },
     build: () => ({ state: st.build.state, words: st.build.words.slice(), need: st.build.need, rings: buildRings.filter((r) => r.on > 0.5).length, visible: buildGroup.visible }),

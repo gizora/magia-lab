@@ -262,18 +262,22 @@
   // （扱うと、開き直しが「部屋主との通信切れ＝持ち帰り」や全滅として保存されてしまう）。閉じるのが取りやめになったら、あとで片付ける
   let unloading = false, unloadTimer = 0;
   const held = [];
-  window.addEventListener('beforeunload', () => {
+  // 第42版: 協力ダンジョンで倒れて蘇生を待っている間は、閉じる・開き直す前にブラウザの確認を出す（N.holdUnload が true を返すとき）。
+  // そのときは、取りやめになることがあるので、仲間への「さようなら」（bye）は本当に閉じるとき（pagehide）に送る
+  let byeSent = false;
+  window.addEventListener('beforeunload', (e) => {
     if (!N.role) return;
-    unloading = true;
+    if (N.holdUnload && N.holdUnload()) { e.preventDefault(); e.returnValue = ''; return; }
+    unloading = true; byeSent = true;
     N.send({ t: 'bye' });
     clearTimeout(unloadTimer);
     unloadTimer = setTimeout(stillHere, 10000);
   });
   function stillHere() {
-    unloading = false;
+    unloading = false; byeSent = false;
     held.splice(0).forEach(([pid, why]) => drop(pid, why));
   }
-  window.addEventListener('pagehide', () => { unloading = true; clearTimeout(unloadTimer); });
+  window.addEventListener('pagehide', () => { if (N.role && !byeSent) { byeSent = true; N.send({ t: 'bye' }); } unloading = true; clearTimeout(unloadTimer); });
   window.addEventListener('pageshow', (e) => { if (e.persisted) stillHere(); });
 
   // ======================================================================

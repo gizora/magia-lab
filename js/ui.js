@@ -5,6 +5,18 @@
   const st = G.state;
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  // 第42版: ダンジョンの階の名前（右上の幅 200px の枠）が 2 行に折れないよう、長いとき（守護者の階など）は文字を小さくして 1 行に収める
+  let fitCanvas = null;
+  function fitFloorLabel(el) {
+    el.style.fontSize = ''; el.style.letterSpacing = '';
+    const cs = getComputedStyle(el), base = parseFloat(cs.fontSize) || 15, room = 200 - 14;
+    fitCanvas = fitCanvas || document.createElement('canvas');
+    const cx = fitCanvas.getContext('2d'); cx.font = `${cs.fontWeight} ${base}px ${cs.fontFamily}`;
+    const ls = parseFloat(cs.letterSpacing) || 0, txt = el.textContent, w0 = cx.measureText(txt).width;
+    if (w0 + ls * txt.length <= room) return;
+    el.style.letterSpacing = '0'; // 収まらないときは、まず字の間を詰めて、それでも足りない分だけ文字を小さくする
+    if (w0 > room) el.style.fontSize = Math.max(10, Math.floor(base * room / w0 * 10) / 10) + 'px';
+  }
   const keyOf = (seq) => seq.join('|');
 
   // ======================================================================
@@ -1201,6 +1213,7 @@
       const area = MG.RPG.areaOf ? MG.RPG.areaOf(fl).name : '';
       $('dun-floor').textContent = `地下 ${fl} 階・${area}${boss ? '（守護者）' : ''}`; // 第36版: 地域の名前
       $('dun-floor').classList.toggle('boss', !!boss);
+      fitFloorLabel($('dun-floor'));
       $('dun-down').hidden = true;
       toast(boss ? `地下 ${fl} 階: 広い部屋に${MG.RPG.ENEMIES[MG.RPG.bossFor(fl)].label}がいる。倒すと、下の階への穴が開く` : (fl % 5 === 1 && fl > 1) ? `地下 ${fl} 階: ${MG.RPG.areaOf(fl).name}に入った。新しい敵に気をつけよう` : `地下 ${fl} 階: 下の階への穴（オレンジの光）に入ると次の階へ、青い帰還ポータルに触れると村へ帰る`, 3200);
       saveProgressNow();
@@ -1212,7 +1225,7 @@
       el.classList.toggle('waiting', !!wait);
       if (wait) {
         if (current === 'portal-confirm') close(false);
-        el.innerHTML = `<div class="dd-title">倒れた…</div><div class="dd-sub">${name ? esc(name) + 'にやられた。' : ''}仲間がそばで <kbd>F</kbd> を4秒押し続けると蘇ります</div>`;
+        el.innerHTML = `<div class="dd-title">倒れた…</div><div class="dd-sub">${name ? esc(name) + 'にやられた。' : ''}仲間がそばで <kbd>F</kbd> を4秒押し続けると蘇ります</div><div class="dd-note">ページを閉じたり開き直したりすると、ひとりで階の最初からやり直しになります</div>`;
         el.hidden = false;
         return;
       }
