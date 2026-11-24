@@ -104,69 +104,91 @@
     P.tail.rotation.y = Math.sin(tm * 1.3) * 0.25;
     P.mawGlow.scale.setScalar(1.4 * (1 + strike * 1.2 + Math.sin(tm * 6) * 0.1));
   };
-  // ---- Blender のモデル ----
-  const _v = new THREE.Vector3();
-  const DRAGON_LOS = [[0, 2.0, 0.3], [0, 2.8, 0.7], [2.6, 2.6, -0.6], [-2.6, 2.6, -0.6], [0, 0.5, 0]]; // 壁の向こうか調べる点（Blender の座標で、体・頭・翼の先・足）
-  const DRAGON_SCALE = 1.2;              // Blender では 1 = 1m。ゲームの今までの魔竜と同じくらいの大きさにする
-  const DRAGON_PEAK = { attack: 0.65, cast: 0.75 }; // 攻撃のため（o.k 0→1）が終わる時点の、動きの中の時刻（爪を振り下ろす・口を突き出す）
-  function dragonGLBBuild(std, g, P) {
+  MON.register('abyssdrake', dragonProcBuild, dragonProcAnim); // Blender のモデルがあれば、ファイルの最後で差しかえる
+
+  // ======================================================================
+  //  Blender で作ったモデル（第45版で深淵の魔竜、第47版で隠し部屋の 4 体みんな）
+  //  形のデータは js/model-data.js（js/model-glb.js で読む）。データがないときは、上の手作りの形を使う。
+  // ======================================================================
+  const _v = new THREE.Vector3(), _q = new THREE.Quaternion(), UP = new THREE.Vector3(0, 1, 0);
+  // scale: Blender では 1 = 1m。idle: 待つ動き。move: 歩く・走る動き（敵の速さ moveRef で 1 倍）。orbit: 骨 orbit を縦の軸で回す速さ（金の杭）
+  // glows: 骨につける光（Blender の座標を three の向きにしたもの: x, 高さ, 前）
+  const GLB_CFG = {
+    abyssdrake: { scale: 1.2, idle: 'hover', glows: [{ bone: 'head', color: '#ff3010', size: 0.9, pos: [0, 2.74, 0.58] }] },
+    frostbeast: { scale: 1.0, idle: 'idle', move: 'run', moveRef: 5.0, glows: [{ bone: 'head', color: '#6ad0ff', size: 0.5, pos: [0.15, 2.26, 1.3] }, { bone: 'head', color: '#6ad0ff', size: 0.5, pos: [-0.15, 2.26, 1.3] }] },
+    arachne: { scale: 1.0, idle: 'idle', move: 'run', moveRef: 4.0, glows: [{ bone: 'head', color: '#ff2a2a', size: 0.35, pos: [0, 2.15, 0.5] }] },
+    starseer: { scale: 1.1, idle: 'idle', move: 'run', moveRef: 3.0, orbit: 0.9, glows: [{ bone: 'chest', color: '#a050ff', size: 0.8, pos: [0, 2.16, 0.18] }] },
+  };
+  const GLB_PEAK = { attack: 0.65, cast: 0.75 }; // 攻撃のため（o.k 0→1）が終わる時点の、動きの中の時刻（振り下ろす・突き出す）
+  function glbBuild(kind, std, g, P) {
+    const C = GLB_CFG[kind];
     const lin2s = (a) => new THREE.Color(a[0], a[1], a[2]).convertLinearToSRGB(); // std は sRGB の色を受け取って直すので、逆に直して渡す
-    const M = MG.ModelGLB.instance('abyssdrake', (m) => std({
+    const M = MG.ModelGLB.instance(kind, (m) => std({
       color: lin2s(m.color), vertexColors: true, roughness: m.rough, metalness: Math.min(0.4, m.metal),
       side: m.double ? THREE.DoubleSide : THREE.FrontSide, emissive: m.emissive ? lin2s(m.emissive) : 0x000000, emissiveIntensity: m.emissive ? m.ei : 1,
     }));
-    const root = M.root; root.scale.setScalar(DRAGON_SCALE); g.add(root);
-    // 口の奥の赤い光（Blender の頭の座標で口の中 → 頭の骨につける）
-    P.maw = glow(root, '#ff3010', 0.9, [0, 2.74, 0.58]);
-    root.updateMatrixWorld(true);
-    if (M.bones.head) M.bones.head.attach(P.maw);
+    const root = M.root; root.scale.setScalar(C.scale); g.add(root);
+    P.glows = []; P.glowBase = [];
+    for (const q of C.glows || []) {
+      const sp = glow(root, q.color, q.size, q.pos); root.updateMatrixWorld(true);
+      if (M.bones[q.bone]) M.bones[q.bone].attach(sp);
+      P.glows.push(sp); P.glowBase.push(sp.scale.x);
+    }
     P.glb = true; P.keep = [root, ...M.meshes]; // bake で骨つきのメッシュをまとめないように
     const mixer = new THREE.AnimationMixer(root), act = {};
-    for (const k of ['hover', 'attack', 'cast']) {
-      const a = mixer.clipAction(M.clips[k]); act[k] = a;
-      if (k === 'hover') { a.play(); a.time = Math.random() * M.clips[k].duration; }
+    for (const [k, clip] of [['idle', C.idle], ['move', C.move], ['attack', 'attack'], ['cast', 'cast']]) {
+      if (!clip || !M.clips[clip]) continue;
+      const a = mixer.clipAction(M.clips[clip]); act[k] = a;
+      if (k === 'idle' || k === 'move') { a.play(); a.time = Math.random() * M.clips[clip].duration; if (k === 'move') a.setEffectiveWeight(0); }
       else { a.setLoop(THREE.LoopOnce, 1); a.clampWhenFinished = true; a.timeScale = 0; a.setEffectiveWeight(0); a.play(); }
     }
     // mixer と act は互いを指し合うので、bake が部品をたどるときに見えないよう、列挙しないプロパティにする
     Object.defineProperty(P, 'mixer', { value: mixer, enumerable: false });
     Object.defineProperty(P, 'act', { value: act, enumerable: false });
-    Object.assign(P, { w: 0, atk: null, cur: 'attack', atkT: 0, rel: 0 });
+    Object.assign(P, { w: 0, mv: 0, atk: null, cur: 'attack', atkT: 0, rel: 0 });
+    if (C.orbit && M.bones.orbit) { P.orbitBone = M.bones.orbit; P.orbitQ = M.bones.orbit.quaternion.clone(); P.orbitA = Math.random() * 6; }
+    // 壁の向こうか調べる点: 形を包む球の、まん中・左右・前後・上（球は js/model-glb.js で決めている）
+    const sph = M.meshes[0].geometry.boundingSphere, c = sph.center, r = sph.radius * 0.6;
+    P.losMesh = M.meshes[0];
+    P.los = [[0, 0, 0], [r, 0, 0], [-r, 0, 0], [0, 0, r], [0, 0, -r], [0, r, 0]].map((d) => new THREE.Vector3(c.x + d[0], c.y + d[1], c.z + d[2]));
     // 第46版: 描かれたとき（画面の中にあるとき）に、時刻とカメラからの距離を覚える。見えていない間は動きの計算をしない
     P.seenT = performance.now(); P.camD = 0; P.skip = 0;
-    M.meshes[0].onBeforeRender = (r, s, cam) => { P.seenT = performance.now(); P.camD = cam.position.distanceTo(root.getWorldPosition(_v)); };
+    M.meshes[0].onBeforeRender = (rr, ss, cam) => { P.seenT = performance.now(); P.camD = cam.position.distanceTo(root.getWorldPosition(_v)); };
   }
-  function dragonGLBAnim(t, o) {
-    const P = t.parts, dt = Math.min(0.1, Math.max(0, o.dt || 0)), A = P.act;
+  function glbAnim(t, o) {
+    const P = t.parts, C = GLB_CFG[t.kind], dt = Math.min(0.1, Math.max(0, o.dt || 0)), A = P.act;
     // 攻撃のため（o.k）の間は、動きを「ため」の終わりまで進め、ためが終わったら残りを再生する
-    if (o.k > 0) { if (!P.atk) P.atk = t.castNext ? 'cast' : 'attack'; P.cur = P.atk; P.atkT = o.k * DRAGON_PEAK[P.atk]; P.rel = 0; }
-    else if (P.atk) { P.rel += dt; P.atkT = DRAGON_PEAK[P.atk] + P.rel; if (P.atkT >= A[P.atk].getClip().duration - 0.02) P.atk = null; }
+    if (o.k > 0) { if (!P.atk) P.atk = (t.castNext && A.cast) || !A.attack ? 'cast' : 'attack'; P.cur = P.atk; P.atkT = o.k * GLB_PEAK[P.atk]; P.rel = 0; }
+    else if (P.atk) { P.rel += dt; P.atkT = GLB_PEAK[P.atk] + P.rel; if (P.atkT >= A[P.atk].getClip().duration - 0.02) P.atk = null; }
     P.w += ((P.atk ? 1 : 0) - P.w) * Math.min(1, dt * 10);
     for (const k of ['attack', 'cast']) {
-      const a = A[k];
+      const a = A[k]; if (!a) continue;
       if (k === P.cur) { a.time = Math.min(P.atkT, a.getClip().duration - 0.001); a.setEffectiveWeight(P.w); } else a.setEffectiveWeight(0);
     }
-    A.hover.setEffectiveWeight(1 - P.w * 0.95);
-    // 第46版: 壁の向こう（ほかの部屋）にいるときは描かない。0.2 秒ごとに、カメラから体・頭・両方の翼の先・足へ線を引き、全部が壁でさえぎられていたら隠す
+    // 歩く・走る: 速さに合わせて待つ動きと混ぜ、速いほど速く再生する
+    const mvT = A.move ? Math.min(1, (o.speed || 0) / C.moveRef) : 0;
+    P.mv += (mvT - P.mv) * Math.min(1, dt * 6);
+    const free = 1 - P.w * 0.95;
+    A.idle.setEffectiveWeight(free * (1 - P.mv));
+    if (A.move) { A.move.setEffectiveWeight(free * P.mv); A.move.timeScale = Math.max(0.6, (o.speed || 0) / C.moveRef); }
+    // 第46版: 壁の向こう（ほかの部屋）にいるときは描かない。0.2 秒ごとに、カメラから形のまん中・左右・前後・上へ線を引き、全部が壁でさえぎられていたら隠す
     const cam = MG.Game && MG.Game.camera, root = P.keep[0];
     P.losT = (P.losT || 0) - dt;
     if (cam && MG.World && MG.World.solidOnSegment && P.losT <= 0) {
       P.losT = 0.2; let vis = false;
-      for (const q of DRAGON_LOS) { root.localToWorld(_v.set(q[0], q[1], q[2])); if (MG.World.solidOnSegment(cam.position, _v) == null) { vis = true; break; } }
-      if (vis && !root.visible) P.seenT = performance.now(); // 見えたらすぐ動かす
-      root.visible = vis;
+      for (const q of P.los) { P.losMesh.localToWorld(_v.copy(q)); if (MG.World.solidOnSegment(cam.position, _v) == null) { vis = true; break; } }
+      root.visible = vis; // 見えるようになったら、次に描かれたとき（onBeforeRender）から動き出す
     }
     // 第46版: 0.3 秒描かれていなければ（画面の外・壁の向こうの部屋）骨を動かさない。30m より遠いときは 1 回おきに動かす
     if (performance.now() - P.seenT > 300) { P.skip = 0; return; }
     P.skip += dt;
     if (P.camD > 30 && !P.odd) { P.odd = true; return; }
-    P.odd = false; P.mixer.update(P.skip); P.skip = 0;
+    P.odd = false; P.mixer.update(P.skip);
+    if (P.orbitBone) { P.orbitA += P.skip * C.orbit * (1 + P.w * 2); P.orbitBone.quaternion.copy(P.orbitQ).multiply(_q.setFromAxisAngle(UP, P.orbitA)); }
+    P.skip = 0;
     const tm = o.time + o.phase;
-    P.maw.scale.setScalar(0.9 * (1 + P.w * (P.cur === 'cast' ? 1.6 : 0.6) + Math.sin(tm * 6) * 0.1));
+    P.glows.forEach((sp, i) => sp.scale.setScalar(P.glowBase[i] * (1 + P.w * (P.cur === 'cast' ? 1.6 : 0.6) + Math.sin(tm * 6 + i) * 0.1)));
   }
-  MON.register('abyssdrake', function (std, g, P) {
-    if (MG.ModelGLB && MG.ModelGLB.has('abyssdrake') && THREE.AnimationMixer) return dragonGLBBuild(std, g, P);
-    return dragonProcBuild(std, g, P);
-  }, function (t, o) { return t.parts.glb ? dragonGLBAnim(t, o) : dragonProcAnim(t, o); });
 
   // ======================================================================
   //  ② 氷晶の霊獣（参考: 隠し部屋モンスター②）
@@ -354,4 +376,12 @@
     P.arms.forEach((a, i) => { a.a.rotation.x = -0.4 - strike * 1.4 + Math.sin(tm + i) * 0.08; });
     P.starGlow.scale.setScalar(1.4 * (1 + strike * 1.5 + Math.sin(tm * 3) * 0.15));
   });
+  // 第47版: 隠し部屋の 4 体は、Blender のモデル（js/model-data.js）があればそれを使い、なければ上の手作りの形にする
+  for (const kind of Object.keys(GLB_CFG)) {
+    const proc = MON.extra[kind];
+    MON.register(kind, function (std, g, P) {
+      if (MG.ModelGLB && MG.ModelGLB.has(kind) && THREE.AnimationMixer) return glbBuild(kind, std, g, P);
+      return proc.build(std, g, P);
+    }, function (t, o) { return t.parts.glb ? glbAnim(t, o) : proc.anim(t, o); });
+  }
 })();
