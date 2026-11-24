@@ -48,7 +48,7 @@
     LC(a.fog, b.fog, scene.fog.color);
     scene.fog.density = L(a.fogD, b.fogD);
     if (W.skyTextured && W.stage === 'arena' && PRESET.auroraFog) scene.fog.color.lerp(PRESET.auroraFog, k);
-    if (W.stage === 'dungeon') { { const fc = W.dunTheme().fog; scene.fog.color.setRGB(fc[0], fc[1], fc[2]); } scene.fog.density = W.dun && W.dun.data && W.dun.data.boss ? 0.045 : 0.07; } // 第32版: 薄暗く（第33版: 守護者の階は、広い部屋の奥まで見えるよう少し薄く）
+    if (W.stage === 'dungeon') { { const fc = W.dun && W.dun.data && W.dun.data.iceField ? [0.16, 0.2, 0.27] : W.dunTheme().fog; scene.fog.color.setRGB(fc[0], fc[1], fc[2]); } scene.fog.density = W.dun && W.dun.data && W.dun.data.boss ? 0.045 : 0.07; } // 第32版: 薄暗く（第33版: 守護者の階は、広い部屋の奥まで見えるよう少し薄く）
     LC(a.hemiSky, b.hemiSky, hemi.color); LC(a.hemiGround, b.hemiGround, hemi.groundColor); hemi.intensity = L(a.hemiI, b.hemiI) * (W.stage === 'dungeon' ? 0.16 : 1);
     if (W.stage === 'dungeon') { hemi.color.setRGB(0.75, 0.62, 0.5); hemi.groundColor.setRGB(0.15, 0.1, 0.08); }
     if (sky) sky.visible = W.stage !== 'dungeon';
@@ -1304,6 +1304,120 @@
     stone(R * 2 + 1.5, 0.3, 2.2, 0, 6.05, 0); // 上の帯
     return { g, leaves };
   }
+  // ======================================================================
+  //  第43版: 最後の氷の王の階の、大きな氷のフィールド（滑る氷の床・降る雪・魔法で壊せる氷の柱）
+  // ======================================================================
+  const ICE = { field: null, pillars: [], snow: null, mats: null, light: null };
+  W.icePillars = () => ICE.pillars;
+  function snowTex() { // 丸くふちのぼやけた雪の粒
+    const c = document.createElement('canvas'); c.width = c.height = 32; const x = c.getContext('2d');
+    const g = x.createRadialGradient(16, 16, 0, 16, 16, 16); g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(0.45, 'rgba(255,255,255,0.8)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+    x.fillStyle = g; x.fillRect(0, 0, 32, 32); return new THREE.CanvasTexture(c);
+  }
+  function iceMats() {
+    if (ICE.mats) return ICE.mats;
+    const c = document.createElement('canvas'); c.width = c.height = 512; const x = c.getContext('2d');
+    const gr = x.createLinearGradient(0, 0, 512, 512); gr.addColorStop(0, '#9cc8e8'); gr.addColorStop(0.5, '#cfe8fa'); gr.addColorStop(1, '#8fbde0');
+    x.fillStyle = gr; x.fillRect(0, 0, 512, 512);
+    for (let i = 0; i < 900; i++) { x.fillStyle = 'rgba(255,255,255,' + (Math.random() * 0.12) + ')'; x.fillRect(Math.random() * 512, Math.random() * 512, 2 + Math.random() * 30, 1 + Math.random() * 2); } // 霜のすじ
+    x.lineWidth = 1.4;
+    for (let i = 0; i < 26; i++) { // ひび
+      let px = Math.random() * 512, py = Math.random() * 512, a = Math.random() * Math.PI * 2; x.strokeStyle = 'rgba(255,255,255,' + (0.35 + Math.random() * 0.4) + ')'; x.beginPath(); x.moveTo(px, py);
+      for (let k = 0; k < 7; k++) { a += (Math.random() - 0.5) * 1.2; px += Math.cos(a) * 18; py += Math.sin(a) * 18; x.lineTo(px, py); } x.stroke();
+    }
+    const tex = new THREE.CanvasTexture(c); tex.wrapS = tex.wrapT = THREE.RepeatWrapping; if (THREE.sRGBEncoding) tex.encoding = THREE.sRGBEncoding;
+    ICE.mats = {
+      floor: new THREE.MeshStandardMaterial({ map: tex, color: 0xffffff, roughness: 0.18, metalness: 0.15, emissive: 0x0c2236, emissiveIntensity: 1 }),
+      pillar: new THREE.MeshStandardMaterial({ color: 0xa8dcff, emissive: 0x2a6a9a, emissiveIntensity: 0.55, roughness: 0.12, metalness: 0.1, transparent: true, opacity: 0.9, flatShading: true }),
+      snow: new THREE.PointsMaterial({ color: 0xffffff, size: 0.11, map: snowTex(), transparent: true, opacity: 0.9, depthWrite: false, alphaTest: 0.02 }),
+    };
+    return ICE.mats;
+  }
+  function clearIceField() {
+    ICE.pillars.forEach((p) => { if (p.g.parent) p.g.parent.remove(p.g); p.g.traverse((o) => { if (o.geometry) o.geometry.dispose(); }); });
+    ICE.pillars = []; ICE.field = null;
+    if (ICE.snow) { if (ICE.snow.parent) ICE.snow.parent.remove(ICE.snow); ICE.snow.geometry.dispose(); ICE.snow = null; }
+    if (ICE.light && ICE.light.parent) ICE.light.parent.remove(ICE.light);
+  }
+  function buildIceField(d) {
+    if (!d.iceField) return;
+    const R = MG.RPG, T = R.TILE, F = d.iceField, M = iceMats();
+    const [ax, az] = R.tileToWorld(F.x0, F.z0), [bx, bz] = R.tileToWorld(F.x1, F.z1);
+    ICE.field = { x0: ax - T / 2, x1: bx + T / 2, z0: az - T / 2, z1: bz + T / 2 };
+    const w = ICE.field.x1 - ICE.field.x0, h = ICE.field.z1 - ICE.field.z0;
+    // 氷の床（床の上にうすく張る）
+    const fg = new THREE.PlaneGeometry(w, h); fg.rotateX(-Math.PI / 2); const uv = fg.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * w / 12, uv.getY(i) * h / 12);
+    const floor = new THREE.Mesh(fg, M.floor); floor.position.set((ICE.field.x0 + ICE.field.x1) / 2, 0.02, (ICE.field.z0 + ICE.field.z1) / 2); floor.receiveShadow = true; dunGroup.add(floor);
+    // 月明かり（フィールドを青白く照らす）
+    ICE.light = new THREE.HemisphereLight(0xa8d0ff, 0x1a2a40, 0.55); dunGroup.add(ICE.light);
+    // 氷の柱: 太い六角の柱と、まわりの氷のとげ。隠れられて、魔法で壊せる（HP 300）
+    F.pillars.forEach(([tx, tz], i) => {
+      const [x, z] = R.tileToWorld(tx, tz), g = new THREE.Group(); g.position.set(x, 0, z);
+      const rnd = (k) => { const v = Math.sin((i + 1) * 12.9898 + k * 78.233) * 43758.5453; return v - Math.floor(v); };
+      const H = 4.6 + rnd(1) * 1.8;
+      const main = new THREE.Mesh(new THREE.CylinderGeometry(0.75, 1.15, H, 6), M.pillar); main.position.y = H / 2; main.rotation.y = rnd(2) * 3; g.add(main);
+      const tip = new THREE.Mesh(new THREE.ConeGeometry(0.75, 1.3, 6), M.pillar); tip.position.y = H + 0.65; tip.rotation.y = main.rotation.y; g.add(tip);
+      for (let k = 0; k < 4; k++) {
+        const L = 1.4 + rnd(k + 3) * 1.6, sp = new THREE.Mesh(new THREE.ConeGeometry(0.32, L, 5), M.pillar), a = (k / 4) * Math.PI * 2 + rnd(k + 9);
+        sp.position.set(Math.cos(a) * 1.0, L * 0.35, Math.sin(a) * 1.0); sp.rotation.set(Math.sin(a) * 0.5, 0, -Math.cos(a) * 0.5); g.add(sp);
+      }
+      const gl = FX.glowSprite('#8ad8ff', 3.2); gl.material = gl.material.clone(); gl.material.opacity = 0.35; gl.position.y = H * 0.6; g.add(gl);
+      dunGroup.add(g);
+      const solid = addSolid(stageSolids.dungeon, x, z, 1.0, 1.0, H + 1.2);
+      const pl = { i, x, z, hp: 300, max: 300, alive: true, g, solid, H, shake: 0 };
+      solid.icePillar = pl; ICE.pillars.push(pl);
+    });
+    // 降る雪（フィールドの上だけ）
+    const n = 1800, pos = new Float32Array(n * 3);
+    for (let k = 0; k < n; k++) { pos[k * 3] = ICE.field.x0 + Math.random() * w; pos[k * 3 + 1] = Math.random() * 16; pos[k * 3 + 2] = ICE.field.z0 + Math.random() * h; }
+    const sg = new THREE.BufferGeometry(); sg.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    ICE.snow = new THREE.Points(sg, M.snow); ICE.snow.frustumCulled = false; dunGroup.add(ICE.snow);
+  }
+  // 氷の床の上か（滑る）
+  W.onIce = (x, z) => { const f = ICE.field; return !!f && x > f.x0 && x < f.x1 && z > f.z0 && z < f.z1; };
+  // 氷の柱に魔法が当たった（壊れたら true）。壊れると W.onIceBreak(pl) で知らせる
+  W.hitIcePillar = function (pl, dmg) {
+    if (!pl || !pl.alive) return false;
+    pl.hp -= dmg; pl.shake = 0.25;
+    if (pl.hp > 0) return false;
+    W.breakIcePillar(pl.i);
+    return true;
+  };
+  W.breakIcePillar = function (i) {
+    const pl = ICE.pillars.find((p) => p.i === i); if (!pl || !pl.alive) return null;
+    pl.alive = false; pl.hp = 0;
+    const k = stageSolids.dungeon.indexOf(pl.solid); if (k >= 0) stageSolids.dungeon.splice(k, 1);
+    if (pl.g.parent) pl.g.parent.remove(pl.g);
+    if (W.onIceBreak) W.onIceBreak(pl);
+    return pl;
+  };
+  // 爆発: 半径の中の氷の柱にダメージ（壊れた柱の一覧を返す）
+  W.blastIcePillars = function (p, r, dmg) {
+    const out = [];
+    ICE.pillars.forEach((pl) => {
+      const dd = Math.hypot(pl.x - p.x, pl.z - p.z);
+      if (pl.alive && dd < r + 1.1 && W.hitIcePillar(pl, dmg * (1 - Math.min(1, dd / (r + 1.1)) * 0.5))) out.push(pl);
+    });
+    return out;
+  };
+  function updateIce(dt) {
+    if (!ICE.field) return;
+    ICE.pillars.forEach((pl) => {
+      if (pl.shake <= 0) return;
+      pl.shake -= dt; const a = pl.shake * 0.25;
+      pl.g.position.x = pl.x + Math.sin(clock * 60) * a; pl.g.position.z = pl.z + Math.cos(clock * 53) * a;
+      if (pl.shake <= 0) { pl.g.position.x = pl.x; pl.g.position.z = pl.z; }
+    });
+    if (ICE.snow) {
+      const a = ICE.snow.geometry.attributes.position, f = ICE.field;
+      for (let k = 0; k < a.count; k++) {
+        let y = a.getY(k) - dt * (1.2 + (k % 7) * 0.12), x = a.getX(k) + Math.sin(clock * 0.7 + k) * dt * 0.4;
+        if (y < 0) { y = 16; x = f.x0 + Math.random() * (f.x1 - f.x0); a.setZ(k, f.z0 + Math.random() * (f.z1 - f.z0)); }
+        a.setX(k, x); a.setY(k, y);
+      }
+      a.needsUpdate = true;
+    }
+  }
   // F キーで開け閉めする（閉じているあいだは固い壁として、人も敵も魔法も通さない。向こうも見えない）
   W.toggleDoor = function (i) {
     const d = W.dun && W.dun.doors && W.dun.doors[i]; if (!d) return null;
@@ -1336,6 +1450,7 @@
     while (dunGroup.children.length) { const o = dunGroup.children[0]; dunGroup.remove(o); if (o.geometry && !o.isSprite) o.geometry.dispose(); if (o.material && !o.isSprite && !keepMat.has(o.material)) o.material.dispose(); }
     dunAnim.length = 0;
     stageSolids.dungeon.length = 0;
+    clearIceField();
     const N = d.N, T = R.TILE, isFloor = (x, z) => x >= 0 && z >= 0 && x < N && z < N && d.tiles[z * N + x] === 1;
     // 床に接している壁のタイルだけを、横に続く分まとめて 1 つの箱にする
     const need = (x, z) => !isFloor(x, z) && [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]].some(([a, b]) => isFloor(x + a, z + b));
@@ -1366,8 +1481,16 @@
     dunGroup.add(stoneMesh(cornice, dunStone.dark, 1.2));
     // 天井（切り石）
     const [ax0, az0] = R.tileToWorld(0, 0), [bx0, bz0] = R.tileToWorld(N - 1, N - 1);
-    const ceil = stoneMesh([[N * T + 20, 0.4, N * T + 20, (ax0 + bx0) / 2, WALL_VIS + 0.2, (az0 + bz0) / 2]], dunStone.ceil, 1.6);
+    const CW = N * T + 20, CX = (ax0 + bx0) / 2, CZ = (az0 + bz0) / 2, CY = WALL_VIS + 0.2;
+    let ceilList = [[CW, 0.4, CW, CX, CY, CZ]];
+    if (d.iceField) { // 第43版: 氷のフィールドの上は天井をあけ、夜空から雪が降る（外周の壁の上まで）
+      const F = d.iceField, [hx0, hz0] = R.tileToWorld(F.x0 - 1, F.z0 - 1), [hx1, hz1] = R.tileToWorld(F.x1 + 1, F.z1 + 1);
+      const X0 = CX - CW / 2, X1 = CX + CW / 2, Z0 = CZ - CW / 2, Z1 = CZ + CW / 2, a = hx0 + T / 2, b = hx1 - T / 2, c = hz0 + T / 2, e = hz1 - T / 2;
+      ceilList = [[a - X0, 0.4, CW, (X0 + a) / 2, CY, CZ], [X1 - b, 0.4, CW, (b + X1) / 2, CY, CZ], [b - a, 0.4, c - Z0, (a + b) / 2, CY, (Z0 + c) / 2], [b - a, 0.4, Z1 - e, (a + b) / 2, CY, (e + Z1) / 2]];
+    }
+    const ceil = stoneMesh(ceilList, dunStone.ceil, 1.6);
     dunGroup.add(ceil);
+    buildIceField(d);
     const floorTiles = []; for (let z = 0; z < N; z++) for (let x = 0; x < N; x++) if (isFloor(x, z)) floorTiles.push([x, z]);
     // 部屋の壁に柱を立てる（土台と柱頭つき。壁から 0.25m 出る。見た目だけ）
     const cols = [];
@@ -1480,6 +1603,7 @@
       const solid = addSolid(stageSolids.dungeon, sx, sz, alongX ? 2.0 : 0.55, alongX ? 0.55 : 2.0, WALL_H);
       return { x: cx, z: cz, out: dr.out, open: false, k: 0, leaves: m.leaves, solid, g: m.g };
     });
+    wardBoxes = [];
     W.dun = { doors, signs: [], data: d, start, stairs, portal, stairsOpen: !d.boss, stairsParts, portalGroup: pg, torches: dunLights.torches.length, pillars: cols.length / 3, area: d.area || 0, theme };
     W.setStairsOpen(!d.boss);
     if (W.stage === 'dungeon') { solids = stageSolids.dungeon; applyTime(timeK); } // 階ごとに霧の濃さが変わる（守護者の階）
@@ -1735,8 +1859,12 @@
     }
   };
 
+  // 第43版: 守護者の部屋の入口の結界。魔法の弾だけを止める（人は通れる。押し戻さない）
+  let wardBoxes = [];
+  W.setWards = (list) => { wardBoxes = list || []; };
   // 弾が地形にぶつかったか
   W.collide = function (pos, r, skip) {
+    for (const so of wardBoxes) if (inBox(pos, solidBox(so, r))) return so;
     for (const o of props) {
       if (!o.alive || (skip && skip.has(o))) continue;
       if (o.kind === 'slab' ? inBox(pos, slabBox(o, r)) : o.mesh.position.distanceTo(pos) < o.r + r) return o;
@@ -2068,7 +2196,7 @@
       const near = dunLights.torches.map((t) => [t, (t.x - playerPos.x) ** 2 + (t.z - playerPos.z) ** 2]).sort((a, b) => a[1] - b[1]);
       dunLights.pool.forEach((l, i) => { const e = near[i]; if (!e) { l.intensity = 0; return; } const t = e[0]; l.position.set(t.x, t.y, t.z); l.intensity = 1.05 * (1 + Math.sin(clock * 9 + t.ph) * 0.08 + Math.sin(clock * 23 + t.ph * 2) * 0.05); });
     }
-    if (W.stage === 'dungeon') updateDoors(dt);
+    if (W.stage === 'dungeon') { updateDoors(dt); updateIce(dt); }
     if (W.stage === 'dungeon') for (const a of dunAnim) {
       if (a.torch) { a.torch.scale.setScalar(1.0 * (1 + Math.sin(clock * 9 + a.ph) * 0.1 + Math.sin(clock * 23 + a.ph) * 0.05)); continue; }
       if (a.face) { if (playerPos) a.face.rotation.y = Math.atan2(playerPos.x - a.face.position.x, playerPos.z - a.face.position.z); continue; }

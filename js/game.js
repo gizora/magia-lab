@@ -69,6 +69,7 @@
   // 第42版: ヒットストップ（大きな一撃が当たった瞬間、ほんの少し世界の動きを止めて重さを出す）。ひとりで遊んでいるときだけ。
   // 止める時間は実際の時間で数え、画面の揺れも実際の時間で収める（止まっている間に揺れが固まらないように）
   let hitStopT = 0, realDt = 1 / 60;
+  const ICE_GRIP = 2.2; // 第43版: 氷の床でのふんばり（小さいほど滑る）
   const solo = () => !M.on && !CO.on && !(MG.Net && MG.Net.role);
   function hitStop(sec) {
     if (!solo() || hitStopT > 0) return; // 止まっている間の次の一撃では止め直さない（止まりっぱなしにしない）
@@ -701,8 +702,9 @@
     setTimeout(() => { el.remove(); popCount--; }, 900);
   }
 
-  function damage(t, d, color, crit, by) {
+  function damage(t, d, color, crit, by, tag) {
     if (!t.alive) return 0;
+    if (t.isEnemy && t.kind && MG.UI && MG.UI.onMeet) MG.UI.onMeet(t.kind); // 第43版: 戦ったモンスターは図鑑に載る
     d = Math.max(1, Math.round(d));
     t.flash = 0.16;
     if (t.group) hitPop(t, crit || d >= 80);
@@ -712,7 +714,7 @@
         // 受け持ちでない画面: 数字だけ出して、受け持ちへ送る（HP は受け持ちから届く）
         const o = enemyOut(t); o.d += d;
         const q = t.center.clone(); q.x += rand(-0.4, 0.4); q.y += t.r * 0.6;
-        popup(q, crit ? d + '!' : String(d), crit ? 'crit' : '');
+        popup(q, crit ? d + '!' : String(d), (crit ? 'crit ' : '') + (tag || ''));
         return d;
       }
       const who = by || CO.me;
@@ -721,7 +723,7 @@
     }
     t.hp -= d;
     const p = t.center.clone(); p.x += rand(-0.4, 0.4); p.y += t.r * 0.6;
-    popup(p, crit ? d + '!' : String(d), crit ? 'crit' : '');
+    popup(p, crit ? d + '!' : String(d), (crit ? 'crit ' : '') + (tag || '')); // 第43版: 弱点は黄色（weak）、耐性は灰色（resist）
     drawBar(t);
     if (t.hp <= 0) killTarget(t);
     return d;
@@ -736,11 +738,15 @@
     if (t.isSummon && t.puppet) return hitPuppet(t, dmg, spec, o); // 相手の召喚獣: ダメージを持ち主に送る
     if (t.isPlayer) return hitPlayer(t, dmg, spec, o);
     if (spec && spec.remote) return 0;                          // 相手の魔法は見た目だけ
+    if (t.isEnemy && t.E && t.E.boss && wardBlocks(player.pos, t.pos)) { if (!t.wardPop || st.time - t.wardPop > 0.6) { t.wardPop = st.time; popup(t.center.clone().add(new V3(0, t.r, 0)), '結界', 'resist'); } return 0; } // 第43版
     if (o.dir) t.lastDir = o.dir.clone();
     let d = dmg * ((spec && spec.mult) || 1);
     if (t.vulnT > 0 || t.netVul) d *= 1.35;
     let crit = false;
     if (spec && spec.crit && !o.noCrit && Math.random() < spec.crit) { d *= 2.5; crit = true; }
+    // 第43版: モンスターの弱点（1.5 倍）と耐性（0.5 倍）
+    let tag = '';
+    if (t.isEnemy && spec && MG.RPG.affinity) { const a = MG.RPG.affinity(t.kind, spec.element); if (a !== 1) { d *= a; tag = a > 1 ? 'weak' : 'resist'; } }
     if (spec && !o.noStatus) {
       if (spec.burn > 0) { t.burnT = Math.max(t.burnT, 1.5 + spec.burn * 1.2); t.burnDps = Math.max(t.burnDps, (3 + spec.burn * 3) * (spec.mult || 1)); t.burnRec = spec.rec || null; t.burnBy = CO.me; }
       if (spec.freeze > 0) { t.freezeT = Math.max(t.freezeT, 0.8 + spec.freeze); if (spec.freeze >= 2) t.frozenHard = true; }
@@ -769,7 +775,7 @@
       }
     }
     if (crit) AU.crit(); else AU.hit(spec && spec.element, ap(t.center));
-    const dealt = damage(t, d, null, crit);
+    const dealt = damage(t, d, null, crit, undefined, tag);
     if (spec && spec.rec) spec.rec.add(dealt);
     return dealt;
   }
@@ -938,6 +944,7 @@
   }
 
   function explode(p, radius, dmg, spec, direct, o) {
+    if (W.blastIcePillars && !(spec && spec.remote)) W.blastIcePillars(p, radius, dmg); // 第43版: 爆発は氷の柱も壊す
     o = o || {};
     const [c1, c2] = colorsOf(spec);
     const pp = p.clone(); if (pp.y < 0.2) pp.y = 0.2;
@@ -1232,6 +1239,7 @@
           pierceFx(p.pos, p.spec, p.pierced, hitProp);
           if (p.spec.destroy) W.damageProp(hitProp, p.dmg * 0.6, p.pos.clone());
         } else if (hitProp) {
+          if (hitProp.icePillar && !p.spec.remote && !EXPLOSIVE[p.kind]) W.hitIcePillar(hitProp.icePillar, p.dmg); // 第43版: 氷の柱は魔法で壊せる
           if (EXPLOSIVE[p.kind]) explode(p.pos, p.explodeR, p.dmg, p.spec, null);
           else { smallBurst(p.pos, p.spec, p.isShard ? 0.5 : 0.8); AU.blocked(ap(p.pos)); }
           if (p.pierced > 0) popup(p.pos.clone().add(new V3(0, 1, 0)), `${p.pierced}枚で停止`, 'pierce-end');
@@ -3950,8 +3958,13 @@
     if (!dead) speed *= moveBoost();                             // 纏い・迅速・飛翔で速くなる
     speed *= DER.speed;                                          // レベルで上がった足の速さ
     const sin = Math.sin(player.yaw), cos = Math.cos(player.yaw);
-    player.pos.x += (fx * cos + fz * sin) * speed * dt;
-    player.pos.z += (-fx * sin + fz * cos) * speed * dt;
+    // 第43版: 氷の床の上では、動きに勢いが残って滑る（止まるのも曲がるのも遅れる）
+    const wvx = (fx * cos + fz * sin) * speed, wvz = (-fx * sin + fz * cos) * speed;
+    if (!player.iv) player.iv = new V3();
+    if (D.on && W.onIce && W.onIce(player.pos.x, player.pos.z) && !dead) { const k = 1 - Math.exp(-ICE_GRIP * dt); player.iv.x += (wvx - player.iv.x) * k; player.iv.z += (wvz - player.iv.z) * k; }
+    else player.iv.set(wvx, 0, wvz);
+    player.pos.x += player.iv.x * dt;
+    player.pos.z += player.iv.z * dt;
     // 吹き飛ばされた勢い
     if (player.kv.lengthSq() > 1e-4) { player.pos.addScaledVector(player.kv, dt); player.kv.multiplyScalar(Math.exp(-4 * dt)); }
     const r = Math.hypot(player.pos.x, player.pos.z);
@@ -4271,7 +4284,7 @@
       const out = [{ id: 'portal', label: '帰還ポータル', x: W.dun.portal.x, z: W.dun.portal.z, r: 2.8, hint: '村へ帰る（拾った物を持ち帰る）', touch: { x: W.dun.portal.x, z: W.dun.portal.z, r: 1.4 } }];
       out[0].confirm = true; // 第37版: 帰還ポータルは、触れると確認画面を出す
       // 第37版: 守護者の部屋の重い扉（F キーで開ける・閉める）
-      (W.dun.doors || []).forEach((d, i) => out.push({ id: 'door' + i + (d.open ? 'o' : 'c'), door: i, label: '扉', x: d.x, z: d.z, r: 3.4, hint: d.open ? '扉を閉める' : '重い扉を開ける' }));
+      (W.dun.doors || []).forEach((d, i) => out.push({ id: 'door' + i + (d.sealed ? 's' : d.open ? 'o' : 'c'), door: i, label: '扉', x: d.x, z: d.z, r: 3.4, hint: d.sealed ? '守護者を倒すまで開かない' : d.open ? '扉を閉める' : '重い扉を開ける' }));
       if (W.dun.stairsOpen) out.push({ id: 'stairs', label: '下の階', x: W.dun.stairs.x, z: W.dun.stairs.z, r: 2.6, hint: `下の階へ進む（地下 ${D.floor + 1} 階）`, touch: { x: W.dun.stairs.x, z: W.dun.stairs.z, r: 1.4 } });
       return out;
     }
@@ -4313,6 +4326,8 @@
   function enterSpot(s) {
     AU.click();
     if (s.door != null) { // 第37版: 重い扉を開ける・閉める
+      const dd = W.dun && W.dun.doors && W.dun.doors[s.door];
+      if (dd && dd.sealed) { popup(ahead(2.4, 0.2), '守護者を倒すまで開かない', 'pvp'); AU.blocked(ap(new V3(s.x, 1.5, s.z))); return true; } // 第43版
       const open = W.toggleDoor(s.door);
       coSend({ t: 'door', i: s.door, o: open ? 1 : 0 });
       const p = new V3(s.x, 1.5, s.z); AU.step('heavy', ap(p), 1.8); AU.impact('earth', 1.2, ap(p)); st.shake = Math.max(st.shake, 0.12);
@@ -4414,8 +4429,10 @@
       const mw = e.type === 'mimic' && e.face ? 0.4 : 0; // 第40版: ミミックも宝箱と同じく壁に寄せる
       const t = spawnEnemy(e.type, e.face ? new V3(x - (mw ? e.face[0] * mw : 0), 0, z - (mw ? e.face[1] * mw : 0)) : new V3(x + seeded(seed, i, 1) - 0.5, 0, z + seeded(seed, i, 2) - 0.5), f, Object.assign({}, sc, { hp: sc.hp * hpK }), 'e' + i);
       if (t && e.face) { t.yaw = Math.atan2(e.face[0], e.face[1]); t.postYaw = t.yaw; } // 第38版: 守護者は扉の方を向いて、その場で待つ
+      if (t && e.elite) makeElite(t); // 第43版: 隠し部屋の物凄く強いモンスター
     });
-    data.chests.forEach((c, i) => { const [x, z] = RP.tileToWorld(c.t[0], c.t[1]); spawnChest(new V3(x, 0, z), f, i, c.face); });
+    data.chests.forEach((c, i) => { const [x, z] = RP.tileToWorld(c.t[0], c.t[1]); spawnChest(new V3(x, 0, z), f, i, c.face, c.big); });
+    D.hiddenSeen = false;
     if (f > P.bestFloor) P.bestFloor = f;
     checkpoint();
     st.spot = null; if (MG.UI && MG.UI.onSpot) MG.UI.onSpot(null);
@@ -4476,9 +4493,9 @@
   }
   // ---- 宝箱 ----
   let chestMats = null;
-  function spawnChest(p, f, idx, face) {
+  function spawnChest(p, f, idx, face, big) {
     // 第40版: 壁ぎわのマスでは、背中を壁から 0.15m ほど離して置き、正面（+Z）を部屋の内側へ向ける
-    if (face) { p = p.clone(); p.x -= face[0] * 0.4; p.z -= face[1] * 0.4; }
+    if (face && !big) { p = p.clone(); p.x -= face[0] * 0.4; p.z -= face[1] * 0.4; }
     if (!chestMats) chestMats = { wood: new THREE.MeshStandardMaterial({ color: 0x7a4a24, roughness: 0.8, flatShading: true }), gold: new THREE.MeshStandardMaterial({ color: 0xe8b04a, emissive: 0x8a5a10, emissiveIntensity: 0.6, roughness: 0.35, metalness: 0.4 }) };
     const g = new THREE.Group(); g.position.set(p.x, W.heightAt(p.x, p.z), p.z); g.rotation.y = face ? Math.atan2(face[0], face[1]) : seeded(D.seed, idx || 0, 3) * Math.PI * 2;
     let lidP;
@@ -4490,9 +4507,10 @@
       [[-0.45], [0.45]].forEach(([x]) => { const b = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.72, 0.84), chestMats.gold); b.position.set(x, 0.36, 0); g.add(b); });
       const lock = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.22, 0.06), chestMats.gold); lock.position.set(0, 0.6, 0.42); g.add(lock);
     }
-    const glow = FX.glowSprite('#ffd36b', 1.8); glow.position.y = 0.9; g.add(glow);
+    const glow = FX.glowSprite('#ffd36b', big ? 3.6 : 1.8); glow.position.y = 0.9; g.add(glow);
+    if (big) g.scale.setScalar(1.5); // 第43版: 隠し部屋の大きな宝箱
     scene.add(g);
-    D.chests.push({ g, lidP, glow, open: false, t: 0, f, i: idx || 0, x: p.x, z: p.z });
+    D.chests.push({ g, lidP, glow, open: false, t: 0, f, i: idx || 0, x: p.x, z: p.z, big: !!big });
   }
   function updateChests(dt) {
     for (const c of D.chests) {
@@ -4507,9 +4525,10 @@
   function openChest(c) {
     c.open = true;
     const sc = RP.scale(c.f);
-    const gold = Math.round((14 + seeded(D.seed, c.i, 4) * 26) * sc.gold);
+    const gold = Math.round((14 + seeded(D.seed, c.i, 4) * 26) * sc.gold * (c.big ? RP.BIG_CHEST : 1));
     D.run.gold += gold;
-    let msg = `宝箱: ${gold} G`;
+    let msg = c.big ? `大きな宝箱: ${gold} G` : `宝箱: ${gold} G`;
+    if (c.big) { FX.emit(new V3(c.x, 1.2, c.z), { count: 160, c1: '#ffd24a', c2: '#ffffff', speed: 7, up: 6, gravity: 10, life: 1.6, size: 0.32 }); st.shake = Math.max(st.shake, 0.2); }
     popup(new V3(c.x, 1.8, c.z), msg, 'score');
     FX.emit(new V3(c.x, 1, c.z), { count: 50, c1: '#ffd24a', c2: '#fff3b8', speed: 4, up: 4, gravity: 10, life: 1, size: 0.25 });
     AU.reveal(4);
@@ -4517,6 +4536,14 @@
   }
 
   // ---- 敵 ----
+  // 第43版: 隠し部屋の物凄く強いモンスター（HP 4 倍・攻撃 1.6 倍・体 1.35 倍。倒すと経験値 6 倍・お金 10 倍）。赤いもやをまとう
+  function makeElite(t) {
+    const K = RP.ELITE;
+    t.elite = true; t.hp = t.maxHp = Math.round(t.hp * K.hp); t.dmg = Math.round(t.dmg * K.dmg); t.xp = Math.round(t.xp * K.xp); t.gold = Math.round(t.gold * K.gold);
+    t.face.scale.multiplyScalar(K.size); t.r *= K.size; t.T = { cy: t.T.cy * K.size, r: t.r };
+    const aura = FX.glowSprite('#ff3a3a', 3.2 * K.size); aura.material = aura.material.clone(); aura.material.opacity = 0.45; aura.position.y = t.E.cy * K.size; t.group.add(aura);
+    drawBar(t);
+  }
   const ENEMY_COL = { slime: ['#5aff8a', '#c8ffd8'], skeleton: ['#e8e2d0', '#ff5a3a'], bat: ['#6a4a9a', '#ff4a8a'], mage: ['#7a3cff', '#c8a8ff'], boss: ['#ff5a3a', '#ffb07a'],
     // 第36版: 深い階の敵
     spider: ['#8a2a2a', '#ff4a4a'], goblin: ['#8ab04a', '#e8d070'], mimic: ['#c8a050', '#ff4a4a'], armor: ['#5a8aff', '#c8e0ff'], wraith: ['#7a4aff', '#c8a8ff'], gargoyle: ['#8a8a88', '#ff9a3a'],
@@ -4619,6 +4646,8 @@
     return best ? { foe: best, d: bd } : null;
   }
   function enemyHit(t, foe, dmg) {
+    if (t.E && t.E.boss && foe.center && wardBlocks(t.pos, foe.center)) return 0; // 第43版: 結界の外へは攻撃が届かない
+    if (foe.self && MG.UI && MG.UI.onMeet) MG.UI.onMeet(t.kind); // 第43版: 攻撃してきたモンスターも図鑑に載る
     if (foe.player) {
       if (foe.self) return hurtPlayer(dmg, t.center.clone(), t.E.label);
       coSend({ t: 'hurt', d: Math.round(dmg), p: arr(t.center), e: t.kind }, { to: foe.pid });
@@ -4823,6 +4852,7 @@
     // 高さ: 飛ぶ敵は宙に、それ以外は床に
     if (E.fly) t.pos.y += ((E.flyY || 2.2) + Math.sin(st.time * 2.5 + t.phase) * 0.4 - t.pos.y) * Math.min(1, dt * 4);
     else { const fl = W.floorAt(t.pos.x, t.pos.z, t.pos.y + 0.4); t.vy -= 20 * dt; t.pos.y += t.vy * dt; if (t.pos.y <= fl) { t.pos.y = fl; t.vy = 0; } }
+    if (E.boss) { const r = bossRect(); if (r) { const pd = t.r + 0.3; t.pos.x = Math.min(r.x1 - pd, Math.max(r.x0 + pd, t.pos.x)); t.pos.z = Math.min(r.z1 - pd, Math.max(r.z0 + pd, t.pos.z)); } } // 第43版: 守護者は部屋から出ない
     enemyLook(t, dt, speed);
     return false;
   }
@@ -4884,12 +4914,86 @@
       }
     }
   }
+  // ======================================================================
+  //  第43版: 守護者の部屋の結界と、入ったら背後で閉まる扉
+  //  - 守護者が生きている間、部屋の入口に結界がある。外と中の間では、魔法も攻撃も届かない（人は通れる）。守護者は部屋から出ない
+  //  - 立っている全員（ひとりなら自分）が部屋に入ると、背後で扉が閉まって鍵がかかる。守護者を倒すと開く
+  // ======================================================================
+  const BR = { rect: null, mats: null };
+  let iceNet = false;
+  W.onIceBreak = (pl) => {
+    const c = new V3(pl.x, pl.H * 0.5, pl.z);
+    FX.emit(c, { count: 70, c1: '#bfeaff', c2: '#ffffff', speed: 9, up: 4, jitter: 1.2, life: 1.1, size: 0.5, drag: 1.5, gravity: 12 });
+    FX.ring(new V3(pl.x, 0.1, pl.z), '#a8dcff', 1, 7, 0.6);
+    AU.impact('ice', 1.6, ap(c)); st.shake = Math.max(st.shake, 0.3 * Math.max(0.2, 1 - flatDist(c, player.pos) / 30));
+    if (!iceNet) coSend({ t: 'ipl', i: pl.i });
+  };
+  function bossRect() {
+    const S = D.data && D.data.boss && D.data.rooms && D.data.rooms[D.data.stairs]; if (!S || !S.bossRoom) return null;
+    if (BR.rect && BR.rect.S === S) return BR.rect;
+    const [ax, az] = RP.tileToWorld(S.x0, S.z0), [bx, bz] = RP.tileToWorld(S.x0 + S.w - 1, S.z0 + S.h - 1), h = RP.TILE / 2;
+    BR.rect = { S, x0: ax - h, x1: bx + h, z0: az - h, z1: bz + h };
+    return BR.rect;
+  }
+  function inBossRoom(p, pad) { const r = bossRect(); pad = pad || 0; return !!r && p.x > r.x0 + pad && p.x < r.x1 - pad && p.z > r.z0 + pad && p.z < r.z1 - pad; }
+  const bossAlive = () => targets.some((t) => t.isEnemy && t.alive && t.E && t.E.boss);
+  const wardOn = () => D.on && !!bossRect() && bossAlive();
+  G.inBossRoom = (x, z) => inBossRoom({ x, z }); // 動作確認用
+  function wardMesh(d) {
+    if (d.ward) return d.ward;
+    if (!BR.mats) {
+      const c = document.createElement('canvas'); c.width = 128; c.height = 128; const x = c.getContext('2d');
+      x.strokeStyle = 'rgba(190,230,255,0.9)'; x.lineWidth = 3;
+      const hex = (cx, cy, r) => { x.beginPath(); for (let k = 0; k <= 6; k++) { const a = Math.PI / 3 * k + Math.PI / 6; x[k ? 'lineTo' : 'moveTo'](cx + Math.cos(a) * r, cy + Math.sin(a) * r); } x.stroke(); };
+      for (let j = -1; j < 5; j++) for (let i = -1; i < 5; i++) hex(i * 32 + (j % 2 ? 16 : 0), j * 28, 17);
+      const tex = new THREE.CanvasTexture(c); tex.wrapS = tex.wrapT = THREE.RepeatWrapping; tex.repeat.set(5, 6.5);
+      BR.mats = new THREE.MeshBasicMaterial({ map: tex, color: 0x8fd8ff, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, toneMapped: false });
+    }
+    // 扉の形（四角の上に半円のアーチ。幅 4m・てっぺん 5.4m）
+    const sh = new THREE.Shape(); sh.moveTo(-2, 0); sh.lineTo(2, 0); sh.lineTo(2, 3.4); sh.absarc(0, 3.4, 2, 0, Math.PI, false); sh.lineTo(-2, 0);
+    const g = new THREE.ShapeGeometry(sh, 24), uv = g.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, (uv.getX(i) + 2) / 4, uv.getY(i) / 5.4);
+    const m = new THREE.Mesh(g, BR.mats); m.position.z = 0.8; m.renderOrder = 3; d.g.add(m); d.ward = m; // 扉の板の付け根（部屋の側）に張る
+    return m;
+  }
+  function updateBossRoom(dt) {
+    const doors = (W.dun && W.dun.doors) || [], on = wardOn(), boxes = [];
+    doors.forEach((d, i) => {
+      // 結界（扉が開いている間だけ見える。閉まっている間は扉が止める）
+      const show = on && d.k > 0.02;
+      if (show || d.ward) { const m = wardMesh(d); m.visible = show; if (show) { BR.mats.opacity = 0.2 + Math.sin(st.time * 3) * 0.06; BR.mats.map.offset.y = (st.time * 0.05) % 1; } }
+      if (on) { const alongX = d.out[1] !== 0; boxes.push({ x: d.x, z: d.z, hx: alongX ? 2.1 : 0.3, hz: alongX ? 0.3 : 2.1, y0: 0, y1: 5.6, solid: true, alive: true, kind: 'solid', ward: true }); }
+      if (!isSim()) return; // 閉める・開けるのは、ひとりのときの自分か、パーティーの部屋主
+      if (on && d.open && !d.sealed) {
+        const ppl = standing();
+        if (ppl.length && ppl.every((q) => inBossRoom(q.center, 2.0))) {
+          d.sealed = true; W.toggleDoor(i);
+          coSend({ t: 'door', i, o: 0, s: 1 });
+          const p = new V3(d.x, 1.5, d.z); AU.step('heavy', ap(p), 1.8); AU.impact('earth', 1.6, ap(p)); st.shake = Math.max(st.shake, 0.25);
+          popup(ahead(2.4, 0.4), '扉が閉ざされた', 'pvp');
+        }
+      } else if (d.sealed && !bossAlive()) {
+        d.sealed = false; if (!d.open) W.toggleDoor(i);
+        coSend({ t: 'door', i, o: 1, s: 0 });
+        popup(ahead(2.4, 0.4), '扉が開いた', 'pvp');
+      }
+    });
+    W.setWards(boxes);
+  }
+  // 結界をはさんで、外と中の間では攻撃が届かない
+  const wardBlocks = (a, b) => wardOn() && inBossRoom(a) !== inBossRoom(b);
+
   function updateDungeon(dt) {
     if (!D.on) return;
+    updateBossRoom(dt);
     if (D.invul > 0) D.invul -= dt;
     updateChests(dt);
     updateEbolts(dt);
     updateRevive(dt);
+    // 第43版: 隠し部屋に入ったら、地図に出す（それまでは、部屋も通路も地図に出ない）
+    if (D.data && D.data.hidden && !D.hiddenSeen) {
+      const h = D.data.hidden, [tx, tz] = RP.worldToTile(player.pos.x, player.pos.z);
+      if (tx >= h.x0 && tx < h.x0 + h.w && tz >= h.z0 && tz < h.z0 + h.h) { D.hiddenSeen = true; popup(ahead(2.4, 0.4), '隠し部屋を見つけた！', 'score'); AU.reveal(4); }
+    }
     // 地図: まわり 10m を見たことにする
     if (D.data && D.explored) {
       const [tx, tz] = RP.worldToTile(player.pos.x, player.pos.z), N = D.data.N;
@@ -5297,8 +5401,10 @@
       case 'fx': return G.remoteFx(from, m.f);
       case 'circle': return G.avatarCircle(from, m.g, String(m.k || ''));
       case 'rev': return revived();
+      case 'ipl': { iceNet = true; const r = W.breakIcePillar(Math.round(+m.i)); iceNet = false; return !!r; } // 第43版: 仲間が壊した氷の柱
       case 'door': {
         const i = Math.round(+m.i), d = W.dun && W.dun.doors && W.dun.doors[i];
+        if (d && m.s != null) { const was = !!d.sealed; d.sealed = !!m.s; if (d.sealed !== was) popup(ahead(2.4, 0.4), d.sealed ? '扉が閉ざされた' : '扉が開いた', 'pvp'); } // 第43版
         if (!d || !!d.open === !!m.o) return false;
         W.toggleDoor(i);
         const p = new V3(d.x, 1.5, d.z); AU.step('heavy', ap(p), 1.8); AU.impact('earth', 1.2, ap(p));
@@ -5409,6 +5515,8 @@
     setPlayer(x, z) { player.pos.set(x, 0, z); camera.position.set(x, EYE, z); camera.updateMatrixWorld(true); },
     cam() { return camera; }, // 第42版: 画面の揺れのテスト用
     hitStopT() { return hitStopT; }, // 第42版: ヒットストップのテスト用
+    iv() { return player.iv ? player.iv.clone() : null; }, // 第43版: 氷の床で滑るテスト用
+    hiddenSeen() { return !!D.hiddenSeen; }, // 第43版: 隠し部屋のテスト用
     hitT(id, d, crit) { const t = targets.find((q) => q.id === id); return t ? damage(t, d, "#ffffff", !!crit) : -1; }, // 第42版: 当たったときの光と弾みのテスト用
     popOf(id) { const t = targets.find((q) => q.id === id); return t ? { pop: t.pop || 0, flash: t.flash, sx: t.group.scale.x, sy: t.group.scale.y } : null; },
     step(sec) { const n = Math.round(sec * 60); realDt = 1 / 60; for (let i = 0; i < n; i++) step(1 / 60); camera.updateMatrixWorld(true); },
@@ -5455,6 +5563,8 @@
     interact: () => G.interact(true),
     touchAt: (id) => { const s = spotsHere().find((q) => q.id === id); if (!s || !s.touch) return null; return s.touch.r ? [s.touch.x, s.touch.z] : [s.touch.x, s.touch.z]; }, // 動作確認用: 触れて入る場所の中心
     nextFloor: () => nextFloor(D.floor + 1),
+    goFloor: (f, seed) => nextFloor(f, seed), // 第43版: 動作確認用（好きな階へ）
+    hitE(id, d, el) { const t = targets.find((q) => q.id === id); return t ? hitTarget(t, d, { element: el }, {}) : -1; }, // 第43版: 属性を指定して当てる
     setInvul(v) { D.invul = v; },
     dilations: () => dilations.filter((d) => d.alive).map((d) => ({ owner: d.owner, x: d.c.x, z: d.c.z, R: d.R })),
     meissners: () => meissners.filter((m) => m.alive).map((m) => ({ owner: m.owner })),

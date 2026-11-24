@@ -54,6 +54,7 @@
     if (!MG.WAND_MAP[save.wand]) save.wand = 'novice';
     if (!save.known || typeof save.known !== 'object' || Array.isArray(save.known)) save.known = {};
     for (const k in save.known) if (!MG.buildSpell(k.split('|')) || !save.known[k] || typeof save.known[k] !== 'object') delete save.known[k];
+    save.met = save.met && typeof save.met === 'object' && !Array.isArray(save.met) ? save.met : {}; // 第43版: 戦ったことのあるモンスター
     save.secrets = Array.isArray(save.secrets) ? save.secrets.filter((id) => MG.SECRETS.some((s) => s.id === id)) : [];
     // 第40版: 隠し魔法になる前の版で同じ並びを放っていると、発見していないのに名前が出て、放っても発見にならなかった。
     // 隠し魔法の並びは、発見の記録があるときだけ「放ったことがある」とみなす（発見の記録だけあるときは、放った記録を足す）
@@ -606,7 +607,7 @@
   //  図鑑（一覧 + くわしい表示）
   // ======================================================================
   // タブ: r2 / r3 / r4（ことばの数＝初級・中級・上級）と secret（隠し魔法）
-  const BOOK_TABS = ['r2', 'r3', 'r4', 'secret'];
+  const BOOK_TABS = ['r2', 'r3', 'r4', 'secret', 'mon']; // 第43版: mon（魔物。戦ったモンスターの弱点と耐性）
   const RANK_NAME = { r2: '初級魔法（2語）', r3: '中級魔法（3語）', r4: '上級魔法（4語）' };
   let bookTab = 'r2', bookSel = null;
   const bookFilter = { kind: 'all', elem: '', sort: 'new' };
@@ -639,6 +640,8 @@
     const elems = new Set(made.map((e) => e.spec.element)).size;
     ['r2', 'r3', 'r4'].forEach((t) => { $('count-' + t).textContent = made.filter((e) => tabOf(e) === t).length; });
     $('count-secret').textContent = `${found}/${total}`;
+    const MON = Object.keys(MG.RPG.ENEMIES);
+    $('count-mon').textContent = `${MON.filter((k) => save.met[k]).length}/${MON.length}`;
     $('book-progress').innerHTML = `
       <div class="bp-item"><span class="bp-k">発動した魔法</span><span class="bp-v">${made.length}<small>種</small></span></div>
       <div class="bp-item"><span class="bp-k">隠し魔法</span><span class="bp-v">${found}<small>/ ${total}</small></span><span class="bp-bar"><span style="width:${(found / total) * 100}%"></span></span></div>
@@ -647,9 +650,15 @@
     $('book-list').setAttribute('aria-labelledby', 'tab-' + bookTab);
     const list = $('book-list');
     const tools = $('book-tools');
-    tools.hidden = bookTab === 'secret';
+    tools.hidden = bookTab === 'secret' || bookTab === 'mon';
     let rows = [];
-    if (bookTab !== 'secret') {
+    if (bookTab === 'mon') {
+      // 第43版: 魔物。ふつうの魔物と守護者に分け、戦ったことのあるものだけ名前と弱点・耐性を出す
+      const row = (k) => { const E = MG.RPG.ENEMIES[k], ok = !!save.met[k], af = MG.RPG.AFFINITY[k] || { weak: [], resist: [] }, c = af.weak[0] ? MG.ELEMENTS[af.weak[0]] : null;
+        return { id: 'mon:' + k, name: ok ? E.label : '？？？', sub: ok ? '弱点 ' + af.weak.map((e) => MG.ELEMENTS[e].label).join('・') : 'まだ戦っていない', right: '', c1: ok && c ? c.c1 : '#3c4062', c2: ok && c ? c.c2 : '#2a2e48', locked: !ok, fav: false }; };
+      const MONS = Object.keys(MG.RPG.ENEMIES);
+      rows.push({ head: '魔物' }, ...MONS.filter((k) => !MG.RPG.ENEMIES[k].boss).map(row), { head: '守護者' }, ...MONS.filter((k) => MG.RPG.ENEMIES[k].boss).map(row));
+    } else if (bookTab !== 'secret') {
       const inTab = made.filter((e) => tabOf(e) === bookTab);
       // 属性の選択肢: このタブにある属性だけ
       const els = [...new Set(inTab.map((e) => e.spec.element))];
@@ -675,7 +684,7 @@
     // 封印中の魔法は選べない（薄暗く表示し、「封印」の札を付ける）
     const pickable = items.filter((it) => !it.sealed);
     if (!bookSel || !pickable.some((it) => it.id === bookSel)) bookSel = pickable.length ? pickable[0].id : null;
-    list.innerHTML = `<div class="bl-head"><span>名前</span><span>${bookTab === 'secret' ? '' : '最大ダメージ'}</span></div>` + rows.map((it) => it.head ? `<div class="bl-group">${esc(it.head)}</div>` : `
+    list.innerHTML = `<div class="bl-head"><span>名前</span><span>${bookTab === 'secret' || bookTab === 'mon' ? '' : '最大ダメージ'}</span></div>` + rows.map((it) => it.head ? `<div class="bl-group">${esc(it.head)}</div>` : `
       <button type="button" class="bl-row${it.locked ? ' locked' : ''}${it.sealed ? ' sealed' : ''}${it.id === bookSel ? ' on' : ''}" data-id="${esc(it.id)}" style="--c1:${it.c1};--c2:${it.c2}" aria-pressed="${it.id === bookSel}"${it.sealed ? ` disabled aria-disabled="true" title="封印中（Lv${MG.RPG.sealLevel(it.id.startsWith('secret:') ? MG.SECRETS.find((x) => 'secret:' + x.id === it.id).seq.length : it.id.split('|').length)} で解ける）"` : ''}>
         <span class="bl-main"><span class="bl-name">${it.fav ? '<span class="bl-fav" aria-label="お気に入り">★</span>' : ''}${esc(it.name)}${it.sealed ? '<span class="bl-seal">封印</span>' : ''}</span><span class="bl-sub">${esc(it.sub)}${it.support ? '<span class="bl-tag sup">守り・回復・移動</span>' : ''}${it.inSlot ? '<span class="bl-tag in-slot">スロット</span>' : ''}</span></span>
         <span class="bl-right">${it.right}</span>
@@ -701,9 +710,27 @@
     }).join('')}</div>`;
   }
 
+  // 第43版: 魔物のくわしい表示（弱点 1.5 倍・耐性 0.5 倍）
+  function showMonsterDetail(k, el) {
+    const E = MG.RPG.ENEMIES[k], af = MG.RPG.AFFINITY[k] || { weak: [], resist: [] };
+    if (!save.met[k]) {
+      el.style.setProperty('--c1', '#5a5f88');
+      el.innerHTML = `<div class="bd-rank">${E.boss ? '守護者' : '魔物'}</div><div class="bd-name locked">？？？</div><p class="bd-note">ダンジョンでこの${E.boss ? '守護者' : '魔物'}と戦うと、名前と弱点・耐性がここに載ります。</p>`;
+      return;
+    }
+    const chips = (list) => list.map((e) => `<span class="mon-el" style="--c1:${MG.ELEMENTS[e].c1}">${esc(MG.ELEMENTS[e].label)}</span>`).join('');
+    el.style.setProperty('--c1', af.weak[0] ? MG.ELEMENTS[af.weak[0]].c1 : '#8a8fb8');
+    el.innerHTML = `<div class="bd-rank">${E.boss ? '守護者' : '魔物'}</div><div class="bd-name">${esc(E.label)}</div>
+      <dl class="mon-af">
+        <div class="mon-weak"><dt>弱点 <small>ダメージ ${MG.RPG.WEAK_MULT} 倍・数字が黄色</small></dt><dd>${chips(af.weak)}</dd></div>
+        <div class="mon-resist"><dt>耐性 <small>ダメージ ${MG.RPG.RESIST_MULT} 倍・数字が灰色</small></dt><dd>${chips(af.resist)}</dd></div>
+      </dl>
+      <p class="bd-note">HP ${E.hp}（深い階ほど強くなる）${E.ranged || E.farShot ? '・離れていても攻撃してくる' : ''}${E.fly ? '・飛んでいる' : ''}</p>`;
+  }
   function renderBookDetail() {
     const el = $('book-detail');
     if (!bookSel) { el.innerHTML = '<p class="empty-note">このタブの魔法は、すべて封印されています。レベルを上げると封印が解けます。</p>'; return; }
+    if (bookSel.startsWith('mon:')) { showMonsterDetail(bookSel.slice(4), el); return; }
     if (bookSel.startsWith('secret:')) {
       const s = MG.SECRETS.find((x) => 'secret:' + x.id === bookSel);
       if (!save.secrets.includes(s.id) || !save.known[keyOf(s.seq)]) {
@@ -1149,7 +1176,9 @@
     const g = cv.getContext('2d'), N = D.data.N, k = cv.width / N;
     g.clearRect(0, 0, cv.width, cv.height);
     g.fillStyle = 'rgba(160,170,210,0.55)';
-    for (let z = 0; z < N; z++) for (let x = 0; x < N; x++) if (D.explored[z * N + x] && D.data.tiles[z * N + x]) g.fillRect(x * k, z * k, k + 0.4, k + 0.4);
+    const hd = D.data.hidden && !D.hiddenSeen ? D.data.hidden : null; // 第43版: 見つけるまで、隠し部屋と通路は地図に出ない
+    const hid = (x, z) => !!hd && ((x >= hd.x0 && x < hd.x0 + hd.w && z >= hd.z0 && z < hd.z0 + hd.h) || (x >= hd.pass[0] && x <= hd.pass[2] && z >= hd.pass[1] && z <= hd.pass[3]));
+    for (let z = 0; z < N; z++) for (let x = 0; x < N; x++) if (D.explored[z * N + x] && D.data.tiles[z * N + x] && !hid(x, z)) g.fillRect(x * k, z * k, k + 0.4, k + 0.4);
     const dot = (wx, wz, col, r, need) => {
       const [tx, tz] = RP.worldToTile(wx, wz);
       if (need && !D.explored[tz * N + tx]) return;
@@ -1287,6 +1316,7 @@
     },
     onSelect() { renderSlots(); banner(st.slots[st.slot]); },
     onKill() {},
+    onMeet(k) { if (!MG.RPG.ENEMIES[k] || save.met[k]) return; save.met[k] = true; persistSoon(); }, // 第43版: 戦ったモンスターを図鑑に載せる
     flashMp() { const b = $('mp-fill').parentElement; b.animate([{ transform: 'translateX(-4px)' }, { transform: 'translateX(4px)' }, { transform: 'none' }], { duration: 200 }); },
     onUnlock() { unlockAt = performance.now(); open('pause'); }, // Esc でマウスの固定が外れた: メニューではなく一時停止の画面（メニューは Tab）
     onWand() { buildSlots(); renderSlots(); if (current === 'crafter') renderRegister(); if (current === 'book') renderBookDetail(); },

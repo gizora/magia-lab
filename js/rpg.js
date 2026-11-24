@@ -96,6 +96,28 @@
     dragon:     { label: 'ドラゴン',     hp: 640, dmg: 30, speed: 2.4, range: 5.2, atkCd: 2.4, xp: 320, gold: 260, r: 2.8,  cy: 2.6, boss: true, rangedEvery: 2, spread: 5, bolt: ['#ff6a10', '#ffd24a'], boltY: 1.3, boltEl: 'fire', barY: 7.8 },
     iceking:    { label: '氷の王',       hp: 600, dmg: 30, speed: 2.8, range: 3.6, atkCd: 2.1, xp: 400, gold: 320, r: 1.3,  cy: 1.9, boss: true, spread: 3, bolt: ['#8ae0ff', '#ffffff'], boltY: 1.0, boltEl: 'ice', barY: 5.8 },
   };
+  // 第43版: モンスターの弱点（ダメージ 1.5 倍）と耐性（0.5 倍）。属性は words.js の MG.ELEMENTS のキー
+  R.WEAK_MULT = 1.5; R.RESIST_MULT = 0.5;
+  R.AFFINITY = {
+    slime:      { weak: ['fire', 'lightning'], resist: ['earth', 'force'] },   // ぶよぶよの体は、打撃や岩を受け流す
+    skeleton:   { weak: ['light', 'force'],    resist: ['acid', 'ice'] },      // 骨は砕けやすいが、溶けも凍えもしない
+    bat:        { weak: ['sound', 'light'],    resist: ['void'] },             // 音と光で目がくらむ
+    mage:       { weak: ['light', 'metal'],    resist: ['void', 'arcane'] },   // 闇の術者は、闇と魔素に慣れている
+    boss:       { weak: ['acid', 'force'],     resist: ['earth', 'fire'] },    // 石の体は、酸で溶け、強い力で割れる
+    spider:     { weak: ['fire', 'wind'],      resist: ['acid'] },             // 毒を持つので、酸には強い
+    goblin:     { weak: ['lightning'],         resist: ['earth', 'metal'] },   // 盾と鎧を着こむ
+    mimic:      { weak: ['fire', 'magnet'],    resist: ['force', 'metal'] },   // 木の箱は燃え、鉄の金具は磁石に引かれる
+    armor:      { weak: ['lightning', 'acid'], resist: ['metal', 'earth'] },   // 鋼の鎧は、雷が通り、酸でさびる
+    wraith:     { weak: ['light', 'ether'],    resist: ['force', 'earth'] },   // 体がないので、打撃が効きにくい
+    gargoyle:   { weak: ['acid', 'sound'],     resist: ['earth', 'wind'] },    // 石像は音でひびが入る
+    salamander: { weak: ['ice', 'vacuum'],     resist: ['fire'] },             // 火の精は、冷えと空気のない所に弱い
+    ifrit:      { weak: ['ice', 'vacuum'],     resist: ['fire', 'plasma'] },
+    minotaur:   { weak: ['lightning', 'sound'], resist: ['earth', 'force'] },
+    lich:       { weak: ['light', 'ether'],    resist: ['void', 'ice'] },
+    dragon:     { weak: ['ice', 'crystal'],    resist: ['fire', 'plasma'] },
+    iceking:    { weak: ['fire', 'plasma'],    resist: ['ice', 'crystal'] },
+  };
+  R.affinity = (kind, el) => { const a = R.AFFINITY[kind]; if (!a || !el) return 1; return a.weak.includes(el) ? R.WEAK_MULT : a.resist.includes(el) ? R.RESIST_MULT : 1; };
   // 第36版: 5 階ごとの地域。地域ごとに出る敵・守護者・ダンジョンの色が変わる（地下 25 階より深い階は、守護者が順に入れかわる）
   R.AREAS = [
     { id: 0, name: '地下牢', boss: 'boss', pool: [['slime', 5], ['skeleton', 4], ['bat', 3], ['mage', 3]] },
@@ -134,7 +156,33 @@
 
   // 階の形を作る: 3×3 のマスに部屋を置き、迷路のようにつなぐ。1 タイル 2m、42×42 タイル（84m 四方）
   R.TILE = 2; R.GRID = 42; R.CELLS = 3; R.CELL = 14; // 3×3 の部屋（84m 四方）
+  // 第43版: 最後の氷の王の階（地下 25 階）は、守護者だけの階。
+  // 入口の部屋 → まっすぐな一本道（18m）→ 扉 → 大きな氷のフィールド（46m × 72m。滑る氷の床・降る雪・氷の柱）。帰還ポータルは入口の部屋の北の小部屋
+  R.iceFloor = (floor) => floor === R.LAST_FLOOR;
+  R.HIDDEN_CHANCE = 0.061; // 第43版: 隠し部屋のくじの確率（守護者の階をのぞく）。置ける場所がない階が 2 割ほどあるので、実際に出るのは約 5%
+  R.ELITE = { hp: 4, dmg: 1.6, xp: 6, gold: 10, size: 1.35 }; // 第43版: 隠し部屋の物凄く強いモンスター（ふつうの何倍か）
+  R.BIG_CHEST = 10; // 第43版: 隠し部屋の大きな宝箱のお金（ふつうの宝箱の何倍か）
+  function makeIceFloor(floor, seed) {
+    const N = R.GRID, tiles = new Uint8Array(N * N);
+    const carve = (x0, z0, x1, z1) => { for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) tiles[z * N + x] = 1; };
+    const start = { id: 0, cx: 0, cz: 1, x0: 2, z0: 17, w: 5, h: 8, small: false, links: [2, 1] };
+    const portal = { id: 1, cx: 0, cz: 0, x0: 2, z0: 8, w: 5, h: 5, small: true, links: [0] };
+    // フィールド: 外周（x 16〜40・z 2〜39）は壁で、中は x 17〜39・z 3〜38
+    const field = { id: 2, cx: 1, cz: 1, x0: 17, z0: 3, w: 23, h: 36, small: false, bossRoom: true, links: [0] };
+    carve(2, 17, 6, 24); carve(2, 8, 6, 12); carve(3, 13, 4, 16); // 入口の部屋・ポータルの小部屋・その間
+    carve(7, 20, 15, 21); // 一本道
+    carve(17, 3, 39, 38); // フィールド
+    const doorCells = [[16, 20], [16, 21]]; doorCells.forEach(([x, z]) => { tiles[z * N + x] = 1; });
+    field.doors = [{ side: 'W', cells: doorCells, out: [-1, 0] }];
+    field.bossAt = [37, 21]; field.bossFace = [-1, 0];
+    const center = (r) => [Math.floor(r.x0 + r.w / 2), Math.floor(r.z0 + r.h / 2)];
+    // 氷の柱（隠れられる。魔法で壊せる）: 扉からの道・守護者の場所・まん中（下への穴）をよけて並べる
+    const pillars = [[21, 8], [21, 33], [24, 14], [24, 27], [29, 7], [29, 34], [32, 14], [32, 27], [35, 9], [35, 32]];
+    return { doors: field.doors, area: R.areaOf(floor).id, floor, seed, N, tiles, rooms: [start, portal, field], start: 0, stairs: 2, portal: 1, chests: [], spawns: [{ type: R.bossFor(floor), room: 2, t: field.bossAt, face: field.bossFace }], boss: true, center,
+      iceField: { x0: 17, z0: 3, x1: 39, z1: 38, pillars } };
+  }
   R.makeFloor = function (floor, seed) {
+    if (R.iceFloor(floor)) return makeIceFloor(floor, seed);
     const rnd = R.rng(seed), N = R.GRID, C = R.CELLS, CS = R.CELL;
     const tiles = new Uint8Array(N * N); // 0 = 壁, 1 = 床
     const rooms = [];
@@ -317,7 +365,41 @@
     });
     for (let i = spawns.length - 1; i >= 0; i--) { const t = spawns[i].t, inBoss = boss && stairs.bossRoom && !R.ENEMIES[spawns[i].type].boss && t[0] >= stairs.x0 - 1 && t[0] < stairs.x0 + stairs.w + 1 && t[1] >= stairs.z0 - 1 && t[1] < stairs.z0 + stairs.h + 1; if (!tiles[t[1] * N + t[0]] || inBoss) spawns.splice(i, 1); } // 守護者の部屋の中は守護者だけ
     for (let i = chests.length - 1; i >= 0; i--) if (!tiles[chests[i].t[1] * N + chests[i].t[0]]) chests.splice(i, 1);
-    return { doors: boss ? stairs.doors || [] : [], area: R.areaOf(floor).id, floor, seed, N, tiles, rooms, start: start.id, stairs: stairs.id, portal: portal ? portal.id : stairs.id, chests, spawns, boss, center };
+    // 第43版: 5% の確率で、地図に出ない隠し部屋（守護者の階には出さない）。ふつうの部屋の壁から 2 マス幅の短い通路でつながる。
+    // 中身は半々で、大きな宝箱（ふつうの 10 倍ほどのお金）か、物凄く強いモンスター（倒すと大金とたくさんの経験値）
+    let hidden = null;
+    if (!boss && rnd() < R.HIDDEN_CHANCE) {
+      const wallAll = (x0, z0, x1, z1) => { for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) { if (x < 1 || z < 1 || x > N - 2 || z > N - 2 || tiles[z * N + x]) return false; } return true; };
+      const order = rooms.filter((r) => r !== start && r !== stairs && r !== portal).sort(() => rnd() - 0.5);
+      const cands = [];
+      for (const r of order) for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const span = dx ? r.h : r.w;
+        for (let off = 0; off + 1 < span; off++) for (const L of [2, 3, 4, 5, 6]) for (const HS of [6, 5]) {
+          let px0, pz0, px1, pz1, hx0, hz0;
+          if (dx) { const zc = r.z0 + off, ex = dx > 0 ? r.x0 + r.w : r.x0 - 1; px0 = dx > 0 ? ex : ex - L + 1; px1 = px0 + L - 1; pz0 = zc; pz1 = zc + 1; hx0 = dx > 0 ? px1 + 1 : px0 - HS; hz0 = zc - Math.floor((HS - 2) / 2); }
+          else { const xc = r.x0 + off, ez = dz > 0 ? r.z0 + r.h : r.z0 - 1; pz0 = dz > 0 ? ez : ez - L + 1; pz1 = pz0 + L - 1; px0 = xc; px1 = xc + 1; hz0 = dz > 0 ? pz1 + 1 : pz0 - HS; hx0 = xc - Math.floor((HS - 2) / 2); }
+          // 通路のまわり（部屋に接する側をのぞく）と、隠し部屋のまわり 1 マスが、すべて壁であること
+          const pa = dx ? [dx > 0 ? px0 + 1 : px0 - 1, pz0 - 1, dx > 0 ? px1 + 1 : px1 - 1, pz1 + 1] : [px0 - 1, dz > 0 ? pz0 + 1 : pz0 - 1, px1 + 1, dz > 0 ? pz1 + 1 : pz1 - 1];
+          if (!wallAll(Math.min(pa[0], pa[2]), Math.min(pa[1], pa[3]), Math.max(pa[0], pa[2]), Math.max(pa[1], pa[3])) || !wallAll(hx0 - 1, hz0 - 1, hx0 + HS, hz0 + HS)) continue;
+          cands.push({ dx, dz, px0, pz0, px1, pz1, hx0, hz0, HS });
+          break; // この位置・長さでは、いちばん大きい部屋だけ
+        }
+      }
+      if (cands.length) {
+        const { dx, dz, px0, pz0, px1, pz1, hx0, hz0, HS } = cands[Math.floor(rnd() * cands.length)];
+        for (let z = pz0; z <= pz1; z++) for (let x = px0; x <= px1; x++) tiles[z * N + x] = 1;
+        for (let z = hz0; z < hz0 + HS; z++) for (let x = hx0; x < hx0 + HS; x++) tiles[z * N + x] = 1;
+        const c = [hx0 + Math.floor(HS / 2), hz0 + Math.floor(HS / 2)], face = [-dx, -dz]; // 宝箱・モンスターは入口の方を向く
+        const kind = rnd() < 0.5 ? 'treasure' : 'elite';
+        if (kind === 'treasure') chests.push({ room: -1, t: [c[0] + dx, c[1] + dz], face, big: true });
+        else {
+          const strong = (R.enemyPool(floor).map((p) => p[0]).filter((k) => !R.ENEMIES[k].mimic).sort((p, q) => R.ENEMIES[q].hp - R.ENEMIES[p].hp))[0] || 'skeleton';
+          spawns.push({ type: strong, room: -1, t: c, face, elite: true });
+        }
+        hidden = { kind, x0: hx0, z0: hz0, w: HS, h: HS, pass: [px0, pz0, px1, pz1] };
+      }
+    }
+    return { doors: boss ? stairs.doors || [] : [], area: R.areaOf(floor).id, floor, seed, N, tiles, rooms, start: start.id, stairs: stairs.id, portal: portal ? portal.id : stairs.id, chests, spawns, boss, center, hidden };
   };
   // タイル → 世界の座標（タイルの中心）
   R.tileToWorld = (x, z) => [(x + 0.5) * R.TILE - (R.GRID * R.TILE) / 2, (z + 0.5) * R.TILE - (R.GRID * R.TILE) / 2];

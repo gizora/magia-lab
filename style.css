@@ -40,6 +40,8 @@ kbd { font-family: var(--sans); font-size: 11px; padding: 1px 6px; border-radius
 #popups { position: absolute; inset: 0; overflow: hidden; }
 .pop { position: absolute; transform: translate(-50%, -50%); font-weight: 800; font-size: 18px; color: #fff; text-shadow: 0 0 6px rgba(0, 0, 0, 0.9), 0 2px 2px #000; animation: pop 0.9s ease-out forwards; white-space: nowrap; }
 .pop.crit { color: var(--gold); font-size: 26px; }
+.pop.weak { color: #ffe23a; font-size: 26px; text-shadow: 0 0 8px rgba(255, 200, 0, 0.7), 0 2px 3px #000; } /* 第43版: 弱点 */
+.pop.resist { color: #a4a4ac; font-size: 17px; } /* 第43版: 耐性 */
 .pop.score { color: #8dffb8; font-size: 20px; }
 @keyframes pop { 0% { opacity: 0; transform: translate(-50%, -30%) scale(0.6); } 15% { opacity: 1; transform: translate(-50%, -60%) scale(1.15); } 100% { opacity: 0; transform: translate(calc(-50% + var(--dx, 0px)), -260%) scale(1); } }
 
@@ -340,6 +342,15 @@ kbd { font-family: var(--sans); font-size: 11px; padding: 1px 6px; border-radius
 .bd-hint b { font-size: 12px; color: var(--gold); }
 .bd-hint p { margin: 4px 0 0; font-size: 16px; line-height: 1.7; }
 .bd-note { font-size: 13px; color: var(--muted); line-height: 1.7; }
+/* 第43版: 魔物の弱点と耐性 */
+.mon-af { margin: 16px 0 10px; display: grid; gap: 10px; }
+.mon-af > div { padding: 12px 14px; border-radius: 12px; border: 1px solid var(--line); background: rgba(8, 10, 30, 0.5); }
+.mon-af dt { font-weight: 700; font-size: 15px; }
+.mon-af dt small { font-weight: 400; font-size: 12px; color: var(--muted); margin-left: 6px; }
+.mon-weak dt { color: #ffe23a; }
+.mon-resist dt { color: #b4b4bc; }
+.mon-af dd { margin: 8px 0 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.mon-el { display: inline-block; padding: 3px 12px; border-radius: 999px; font-size: 15px; font-weight: 700; border: 1px solid var(--c1); color: #fff; background: color-mix(in srgb, var(--c1) 28%, transparent); }
 @media (hover: hover) {
   .bl-row:hover { border-color: var(--c1); }
   .bd-slot:hover, .seg-btn:hover:not([aria-pressed="true"]) { background: rgba(60, 74, 150, 0.6); }
