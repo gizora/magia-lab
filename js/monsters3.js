@@ -105,6 +105,8 @@
     P.mawGlow.scale.setScalar(1.4 * (1 + strike * 1.2 + Math.sin(tm * 6) * 0.1));
   };
   // ---- Blender のモデル ----
+  const _v = new THREE.Vector3();
+  const DRAGON_LOS = [[0, 2.0, 0.3], [0, 2.8, 0.7], [2.6, 2.6, -0.6], [-2.6, 2.6, -0.6], [0, 0.5, 0]]; // 壁の向こうか調べる点（Blender の座標で、体・頭・翼の先・足）
   const DRAGON_SCALE = 1.2;              // Blender では 1 = 1m。ゲームの今までの魔竜と同じくらいの大きさにする
   const DRAGON_PEAK = { attack: 0.65, cast: 0.75 }; // 攻撃のため（o.k 0→1）が終わる時点の、動きの中の時刻（爪を振り下ろす・口を突き出す）
   function dragonGLBBuild(std, g, P) {
@@ -129,6 +131,9 @@
     Object.defineProperty(P, 'mixer', { value: mixer, enumerable: false });
     Object.defineProperty(P, 'act', { value: act, enumerable: false });
     Object.assign(P, { w: 0, atk: null, cur: 'attack', atkT: 0, rel: 0 });
+    // 第46版: 描かれたとき（画面の中にあるとき）に、時刻とカメラからの距離を覚える。見えていない間は動きの計算をしない
+    P.seenT = performance.now(); P.camD = 0; P.skip = 0;
+    M.meshes[0].onBeforeRender = (r, s, cam) => { P.seenT = performance.now(); P.camD = cam.position.distanceTo(root.getWorldPosition(_v)); };
   }
   function dragonGLBAnim(t, o) {
     const P = t.parts, dt = Math.min(0.1, Math.max(0, o.dt || 0)), A = P.act;
@@ -141,7 +146,20 @@
       if (k === P.cur) { a.time = Math.min(P.atkT, a.getClip().duration - 0.001); a.setEffectiveWeight(P.w); } else a.setEffectiveWeight(0);
     }
     A.hover.setEffectiveWeight(1 - P.w * 0.95);
-    P.mixer.update(dt);
+    // 第46版: 壁の向こう（ほかの部屋）にいるときは描かない。0.2 秒ごとに、カメラから体・頭・両方の翼の先・足へ線を引き、全部が壁でさえぎられていたら隠す
+    const cam = MG.Game && MG.Game.camera, root = P.keep[0];
+    P.losT = (P.losT || 0) - dt;
+    if (cam && MG.World && MG.World.solidOnSegment && P.losT <= 0) {
+      P.losT = 0.2; let vis = false;
+      for (const q of DRAGON_LOS) { root.localToWorld(_v.set(q[0], q[1], q[2])); if (MG.World.solidOnSegment(cam.position, _v) == null) { vis = true; break; } }
+      if (vis && !root.visible) P.seenT = performance.now(); // 見えたらすぐ動かす
+      root.visible = vis;
+    }
+    // 第46版: 0.3 秒描かれていなければ（画面の外・壁の向こうの部屋）骨を動かさない。30m より遠いときは 1 回おきに動かす
+    if (performance.now() - P.seenT > 300) { P.skip = 0; return; }
+    P.skip += dt;
+    if (P.camD > 30 && !P.odd) { P.odd = true; return; }
+    P.odd = false; P.mixer.update(P.skip); P.skip = 0;
     const tm = o.time + o.phase;
     P.maw.scale.setScalar(0.9 * (1 + P.w * (P.cur === 'cast' ? 1.6 : 0.6) + Math.sin(tm * 6) * 0.1));
   }

@@ -35,7 +35,6 @@
         if (A.JOINTS_0 != null) g.setAttribute('skinIndex', attr(A.JOINTS_0));
         if (A.WEIGHTS_0 != null) g.setAttribute('skinWeight', attr(A.WEIGHTS_0));
         if (p.indices != null) g.setIndex(attr(p.indices));
-        g.computeBoundingSphere();
         prims.push({ node: ni, geo: g, mat: p.material, skin: n.skin });
       });
     });
@@ -56,6 +55,11 @@
       clips[short] = new THREE.AnimationClip(short, -1, tracks);
     });
     const skins = (json.skins || []).map((sk) => ({ joints: sk.joints, ibm: acc(sk.inverseBindMatrices).arr }));
+    // 第46版: 画面の外かどうかを決める球。全部の形を包む球を全部の形で使う。骨で動いて広がっても（翼のはばたき・腕の振り上げ）
+    // 半径の 7 割ほどにしかならないので、余裕は 0.3m だけ（大きすぎると、カメラのすぐ後ろにいるだけで描いてしまう）
+    const box = new THREE.Box3(); prims.forEach((p) => { p.geo.computeBoundingBox(); box.union(p.geo.boundingBox); });
+    const sphere = box.getBoundingSphere(new THREE.Sphere()); sphere.radius += 0.3;
+    prims.forEach((p) => { p.geo.boundingSphere = sphere.clone(); });
     cache[kind] = { json, prims, mats, names, clips, skins };
     return cache[kind];
   }
@@ -87,7 +91,7 @@
         if (m.userData.skin == null) return;
         const s = T.skins[m.userData.skin], bones = s.joints.map((j) => nodes[j]);
         m.bind(new THREE.Skeleton(bones, bones.map((b, k) => new THREE.Matrix4().fromArray(s.ibm, k * 16))), m.matrixWorld);
-        m.frustumCulled = false; // 骨で動くと、もとの形の範囲から出ることがある
+        // 第46版: 画面の外では描かない（第45版では切っていたので、見えていなくても毎回描いていた）。範囲は template で大きめの球にしてある
       });
       const bones = {}; nodes.forEach((o) => { if (o.isBone) bones[o.name] = o; });
       return { root, meshes, mats, bones, clips: T.clips };

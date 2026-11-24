@@ -4148,6 +4148,7 @@
     scene = new THREE.Scene();
     camera = new THREE.PerspectiveCamera(72, 1, 0.05, 700);
     scene.add(camera);
+    G.camera = camera; // 第46版: 重いモデル（Blender の魔竜）が、壁の向こうにいるかを調べるのに使う
     FX.init(scene);
     buildWorld();
     buildWand();
