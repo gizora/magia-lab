@@ -657,7 +657,8 @@
       const row = (k) => { const E = MG.RPG.ENEMIES[k], ok = !!save.met[k], af = MG.RPG.AFFINITY[k] || { weak: [], resist: [] }, c = af.weak[0] ? MG.ELEMENTS[af.weak[0]] : null;
         return { id: 'mon:' + k, name: ok ? E.label : '？？？', sub: ok ? '弱点 ' + af.weak.map((e) => MG.ELEMENTS[e].label).join('・') : 'まだ戦っていない', right: '', c1: ok && c ? c.c1 : '#3c4062', c2: ok && c ? c.c2 : '#2a2e48', locked: !ok, fav: false }; };
       const MONS = Object.keys(MG.RPG.ENEMIES);
-      rows.push({ head: '魔物' }, ...MONS.filter((k) => !MG.RPG.ENEMIES[k].boss).map(row), { head: '守護者' }, ...MONS.filter((k) => MG.RPG.ENEMIES[k].boss).map(row));
+      const EN = MG.RPG.ENEMIES;
+      rows.push({ head: '魔物' }, ...MONS.filter((k) => !EN[k].boss && !EN[k].hidden).map(row), { head: '守護者' }, ...MONS.filter((k) => EN[k].boss).map(row), { head: '隠し部屋' }, ...MONS.filter((k) => EN[k].hidden).map(row));
     } else if (bookTab !== 'secret') {
       const inTab = made.filter((e) => tabOf(e) === bookTab);
       // 属性の選択肢: このタブにある属性だけ
@@ -715,12 +716,12 @@
     const E = MG.RPG.ENEMIES[k], af = MG.RPG.AFFINITY[k] || { weak: [], resist: [] };
     if (!save.met[k]) {
       el.style.setProperty('--c1', '#5a5f88');
-      el.innerHTML = `<div class="bd-rank">${E.boss ? '守護者' : '魔物'}</div><div class="bd-name locked">？？？</div><p class="bd-note">ダンジョンでこの${E.boss ? '守護者' : '魔物'}と戦うと、名前と弱点・耐性がここに載ります。</p>`;
+      el.innerHTML = `<div class="bd-rank">${E.boss ? '守護者' : E.hidden ? '隠し部屋の魔物' : '魔物'}</div><div class="bd-name locked">？？？</div><p class="bd-note">${E.hidden ? 'どこかの階の隠し部屋にいる、物凄く強い魔物。' : ''}ダンジョンでこの${E.boss ? '守護者' : '魔物'}と戦うと、名前と弱点・耐性がここに載ります。</p>`;
       return;
     }
     const chips = (list) => list.map((e) => `<span class="mon-el" style="--c1:${MG.ELEMENTS[e].c1}">${esc(MG.ELEMENTS[e].label)}</span>`).join('');
     el.style.setProperty('--c1', af.weak[0] ? MG.ELEMENTS[af.weak[0]].c1 : '#8a8fb8');
-    el.innerHTML = `<div class="bd-rank">${E.boss ? '守護者' : '魔物'}</div><div class="bd-name">${esc(E.label)}</div>
+    el.innerHTML = `<div class="bd-rank">${E.boss ? '守護者' : E.hidden ? '隠し部屋の魔物' : '魔物'}</div><div class="bd-name">${esc(E.label)}</div>
       <dl class="mon-af">
         <div class="mon-weak"><dt>弱点 <small>ダメージ ${MG.RPG.WEAK_MULT} 倍・数字が黄色</small></dt><dd>${chips(af.weak)}</dd></div>
         <div class="mon-resist"><dt>耐性 <small>ダメージ ${MG.RPG.RESIST_MULT} 倍・数字が灰色</small></dt><dd>${chips(af.resist)}</dd></div>

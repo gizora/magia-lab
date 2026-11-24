@@ -94,6 +94,11 @@
     minotaur:   { label: 'ミノタウロス', hp: 520, dmg: 28, speed: 3.0, range: 4.4, atkCd: 2.2, xp: 220, gold: 160, r: 1.7,  cy: 2.3, boss: true, rangedEvery: 0, barY: 5.8 },
     lich:       { label: 'リッチ',       hp: 430, dmg: 24, speed: 2.6, range: 16,  atkCd: 2.0, xp: 260, gold: 200, r: 1.0,  cy: 1.6, boss: true, ranged: true, spread: 3, bolt: ['#4ac8ff', '#ff7a20'], boltY: 0.5, boltEl: 'void', barY: 3.8 },
     dragon:     { label: 'ドラゴン',     hp: 640, dmg: 30, speed: 2.4, range: 5.2, atkCd: 2.4, xp: 320, gold: 260, r: 2.8,  cy: 2.6, boss: true, rangedEvery: 2, spread: 5, bolt: ['#ff6a10', '#ffd24a'], boltY: 1.3, boltEl: 'fire', barY: 7.8 },
+    // 第44版: 隠し部屋だけに出る、物凄く強いモンスター（どの階でも 4 体からひとつ。強さは階に合わせて上がる）
+    abyssdrake: { label: '深淵の魔竜',   hp: 420, dmg: 26, speed: 3.8, range: 3.4, atkCd: 1.5, xp: 140, gold: 170, r: 1.3, cy: 2.2, hidden: true, fly: true, flyY: 0.4, rangedEvery: 2, farShot: 20, spread: 3, bolt: ['#ff3a1a', '#ffb040'], boltY: 1.6, boltEl: 'fire', barY: 5.4 },
+    frostbeast: { label: '氷晶の霊獣',   hp: 480, dmg: 24, speed: 5.4, range: 3.0, atkCd: 1.3, xp: 140, gold: 160, r: 1.4, cy: 1.9, hidden: true, rangedEvery: 3, farShot: 18, spread: 5, bolt: ['#8ae0ff', '#ffffff'], boltY: 0.6, boltEl: 'ice', barY: 4.6 },
+    arachne:    { label: '蜘蛛の魔女',   hp: 380, dmg: 22, speed: 4.6, range: 14, atkCd: 1.7, xp: 130, gold: 160, r: 1.2, cy: 1.4, hidden: true, ranged: true, spread: 3, bolt: ['#e8e8f0', '#9a5ad8'], boltY: 1.2, boltEl: 'void', barY: 3.8 },
+    starseer:   { label: '星杭の巫神',   hp: 400, dmg: 24, speed: 3.0, range: 16, atkCd: 1.9, xp: 150, gold: 180, r: 1.1, cy: 2.6, hidden: true, fly: true, flyY: 0.3, ranged: true, spread: 5, bolt: ['#ffd24a', '#9a5aff'], boltY: 0.4, boltEl: 'arcane', barY: 5.6 },
     iceking:    { label: '氷の王',       hp: 600, dmg: 30, speed: 2.8, range: 3.6, atkCd: 2.1, xp: 400, gold: 320, r: 1.3,  cy: 1.9, boss: true, spread: 3, bolt: ['#8ae0ff', '#ffffff'], boltY: 1.0, boltEl: 'ice', barY: 5.8 },
   };
   // 第43版: モンスターの弱点（ダメージ 1.5 倍）と耐性（0.5 倍）。属性は words.js の MG.ELEMENTS のキー
@@ -116,7 +121,12 @@
     lich:       { weak: ['light', 'ether'],    resist: ['void', 'ice'] },
     dragon:     { weak: ['ice', 'crystal'],    resist: ['fire', 'plasma'] },
     iceking:    { weak: ['fire', 'plasma'],    resist: ['ice', 'crystal'] },
+    abyssdrake: { weak: ['light', 'ice'],      resist: ['fire', 'void'] },     // 第44版: 隠し部屋の 4 体
+    frostbeast: { weak: ['fire', 'plasma'],    resist: ['ice', 'crystal'] },
+    arachne:    { weak: ['fire', 'light'],     resist: ['acid', 'void'] },
+    starseer:   { weak: ['void', 'sound'],     resist: ['arcane', 'light'] },
   };
+  R.HIDDEN_MONSTERS = ['abyssdrake', 'frostbeast', 'arachne', 'starseer']; // 第44版
   R.affinity = (kind, el) => { const a = R.AFFINITY[kind]; if (!a || !el) return 1; return a.weak.includes(el) ? R.WEAK_MULT : a.resist.includes(el) ? R.RESIST_MULT : 1; };
   // 第36版: 5 階ごとの地域。地域ごとに出る敵・守護者・ダンジョンの色が変わる（地下 25 階より深い階は、守護者が順に入れかわる）
   R.AREAS = [
@@ -177,7 +187,8 @@
     field.bossAt = [37, 21]; field.bossFace = [-1, 0];
     const center = (r) => [Math.floor(r.x0 + r.w / 2), Math.floor(r.z0 + r.h / 2)];
     // 氷の柱（隠れられる。魔法で壊せる）: 扉からの道・守護者の場所・まん中（下への穴）をよけて並べる
-    const pillars = [[21, 8], [21, 33], [24, 14], [24, 27], [29, 7], [29, 34], [32, 14], [32, 27], [35, 9], [35, 32]];
+    // 第44版: 玉座の間の柱の列（z 13・28 のあたり）をよけて、中央の通路に 4 本、両側の側廊に 3 本ずつ
+    const pillars = [[22, 16], [22, 25], [29, 15], [29, 26], [21, 7], [29, 6], [25, 9], [21, 34], [29, 35], [25, 32]];
     return { doors: field.doors, area: R.areaOf(floor).id, floor, seed, N, tiles, rooms: [start, portal, field], start: 0, stairs: 2, portal: 1, chests: [], spawns: [{ type: R.bossFor(floor), room: 2, t: field.bossAt, face: field.bossFace }], boss: true, center,
       iceField: { x0: 17, z0: 3, x1: 39, z1: 38, pillars } };
   }
@@ -393,7 +404,7 @@
         const kind = rnd() < 0.5 ? 'treasure' : 'elite';
         if (kind === 'treasure') chests.push({ room: -1, t: [c[0] + dx, c[1] + dz], face, big: true });
         else {
-          const strong = (R.enemyPool(floor).map((p) => p[0]).filter((k) => !R.ENEMIES[k].mimic).sort((p, q) => R.ENEMIES[q].hp - R.ENEMIES[p].hp))[0] || 'skeleton';
+          const strong = R.HIDDEN_MONSTERS[Math.floor(rnd() * R.HIDDEN_MONSTERS.length)]; // 第44版: 4 体からひとつ
           spawns.push({ type: strong, room: -1, t: c, face, elite: true });
         }
         hidden = { kind, x0: hx0, z0: hz0, w: HS, h: HS, pass: [px0, pz0, px1, pz1] };

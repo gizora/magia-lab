@@ -48,7 +48,7 @@
     LC(a.fog, b.fog, scene.fog.color);
     scene.fog.density = L(a.fogD, b.fogD);
     if (W.skyTextured && W.stage === 'arena' && PRESET.auroraFog) scene.fog.color.lerp(PRESET.auroraFog, k);
-    if (W.stage === 'dungeon') { { const fc = W.dun && W.dun.data && W.dun.data.iceField ? [0.16, 0.2, 0.27] : W.dunTheme().fog; scene.fog.color.setRGB(fc[0], fc[1], fc[2]); } scene.fog.density = W.dun && W.dun.data && W.dun.data.boss ? 0.045 : 0.07; } // 第32版: 薄暗く（第33版: 守護者の階は、広い部屋の奥まで見えるよう少し薄く）
+    if (W.stage === 'dungeon') { { const fc = W.dun && W.dun.data && W.dun.data.iceField ? [0.04, 0.08, 0.15] : W.dunTheme().fog; scene.fog.color.setRGB(fc[0], fc[1], fc[2]); } scene.fog.density = W.dun && W.dun.data && W.dun.data.iceField ? 0.02 : W.dun && W.dun.data && W.dun.data.boss ? 0.045 : 0.07; } // 第32版: 薄暗く（第33版: 守護者の階は、広い部屋の奥まで見えるよう少し薄く）
     LC(a.hemiSky, b.hemiSky, hemi.color); LC(a.hemiGround, b.hemiGround, hemi.groundColor); hemi.intensity = L(a.hemiI, b.hemiI) * (W.stage === 'dungeon' ? 0.16 : 1);
     if (W.stage === 'dungeon') { hemi.color.setRGB(0.75, 0.62, 0.5); hemi.groundColor.setRGB(0.15, 0.1, 0.08); }
     if (sky) sky.visible = W.stage !== 'dungeon';
@@ -1327,9 +1327,14 @@
     }
     const tex = new THREE.CanvasTexture(c); tex.wrapS = tex.wrapT = THREE.RepeatWrapping; if (THREE.sRGBEncoding) tex.encoding = THREE.sRGBEncoding;
     ICE.mats = {
-      floor: new THREE.MeshStandardMaterial({ map: tex, color: 0xffffff, roughness: 0.18, metalness: 0.15, emissive: 0x0c2236, emissiveIntensity: 1 }),
+      floor: mirrorMaterial(tex), // 第44版: 柱や玉座がうっすら映る、暗い青の氷
+      hallStone: new THREE.MeshStandardMaterial({ map: wallMat && wallMat.map, color: 0x3c4c68, roughness: 0.8, metalness: 0.05, emissive: 0x08101e, emissiveIntensity: 1 }),
+      trim: new THREE.MeshStandardMaterial({ map: wallMat && wallMat.map, color: 0x56688a, roughness: 0.6, metalness: 0.1, emissive: 0x0a1626, emissiveIntensity: 1 }),
+      ceil: new THREE.MeshStandardMaterial({ color: 0x1c2c46, roughness: 0.7, emissive: 0x0c1c34, emissiveIntensity: 1 }),
+      throne: new THREE.MeshStandardMaterial({ color: 0xbfe6ff, emissive: 0x3a8ac8, emissiveIntensity: 0.7, roughness: 0.1, metalness: 0.2, transparent: true, opacity: 0.92, flatShading: true }),
+      glowIce: new THREE.MeshStandardMaterial({ color: 0xd8f4ff, emissive: 0x4ab8ff, emissiveIntensity: 1.4, roughness: 0.1, transparent: true, opacity: 0.88, flatShading: true }),
       pillar: new THREE.MeshStandardMaterial({ color: 0xa8dcff, emissive: 0x2a6a9a, emissiveIntensity: 0.55, roughness: 0.12, metalness: 0.1, transparent: true, opacity: 0.9, flatShading: true }),
-      snow: new THREE.PointsMaterial({ color: 0xffffff, size: 0.11, map: snowTex(), transparent: true, opacity: 0.9, depthWrite: false, alphaTest: 0.02 }),
+      snow: new THREE.PointsMaterial({ color: 0xcfeaff, size: 0.08, map: snowTex(), transparent: true, opacity: 0.85, depthWrite: false, alphaTest: 0.02 }),
     };
     return ICE.mats;
   }
@@ -1338,28 +1343,131 @@
     ICE.pillars = []; ICE.field = null;
     if (ICE.snow) { if (ICE.snow.parent) ICE.snow.parent.remove(ICE.snow); ICE.snow.geometry.dispose(); ICE.snow = null; }
     if (ICE.light && ICE.light.parent) ICE.light.parent.remove(ICE.light);
+    ICE.floor = null; ICE.throneLight = null;
   }
+  // ---- 床に景色を映す（平面の鏡。three.js の Reflector と同じ考え方を、光と霧の計算をそのまま使える形で作った） ----
+  const MIR = { rt: null, cam: new THREE.PerspectiveCamera(), tm: new THREE.Matrix4(), plane: new THREE.Plane(), clip: new THREE.Vector4(), q: new THREE.Vector4(),
+    n: new THREE.Vector3(0, 1, 0), p: new THREE.Vector3(), cp: new THREE.Vector3(), v: new THREE.Vector3(), la: new THREE.Vector3(), tg: new THREE.Vector3(), rot: new THREE.Matrix4() };
+  function mirrorMaterial(map) {
+    const m = new THREE.MeshStandardMaterial({ map, color: 0x3e5a86, roughness: 0.25, metalness: 0.25, emissive: 0x040c1c, emissiveIntensity: 1 });
+    m.onBeforeCompile = (sh) => {
+      sh.uniforms.tRefl = { value: MIR.rt ? MIR.rt.texture : null }; sh.uniforms.uRefTM = { value: MIR.tm }; sh.uniforms.uRefK = { value: 0.75 };
+      sh.vertexShader = 'uniform mat4 uRefTM;\nvarying vec4 vRefUv;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n  vRefUv = uRefTM * vec4(position, 1.0);');
+      sh.fragmentShader = 'uniform sampler2D tRefl;\nuniform float uRefK;\nvarying vec4 vRefUv;\n' + sh.fragmentShader.replace('#include <tonemapping_fragment>',
+        '  { vec4 rc = texture2DProj(tRefl, vRefUv); gl_FragColor.rgb += rc.rgb * uRefK; }\n#include <tonemapping_fragment>');
+      MIR.shader = sh;
+    };
+    m.customProgramCacheKey = () => 'ice-mirror';
+    return m;
+  }
+  function renderMirror(rend, scn, cam, mesh) {
+    const M = MIR, w = Math.max(64, Math.floor(rend.domElement.width * 0.5)), h = Math.max(64, Math.floor(rend.domElement.height * 0.5));
+    if (!M.rt) M.rt = new THREE.WebGLRenderTarget(w, h, { samples: 0 });
+    else if (M.rt.width !== w || M.rt.height !== h) M.rt.setSize(w, h);
+    if (M.shader) M.shader.uniforms.tRefl.value = M.rt.texture;
+    M.p.setFromMatrixPosition(mesh.matrixWorld); M.cp.setFromMatrixPosition(cam.matrixWorld);
+    M.rot.extractRotation(mesh.matrixWorld);
+    M.v.subVectors(M.p, M.cp); if (M.v.dot(M.n) > 0) return; // 床より下から見ているときは映さない
+    M.v.reflect(M.n).negate(); M.v.add(M.p);
+    M.rot.extractRotation(cam.matrixWorld); M.la.set(0, 0, -1).applyMatrix4(M.rot); M.la.add(M.cp);
+    M.tg.subVectors(M.p, M.la); M.tg.reflect(M.n).negate(); M.tg.add(M.p);
+    const vc = M.cam; vc.position.copy(M.v); vc.up.set(0, 1, 0).applyMatrix4(M.rot).reflect(M.n); vc.lookAt(M.tg);
+    vc.far = cam.far; vc.updateMatrixWorld(); vc.projectionMatrix.copy(cam.projectionMatrix);
+    M.tm.set(0.5, 0, 0, 0.5, 0, 0.5, 0, 0.5, 0, 0, 0.5, 0.5, 0, 0, 0, 1); M.tm.multiply(vc.projectionMatrix); M.tm.multiply(vc.matrixWorldInverse); M.tm.multiply(mesh.matrixWorld);
+    // 床より下を切り捨てる（斜めの近い面）
+    M.plane.setFromNormalAndCoplanarPoint(M.n, M.p); M.plane.applyMatrix4(vc.matrixWorldInverse);
+    M.clip.set(M.plane.normal.x, M.plane.normal.y, M.plane.normal.z, M.plane.constant);
+    const pe = vc.projectionMatrix.elements;
+    M.q.x = (Math.sign(M.clip.x) + pe[8]) / pe[0]; M.q.y = (Math.sign(M.clip.y) + pe[9]) / pe[5]; M.q.z = -1.0; M.q.w = (1.0 + pe[10]) / pe[14];
+    M.clip.multiplyScalar(2.0 / M.clip.dot(M.q));
+    pe[2] = M.clip.x; pe[6] = M.clip.y; pe[10] = M.clip.z + 1.0 - 0.003; pe[14] = M.clip.w;
+    const cur = rend.getRenderTarget(), xr = rend.xr.enabled, sm = rend.shadowMap.autoUpdate;
+    mesh.visible = false; rend.xr.enabled = false; rend.shadowMap.autoUpdate = false;
+    rend.setRenderTarget(M.rt); rend.state.buffers.depth.setMask(true); if (rend.autoClear === false) rend.clear();
+    rend.render(scn, vc);
+    rend.xr.enabled = xr; rend.shadowMap.autoUpdate = sm; rend.setRenderTarget(cur); mesh.visible = true;
+  }
+  W.mirrorOn = () => !!(ICE.floor && MIR.rt); // 動作確認用
+
   function buildIceField(d) {
     if (!d.iceField) return;
     const R = MG.RPG, T = R.TILE, F = d.iceField, M = iceMats();
     const [ax, az] = R.tileToWorld(F.x0, F.z0), [bx, bz] = R.tileToWorld(F.x1, F.z1);
-    ICE.field = { x0: ax - T / 2, x1: bx + T / 2, z0: az - T / 2, z1: bz + T / 2 };
-    const w = ICE.field.x1 - ICE.field.x0, h = ICE.field.z1 - ICE.field.z0;
-    // 氷の床（床の上にうすく張る）
+    const f = ICE.field = { x0: ax - T / 2, x1: bx + T / 2, z0: az - T / 2, z1: bz + T / 2 };
+    const w = f.x1 - f.x0, h = f.z1 - f.z0, cx = (f.x0 + f.x1) / 2, cz0 = (f.z0 + f.z1) / 2;
+    const door = d.doors && d.doors[0], zc = door ? R.tileToWorld(door.cells[0][0], (door.cells[0][1] + door.cells[1][1]) / 2)[1] : cz0; // 扉と玉座を結ぶ中心の線
+    const HALL = 17, WV = 5.5 + 0.7; // 広間の天井の高さ・ふつうの壁の高さ
+    // --- 映る氷の床 ---
     const fg = new THREE.PlaneGeometry(w, h); fg.rotateX(-Math.PI / 2); const uv = fg.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * w / 12, uv.getY(i) * h / 12);
-    const floor = new THREE.Mesh(fg, M.floor); floor.position.set((ICE.field.x0 + ICE.field.x1) / 2, 0.02, (ICE.field.z0 + ICE.field.z1) / 2); floor.receiveShadow = true; dunGroup.add(floor);
-    // 月明かり（フィールドを青白く照らす）
-    ICE.light = new THREE.HemisphereLight(0xa8d0ff, 0x1a2a40, 0.55); dunGroup.add(ICE.light);
-    // 氷の柱: 太い六角の柱と、まわりの氷のとげ。隠れられて、魔法で壊せる（HP 300）
-    F.pillars.forEach(([tx, tz], i) => {
-      const [x, z] = R.tileToWorld(tx, tz), g = new THREE.Group(); g.position.set(x, 0, z);
+    const floor = new THREE.Mesh(fg, M.floor); floor.position.set(cx, 0.02, cz0); dunGroup.add(floor); ICE.floor = floor;
+    floor.onBeforeRender = (rend, scn, cam) => { if (cam === MIR.cam || W.mirrorEnabled === false) return; renderMirror(rend, scn, cam, floor); };
+    // --- 月明かりのかわりに、青白い光（上から）と玉座の光 ---
+    ICE.light = new THREE.HemisphereLight(0x8ab8f0, 0x0a1628, 0.45); dunGroup.add(ICE.light);
+    // --- 高い壁と天井（ふつうの壁の上に、広間の高さまで積む） ---
+    const tw = (list, mat, tile) => dunGroup.add(stoneMesh(list, mat, tile));
+    const up = HALL - WV;
+    tw([[w + 2 * T, up, T, cx, WV + up / 2, f.z0 - T / 2], [w + 2 * T, up, T, cx, WV + up / 2, f.z1 + T / 2], [T, up, h, f.x0 - T / 2, WV + up / 2, cz0], [T, up, h, f.x1 + T / 2, WV + up / 2, cz0]], M.hallStone, 2.2);
+    tw([[w + 2 * T, 0.6, h + 2 * T, cx, HALL + 0.3, cz0]], M.ceil, 3);
+    // --- 両側の太い石の柱の列と、とがったアーチ ---
+    const rows = [zc - 15, zc + 15], cols = []; for (let x = f.x0 + 6; x < f.x1 - 6; x += 8) cols.push(x);
+    const colBoxes = [], capBoxes = [];
+    rows.forEach((z) => cols.forEach((x) => {
+      colBoxes.push([2.4, 12.6, 2.4, x, 6.3, z]);
+      capBoxes.push([3.3, 1.0, 3.3, x, 0.5, z], [2.9, 0.4, 2.9, x, 1.2, z], [3.1, 0.8, 3.1, x, 12.9, z], [2.7, 0.35, 2.7, x, 13.45, z]);
+      [-1, 1].forEach((sx) => [-1, 1].forEach((sz) => capBoxes.push([0.5, 11, 0.5, x + sx * 1.2, 6.5, z + sz * 1.2]))); // 角の細い柱（束ね柱）
+      addSolid(stageSolids.dungeon, x, z, 1.4, 1.4, HALL);
+      // 足もとの氷のかたまり
+      for (let k = 0; k < 4; k++) { const a2 = Math.random() * Math.PI * 2, r2 = 1.6 + Math.random() * 0.8, m = new THREE.Mesh(new THREE.IcosahedronGeometry(0.5 + Math.random() * 0.7, 0), M.pillar); m.position.set(x + Math.cos(a2) * r2, 0.2, z + Math.sin(a2) * r2); m.scale.y = 0.6 + Math.random() * 0.8; m.rotation.set(Math.random(), Math.random() * 3, Math.random()); dunGroup.add(m); }
+    }));
+    tw(colBoxes, M.hallStone, 2.0); tw(capBoxes, M.trim, 1.5);
+    const arch = (p0, p1, rise, r, mat) => { // p0 → p1 のとがったアーチ（2 本の弧が頂点で出会う）
+      const pts = [], N2 = 14;
+      for (let i = 0; i <= N2; i++) { const t2 = i / N2, yk = Math.pow(1 - Math.abs(t2 - 0.5) * 2, 0.55); pts.push(new THREE.Vector3(p0.x + (p1.x - p0.x) * t2, p0.y + (p1.y - p0.y) * t2 + rise * yk, p0.z + (p1.z - p0.z) * t2)); }
+      dunGroup.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 28, r, 6), mat));
+    };
+    rows.forEach((z) => { for (let i = 0; i + 1 < cols.length; i++) arch(new THREE.Vector3(cols[i], 13.3, z), new THREE.Vector3(cols[i + 1], 13.3, z), 3.0, 0.42, M.trim); });
+    cols.forEach((x) => arch(new THREE.Vector3(x, 13.6, rows[0]), new THREE.Vector3(x, 13.6, rows[1]), HALL - 14.4, 0.5, M.trim)); // 中央の通路の天井を渡るリブ
+    // 壁ぞいの柱（側廊の外の壁にも、同じ間隔で半分の柱）
+    const wallCols = []; cols.forEach((x) => { wallCols.push([2.2, HALL, 1.0, x, HALL / 2, f.z0 + 0.5], [2.2, HALL, 1.0, x, HALL / 2, f.z1 - 0.5]); });
+    tw(wallCols, M.hallStone, 2.0);
+    // --- 奥の玉座と階段（扉の反対側の壁ぎわ。上がれない壇。氷の王はその前で待つ） ---
+    const tx = f.x1 - 2.2, DZ = 6;
+    tw([[4.4, 0.35, DZ * 2 + 3, tx, 0.175, zc], [3.6, 0.35, DZ * 2 + 1.6, tx + 0.4, 0.525, zc], [2.8, 0.35, DZ * 2, tx + 0.8, 0.875, zc]], M.trim, 1.2);
+    addSolid(stageSolids.dungeon, tx, zc, 2.2, DZ + 1.5, 1.1);
+    const th = new THREE.Group(); th.position.set(tx + 0.9, 1.05, zc); th.rotation.y = -Math.PI / 2; dunGroup.add(th); // 玉座は扉の方（-X）を向く
+    const thM = M.throne;
+    const tb = (W2, H2, D2, x, y, z, m) => { const mm = new THREE.Mesh(new THREE.BoxGeometry(W2, H2, D2), m || thM); mm.position.set(x, y, z); th.add(mm); return mm; };
+    tb(1.8, 0.5, 1.4, 0, 0.25, 0); tb(1.9, 0.18, 1.5, 0, 0.55, 0); // 座面
+    [-1, 1].forEach((sd) => { tb(0.25, 0.7, 1.4, sd * 1.0, 0.85, 0); });
+    // 背もたれ: 高い尖塔の形（板と、まわりの氷の柱）
+    const bk = new THREE.Shape(); bk.moveTo(-1, 0); bk.lineTo(1, 0); bk.lineTo(1, 3.2); bk.quadraticCurveTo(1, 4.6, 0, 6.2); bk.quadraticCurveTo(-1, 4.6, -1, 3.2); bk.lineTo(-1, 0);
+    const bg = new THREE.ExtrudeGeometry(bk, { depth: 0.3, bevelEnabled: true, bevelThickness: 0.06, bevelSize: 0.06, bevelSegments: 1 }); const back = new THREE.Mesh(bg, thM); back.position.set(0, 0.6, -0.85); th.add(back);
+    for (let i = -3; i <= 3; i++) { const L = 2.5 + (3 - Math.abs(i)) * 1.1 + Math.random() * 0.6, c = new THREE.Mesh(new THREE.ConeGeometry(0.22, L, 5), M.glowIce); c.position.set(i * 0.42, 0.6 + L / 2, -1.05); th.add(c); } // 後ろの氷のパイプ
+    const gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.35, 0), M.glowIce); gem.position.set(0, 4.3, -0.5); th.add(gem); { const tg = FX.glowSprite('#7ad8ff', 4.5); tg.position.set(0, 4.3, -0.4); th.add(tg); }
+    // 壇のまわりの、光る氷の結晶の群れ
+    for (let k = 0; k < 26; k++) { const sd = k % 2 ? 1 : -1, zz = zc + sd * (1.6 + Math.random() * (DZ + 1)), xx = tx - 2.6 + Math.random() * 4.6, L = 0.8 + Math.random() * 2.6, c = new THREE.Mesh(new THREE.ConeGeometry(0.18 + Math.random() * 0.25, L, 5), M.glowIce); c.position.set(xx, L / 2 + (xx > tx - 1.5 ? 0.9 : 0), zz); c.rotation.set((Math.random() - 0.5) * 0.6, Math.random() * 3, (Math.random() - 0.5) * 0.6); dunGroup.add(c); }
+    ICE.throneLight = new THREE.PointLight(0x6ac8ff, 2.4, 34, 1.6); ICE.throneLight.position.set(tx - 2, 5, zc); dunGroup.add(ICE.throneLight);
+    // 玉座の後ろの壁の、とがったアーチの飾り
+    arch(new THREE.Vector3(f.x1 - 0.3, 0, zc - 5), new THREE.Vector3(f.x1 - 0.3, 0, zc + 5), 14, 0.5, M.trim);
+    for (let i = -4; i <= 4; i++) { const L = 6 + (4 - Math.abs(i)) * 1.6, c = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.2, L, 5), M.glowIce); c.position.set(f.x1 - 0.5, L / 2, zc + i * 1.0); dunGroup.add(c); }
+    // --- 天井から下がる光る氷柱（まとめて 1 回で描く） ---
+    const icG = new THREE.ConeGeometry(0.28, 1, 5); icG.rotateX(Math.PI); icG.translate(0, -0.5, 0);
+    const nI = 220, ic = new THREE.InstancedMesh(icG, M.glowIce, nI), mt = new THREE.Matrix4(), qq = new THREE.Quaternion(), sc = new THREE.Vector3(), ps = new THREE.Vector3();
+    for (let i = 0; i < nI; i++) { const L = 1 + Math.pow(Math.random(), 2) * 5; ps.set(f.x0 + 1 + Math.random() * (w - 2), HALL, f.z0 + 1 + Math.random() * (h - 2)); sc.set(0.6 + Math.random() * 0.9, L, 0.6 + Math.random() * 0.9); mt.compose(ps, qq, sc); ic.setMatrixAt(i, mt); }
+    dunGroup.add(ic);
+    for (let i = 0; i < 10; i++) { const gs = FX.glowSprite('#9ad8ff', 9 + Math.random() * 6); gs.material = gs.material.clone(); gs.material.opacity = 0.35; gs.position.set(f.x0 + Math.random() * w, HALL - 2.5, f.z0 + Math.random() * h); dunGroup.add(gs); }
+    // 壁ぎわの氷のかたまり
+    for (let k = 0; k < 40; k++) { const side = k % 4, t3 = Math.random(); const x = side < 2 ? f.x0 + t3 * w : side === 2 ? f.x0 + 0.8 : f.x1 - 0.8, z = side < 2 ? (side ? f.z1 - 0.8 : f.z0 + 0.8) : f.z0 + t3 * h; if (Math.abs(z - zc) < 4 && x < f.x0 + 3) continue; const m = new THREE.Mesh(new THREE.IcosahedronGeometry(0.8 + Math.random() * 1.4, 0), M.pillar); m.position.set(x, 0.3, z); m.scale.y = 0.5 + Math.random() * 1.3; m.rotation.set(Math.random(), Math.random() * 3, Math.random()); dunGroup.add(m); }
+    // --- 壊せる氷の柱（隠れられる。HP 300） ---
+    F.pillars.forEach(([ptx, ptz], i) => {
+      const [x, z] = R.tileToWorld(ptx, ptz), g = new THREE.Group(); g.position.set(x, 0, z);
       const rnd = (k) => { const v = Math.sin((i + 1) * 12.9898 + k * 78.233) * 43758.5453; return v - Math.floor(v); };
       const H = 4.6 + rnd(1) * 1.8;
       const main = new THREE.Mesh(new THREE.CylinderGeometry(0.75, 1.15, H, 6), M.pillar); main.position.y = H / 2; main.rotation.y = rnd(2) * 3; g.add(main);
       const tip = new THREE.Mesh(new THREE.ConeGeometry(0.75, 1.3, 6), M.pillar); tip.position.y = H + 0.65; tip.rotation.y = main.rotation.y; g.add(tip);
       for (let k = 0; k < 4; k++) {
-        const L = 1.4 + rnd(k + 3) * 1.6, sp = new THREE.Mesh(new THREE.ConeGeometry(0.32, L, 5), M.pillar), a = (k / 4) * Math.PI * 2 + rnd(k + 9);
-        sp.position.set(Math.cos(a) * 1.0, L * 0.35, Math.sin(a) * 1.0); sp.rotation.set(Math.sin(a) * 0.5, 0, -Math.cos(a) * 0.5); g.add(sp);
+        const L = 1.4 + rnd(k + 3) * 1.6, sp = new THREE.Mesh(new THREE.ConeGeometry(0.32, L, 5), M.pillar), a2 = (k / 4) * Math.PI * 2 + rnd(k + 9);
+        sp.position.set(Math.cos(a2) * 1.0, L * 0.35, Math.sin(a2) * 1.0); sp.rotation.set(Math.sin(a2) * 0.5, 0, -Math.cos(a2) * 0.5); g.add(sp);
       }
       const gl = FX.glowSprite('#8ad8ff', 3.2); gl.material = gl.material.clone(); gl.material.opacity = 0.35; gl.position.y = H * 0.6; g.add(gl);
       dunGroup.add(g);
@@ -1367,11 +1475,11 @@
       const pl = { i, x, z, hp: 300, max: 300, alive: true, g, solid, H, shake: 0 };
       solid.icePillar = pl; ICE.pillars.push(pl);
     });
-    // 降る雪（フィールドの上だけ）
-    const n = 1800, pos = new Float32Array(n * 3);
-    for (let k = 0; k < n; k++) { pos[k * 3] = ICE.field.x0 + Math.random() * w; pos[k * 3 + 1] = Math.random() * 16; pos[k * 3 + 2] = ICE.field.z0 + Math.random() * h; }
+    // --- 舞う氷のかけら（雪のかわりに、ゆっくり落ちる） ---
+    const n = 1400, pos = new Float32Array(n * 3);
+    for (let k = 0; k < n; k++) { pos[k * 3] = f.x0 + Math.random() * w; pos[k * 3 + 1] = Math.random() * (HALL - 1); pos[k * 3 + 2] = f.z0 + Math.random() * h; }
     const sg = new THREE.BufferGeometry(); sg.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    ICE.snow = new THREE.Points(sg, M.snow); ICE.snow.frustumCulled = false; dunGroup.add(ICE.snow);
+    ICE.snow = new THREE.Points(sg, M.snow); ICE.snow.frustumCulled = false; ICE.snowTop = HALL - 1; dunGroup.add(ICE.snow);
   }
   // 氷の床の上か（滑る）
   W.onIce = (x, z) => { const f = ICE.field; return !!f && x > f.x0 && x < f.x1 && z > f.z0 && z < f.z1; };
@@ -1411,8 +1519,8 @@
     if (ICE.snow) {
       const a = ICE.snow.geometry.attributes.position, f = ICE.field;
       for (let k = 0; k < a.count; k++) {
-        let y = a.getY(k) - dt * (1.2 + (k % 7) * 0.12), x = a.getX(k) + Math.sin(clock * 0.7 + k) * dt * 0.4;
-        if (y < 0) { y = 16; x = f.x0 + Math.random() * (f.x1 - f.x0); a.setZ(k, f.z0 + Math.random() * (f.z1 - f.z0)); }
+        let y = a.getY(k) - dt * (0.35 + (k % 7) * 0.06), x = a.getX(k) + Math.sin(clock * 0.7 + k) * dt * 0.3;
+        if (y < 0) { y = ICE.snowTop || 16; x = f.x0 + Math.random() * (f.x1 - f.x0); a.setZ(k, f.z0 + Math.random() * (f.z1 - f.z0)); }
         a.setX(k, x); a.setY(k, y);
       }
       a.needsUpdate = true;

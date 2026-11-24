@@ -4537,18 +4537,20 @@
 
   // ---- 敵 ----
   // 第43版: 隠し部屋の物凄く強いモンスター（HP 4 倍・攻撃 1.6 倍・体 1.35 倍。倒すと経験値 6 倍・お金 10 倍）。赤いもやをまとう
+  // 第44版: 隠し部屋だけのモンスター（E.hidden）は、もとから強いので倍率をかけず、もやだけまとう
   function makeElite(t) {
     const K = RP.ELITE;
-    t.elite = true; t.hp = t.maxHp = Math.round(t.hp * K.hp); t.dmg = Math.round(t.dmg * K.dmg); t.xp = Math.round(t.xp * K.xp); t.gold = Math.round(t.gold * K.gold);
-    t.face.scale.multiplyScalar(K.size); t.r *= K.size; t.T = { cy: t.T.cy * K.size, r: t.r };
-    const aura = FX.glowSprite('#ff3a3a', 3.2 * K.size); aura.material = aura.material.clone(); aura.material.opacity = 0.45; aura.position.y = t.E.cy * K.size; t.group.add(aura);
+    t.elite = true;
+    if (!t.E.hidden) { t.hp = t.maxHp = Math.round(t.hp * K.hp); t.dmg = Math.round(t.dmg * K.dmg); t.xp = Math.round(t.xp * K.xp); t.gold = Math.round(t.gold * K.gold); t.face.scale.multiplyScalar(K.size); t.r *= K.size; t.T = { cy: t.T.cy * K.size, r: t.r }; }
+    const ks = t.E.hidden ? 1.4 : K.size;
+    const aura = FX.glowSprite('#ff3a3a', 3.2 * ks); aura.material = aura.material.clone(); aura.material.opacity = 0.4; aura.position.y = t.E.cy; t.group.add(aura);
     drawBar(t);
   }
   const ENEMY_COL = { slime: ['#5aff8a', '#c8ffd8'], skeleton: ['#e8e2d0', '#ff5a3a'], bat: ['#6a4a9a', '#ff4a8a'], mage: ['#7a3cff', '#c8a8ff'], boss: ['#ff5a3a', '#ffb07a'],
     // 第36版: 深い階の敵
     spider: ['#8a2a2a', '#ff4a4a'], goblin: ['#8ab04a', '#e8d070'], mimic: ['#c8a050', '#ff4a4a'], armor: ['#5a8aff', '#c8e0ff'], wraith: ['#7a4aff', '#c8a8ff'], gargoyle: ['#8a8a88', '#ff9a3a'],
     salamander: ['#ff6a1a', '#ffd24a'], ifrit: ['#ff5a10', '#ffe08a'], minotaur: ['#c8402a', '#ffb07a'], lich: ['#4ac8ff', '#c8a8ff'], dragon: ['#ff4a10', '#ffd24a'], iceking: ['#8ae0ff', '#ffffff'] };
-  const ENEMY_STEP = { slime: 'slime', skeleton: 'bone', mage: 'soft', boss: 'heavy', bat: 'flap', spider: 'soft', goblin: 'soft', mimic: 'heavy', armor: 'heavy', wraith: 'soft', gargoyle: 'flap', salamander: 'soft', ifrit: 'heavy', minotaur: 'heavy', lich: 'soft', dragon: 'heavy', iceking: 'heavy' };
+  const ENEMY_STEP = { abyssdrake: 'flap', frostbeast: 'heavy', arachne: 'soft', starseer: 'soft', slime: 'slime', skeleton: 'bone', mage: 'soft', boss: 'heavy', bat: 'flap', spider: 'soft', goblin: 'soft', mimic: 'heavy', armor: 'heavy', wraith: 'soft', gargoyle: 'flap', salamander: 'soft', ifrit: 'heavy', minotaur: 'heavy', lich: 'soft', dragon: 'heavy', iceking: 'heavy' };
   function makeEnemyModel(kind, mats) {
     const g = new THREE.Group(), parts = {};
     const [c1, c2] = ENEMY_COL[kind];
@@ -4693,7 +4695,7 @@
       else if (foe.self) cur = new V3(player.pos.x, player.pos.y + 1, player.pos.z);
       else { if (!foe.av || !avatars.has(foe.pid)) return; cur = new V3(foe.av.pos.x, foe.av.pos.y + 1, foe.av.pos.z); }
       const every = E.rangedEvery == null ? 3 : E.rangedEvery;
-      if (farShot || E.ranged || (E.boss && every > 0 && t.shots % every === every - 1)) {
+      if (farShot || E.ranged || ((E.boss || E.rangedEvery) && every > 0 && t.shots % every === every - 1)) { // 第44版: 隠し部屋の獣と竜も、ときどき弾を撃つ
         // 魔弾（よけられる）。石の守護者は 3 回に 1 回、岩を投げる。第36版: 弾の色（bolt）、扇形に広がる数（spread）、撃つ高さ（boltY）
         const from = t.center.clone().add(new V3(0, E.boltY != null ? E.boltY : (E.boss ? 2.5 : 0.6), 0));
         const dir0 = cur.clone().sub(from).normalize();
