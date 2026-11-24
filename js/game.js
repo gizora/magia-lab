@@ -65,6 +65,7 @@
   const casterPos = () => (CTX ? CTX.pos : player.pos);
   const input = { keys: {}, locked: false, mouseDown: false, touch: false, move: { x: 0, y: 0 } };
 
+  let shakePh = 0; // 画面の揺れの位相（第42版）
   const st = (G.state = {
     running: false, paused: true, time: 0, score: 0, kills: 0,
     mp: 150, mpMax: 150, mpRegen: 15, stamina: 100, staminaMax: 100, stamT: 0, tired: false, slot: 0, slots: [null, null, null, null], cds: [0, 0, 0, 0, 0], gcd: 0,
@@ -3970,10 +3971,11 @@
     }
     if (M.on || co()) { wand.visible = !dead && st.wand !== 'bare'; handGlow.visible = !dead && st.wand === 'bare'; }
     if (st.shake > 0.001) {
-      const k = H.scale;
-      camera.position.x += rand(-1, 1) * st.shake * 0.25 * k;
-      camera.position.y += rand(-1, 1) * st.shake * 0.25 * k;
-      camera.rotation.z += rand(-1, 1) * st.shake * 0.02 * k;
+      // 第42版: 毎フレームでたらめに動かすとガタガタ震えて見えるので、速さのちがう sin を重ねてなめらかに揺らす（強さは前と同じ）
+      const k = H.scale, a = st.shake * k; shakePh += dt * 30;
+      camera.position.x += Math.sin(shakePh * 1.7) * a * 0.25;
+      camera.position.y += Math.sin(shakePh * 2.3 + 1.3) * a * 0.25;
+      camera.rotation.z += Math.sin(shakePh * 1.1 + 0.7) * a * 0.02;
       st.shake *= Math.pow(0.02, dt);
     }
     const ho = H.offsets(dt);
@@ -5379,6 +5381,7 @@
       camera.rotation.set(player.pitch, player.yaw, 0, 'YXZ'); camera.position.copy(eye); camera.updateMatrixWorld(true);
     },
     setPlayer(x, z) { player.pos.set(x, 0, z); camera.position.set(x, EYE, z); camera.updateMatrixWorld(true); },
+    cam() { return camera; }, // 第42版: 画面の揺れのテスト用
     step(sec) { const n = Math.round(sec * 60); for (let i = 0; i < n; i++) step(1 / 60); camera.updateMatrixWorld(true); },
     aim: () => { camera.updateMatrixWorld(true); const a = getAim(); return { target: a.target ? a.target.id : null, x: a.point.x, y: a.point.y, z: a.point.z }; },
     fillMp() { st.mp = st.mpMax; st.cds = [0, 0, 0, 0, 0]; st.gcd = 0; st.vcd = {}; for (const k in st.charges) { st.charges[k].n = st.charges[k].max || MG.SLOT_CHARGES; st.charges[k].t = 0; } },
