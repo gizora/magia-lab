@@ -43,7 +43,8 @@
   //  チェック項目: 黒い鎧のような外殻の、人に近い形の竜／胸と腹に骨色の板が重なる／赤く光る大きく開いた口と、後ろへ反った長い角／
   //               左右に大きく広がる、ぼろぼろの膜の翼／かぎ爪の手足と、長くうねるしっぽ／宙に浮いている
   // ======================================================================
-  MON.register('abyssdrake', function (std, g, P) {
+  // 第45版: Blender で作ったモデル（js/model-glb.js・js/model-data.js）があればそれを使い、なければ下の手作りの形にする
+  const dragonProcBuild = function (std, g, P) {
     const shell = std({ color: 0x1e1c22, roughness: 0.42, metalness: 0.45, flatShading: true });
     const shellD = std({ color: 0x0e0c10, roughness: 0.5, metalness: 0.4, flatShading: true });
     const plate = std({ color: 0xb8a68c, roughness: 0.55, metalness: 0.1, flatShading: true });
@@ -90,7 +91,8 @@
     add(P.tail, tube(tp, 0.09 * S, 20), flesh);
     for (let i = 1; i < tp.length; i++) add(P.tail, new THREE.ConeGeometry(0.04 * S, 0.18 * S, 4), plate, [tp[i][0], tp[i][1] + 0.08 * S, tp[i][2]]);
     P.aura = glow(body, '#7a1020', 4.5, [0, 1.7 * S, 0]);
-  }, function (t, o) {
+  };
+  const dragonProcAnim = function (t, o) {
     const P = t.parts, tm = o.time + o.phase, strike = o.k > 0 ? Math.sin(o.k * Math.PI) : 0;
     const fl = Math.sin(tm * 2.2);
     P.body.position.y = 0.2 + Math.sin(tm * 2.2 + 0.8) * 0.18;
@@ -101,7 +103,52 @@
     P.head.rotation.x = -strike * 0.3;
     P.tail.rotation.y = Math.sin(tm * 1.3) * 0.25;
     P.mawGlow.scale.setScalar(1.4 * (1 + strike * 1.2 + Math.sin(tm * 6) * 0.1));
-  });
+  };
+  // ---- Blender のモデル ----
+  const DRAGON_SCALE = 1.2;              // Blender では 1 = 1m。ゲームの今までの魔竜と同じくらいの大きさにする
+  const DRAGON_PEAK = { attack: 0.65, cast: 0.75 }; // 攻撃のため（o.k 0→1）が終わる時点の、動きの中の時刻（爪を振り下ろす・口を突き出す）
+  function dragonGLBBuild(std, g, P) {
+    const lin2s = (a) => new THREE.Color(a[0], a[1], a[2]).convertLinearToSRGB(); // std は sRGB の色を受け取って直すので、逆に直して渡す
+    const M = MG.ModelGLB.instance('abyssdrake', (m) => std({
+      color: lin2s(m.color), vertexColors: true, roughness: m.rough, metalness: Math.min(0.4, m.metal),
+      side: m.double ? THREE.DoubleSide : THREE.FrontSide, emissive: m.emissive ? lin2s(m.emissive) : 0x000000, emissiveIntensity: m.emissive ? m.ei : 1,
+    }));
+    const root = M.root; root.scale.setScalar(DRAGON_SCALE); g.add(root);
+    // 口の奥の赤い光（Blender の頭の座標で口の中 → 頭の骨につける）
+    P.maw = glow(root, '#ff3010', 0.9, [0, 2.74, 0.58]);
+    root.updateMatrixWorld(true);
+    if (M.bones.head) M.bones.head.attach(P.maw);
+    P.glb = true; P.keep = [root, ...M.meshes]; // bake で骨つきのメッシュをまとめないように
+    const mixer = new THREE.AnimationMixer(root), act = {};
+    for (const k of ['hover', 'attack', 'cast']) {
+      const a = mixer.clipAction(M.clips[k]); act[k] = a;
+      if (k === 'hover') { a.play(); a.time = Math.random() * M.clips[k].duration; }
+      else { a.setLoop(THREE.LoopOnce, 1); a.clampWhenFinished = true; a.timeScale = 0; a.setEffectiveWeight(0); a.play(); }
+    }
+    // mixer と act は互いを指し合うので、bake が部品をたどるときに見えないよう、列挙しないプロパティにする
+    Object.defineProperty(P, 'mixer', { value: mixer, enumerable: false });
+    Object.defineProperty(P, 'act', { value: act, enumerable: false });
+    Object.assign(P, { w: 0, atk: null, cur: 'attack', atkT: 0, rel: 0 });
+  }
+  function dragonGLBAnim(t, o) {
+    const P = t.parts, dt = Math.min(0.1, Math.max(0, o.dt || 0)), A = P.act;
+    // 攻撃のため（o.k）の間は、動きを「ため」の終わりまで進め、ためが終わったら残りを再生する
+    if (o.k > 0) { if (!P.atk) P.atk = t.castNext ? 'cast' : 'attack'; P.cur = P.atk; P.atkT = o.k * DRAGON_PEAK[P.atk]; P.rel = 0; }
+    else if (P.atk) { P.rel += dt; P.atkT = DRAGON_PEAK[P.atk] + P.rel; if (P.atkT >= A[P.atk].getClip().duration - 0.02) P.atk = null; }
+    P.w += ((P.atk ? 1 : 0) - P.w) * Math.min(1, dt * 10);
+    for (const k of ['attack', 'cast']) {
+      const a = A[k];
+      if (k === P.cur) { a.time = Math.min(P.atkT, a.getClip().duration - 0.001); a.setEffectiveWeight(P.w); } else a.setEffectiveWeight(0);
+    }
+    A.hover.setEffectiveWeight(1 - P.w * 0.95);
+    P.mixer.update(dt);
+    const tm = o.time + o.phase;
+    P.maw.scale.setScalar(0.9 * (1 + P.w * (P.cur === 'cast' ? 1.6 : 0.6) + Math.sin(tm * 6) * 0.1));
+  }
+  MON.register('abyssdrake', function (std, g, P) {
+    if (MG.ModelGLB && MG.ModelGLB.has('abyssdrake') && THREE.AnimationMixer) return dragonGLBBuild(std, g, P);
+    return dragonProcBuild(std, g, P);
+  }, function (t, o) { return t.parts.glb ? dragonGLBAnim(t, o) : dragonProcAnim(t, o); });
 
   // ======================================================================
   //  ② 氷晶の霊獣（参考: 隠し部屋モンスター②）

@@ -4549,7 +4549,9 @@
   const ENEMY_COL = { slime: ['#5aff8a', '#c8ffd8'], skeleton: ['#e8e2d0', '#ff5a3a'], bat: ['#6a4a9a', '#ff4a8a'], mage: ['#7a3cff', '#c8a8ff'], boss: ['#ff5a3a', '#ffb07a'],
     // 第36版: 深い階の敵
     spider: ['#8a2a2a', '#ff4a4a'], goblin: ['#8ab04a', '#e8d070'], mimic: ['#c8a050', '#ff4a4a'], armor: ['#5a8aff', '#c8e0ff'], wraith: ['#7a4aff', '#c8a8ff'], gargoyle: ['#8a8a88', '#ff9a3a'],
-    salamander: ['#ff6a1a', '#ffd24a'], ifrit: ['#ff5a10', '#ffe08a'], minotaur: ['#c8402a', '#ffb07a'], lich: ['#4ac8ff', '#c8a8ff'], dragon: ['#ff4a10', '#ffd24a'], iceking: ['#8ae0ff', '#ffffff'] };
+    salamander: ['#ff6a1a', '#ffd24a'], ifrit: ['#ff5a10', '#ffe08a'], minotaur: ['#c8402a', '#ffb07a'], lich: ['#4ac8ff', '#c8a8ff'], dragon: ['#ff4a10', '#ffd24a'], iceking: ['#8ae0ff', '#ffffff'],
+    // 第45版: 隠し部屋の 4 体（第44版で入れ忘れていて、攻撃や倒したときに止まっていた）
+    abyssdrake: ['#ff3a1a', '#ffb040'], frostbeast: ['#8ae0ff', '#ffffff'], arachne: ['#e8e8f0', '#9a5ad8'], starseer: ['#ffd24a', '#9a5aff'] };
   const ENEMY_STEP = { abyssdrake: 'flap', frostbeast: 'heavy', arachne: 'soft', starseer: 'soft', slime: 'slime', skeleton: 'bone', mage: 'soft', boss: 'heavy', bat: 'flap', spider: 'soft', goblin: 'soft', mimic: 'heavy', armor: 'heavy', wraith: 'soft', gargoyle: 'flap', salamander: 'soft', ifrit: 'heavy', minotaur: 'heavy', lich: 'soft', dragon: 'heavy', iceking: 'heavy' };
   function makeEnemyModel(kind, mats) {
     const g = new THREE.Group(), parts = {};
@@ -4686,6 +4688,8 @@
   function enemyAttack(t, foe, farShot) {
     const E = t.E, [c1, c2] = ENEMY_COL[t.kind];
     t.windup = E.boss ? 0.7 : 0.4;
+    const every0 = E.rangedEvery == null ? 3 : E.rangedEvery; // 第45版: 見た目の動き（爪か、口から弾か）を選ぶために先に決めておく（下と同じ決め方）
+    t.castNext = !!(farShot || E.ranged || ((E.boss || E.rangedEvery) && every0 > 0 && t.shots % every0 === every0 - 1));
     const fc = foe.center.clone();
     after(t.windup, () => {
       if (!t.alive || !D.on || !isSim()) return;
