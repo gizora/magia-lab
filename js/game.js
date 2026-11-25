@@ -4286,6 +4286,13 @@
       out[0].confirm = true; // 第37版: 帰還ポータルは、触れると確認画面を出す
       // 第37版: 守護者の部屋の重い扉（F キーで開ける・閉める）
       (W.dun.doors || []).forEach((d, i) => out.push({ id: 'door' + i + (d.sealed ? 's' : d.open ? 'o' : 'c'), door: i, label: '扉', x: d.x, z: d.z, r: 3.4, hint: d.sealed ? '守護者を倒すまで開かない' : d.open ? '扉を閉める' : '重い扉を開ける' }));
+      // 第48版: 隠し部屋の扉（迷路の行き止まりの扉と、中の扉）。触れるとワープする。中の扉は、モンスターを倒すまで開かない
+      const H = W.dun.hidden;
+      if (H) {
+        const tp = (dr) => ({ x: dr.x - dr.out[0] * 1.1, z: dr.z - dr.out[1] * 1.1, r: 1.35 });
+        out.push({ id: 'hdoorIn', hdoor: 'in', label: '古い石の扉', x: H.doorIn.x, z: H.doorIn.z, r: 3.4, hint: '紋様が光っている…（触れると扉の向こうへ）', touch: tp(H.doorIn) });
+        out.push({ id: H.locked ? 'hdoorOutL' : 'hdoorOut', hdoor: 'out', label: '古い石の扉', x: H.doorOut.x, z: H.doorOut.z, r: 3.4, hint: H.locked ? 'モンスターを倒すまで出られない' : '触れると元の場所へ戻る', touch: tp(H.doorOut) });
+      }
       if (W.dun.stairsOpen) out.push({ id: 'stairs', label: '下の階', x: W.dun.stairs.x, z: W.dun.stairs.z, r: 2.6, hint: `下の階へ進む（地下 ${D.floor + 1} 階）`, touch: { x: W.dun.stairs.x, z: W.dun.stairs.z, r: 1.4 } });
       return out;
     }
@@ -4324,8 +4331,29 @@
     touchCd = 1.2;
     return enterSpot(s);
   };
+  // 第48版: 隠し部屋の中のモンスターが生きている間は、中の扉から出られない（お宝の部屋はいつでも出られる）
+  function hiddenLocked() {
+    return !!(D.data && D.data.hidden && D.data.hidden.kind === 'elite' && targets.some((t) => t.isEnemy && t.alive && t.elite));
+  }
+  // その場所へ一瞬で移る（向きも変える）。紫の光が両方の場所に出る
+  function warpPlayer(to) {
+    const from = new V3(player.pos.x, 1.2, player.pos.z);
+    FX.emit(from, { count: 30, c1: '#a050ff', c2: '#e0c8ff', speed: 4, life: 0.6, size: 0.35, drag: 3 });
+    player.pos.set(to.x, W.floorAt(to.x, to.z, 1), to.z); player.vy = 0; if (player.iv) player.iv.set(0, 0, 0);
+    player.yaw = to.yaw; player.pitch = 0;
+    camera.position.set(player.pos.x, player.pos.y + EYE, player.pos.z); camera.rotation.set(0, player.yaw, 0, 'YXZ'); camera.updateMatrixWorld(true);
+    FX.emit(new V3(to.x, 1.2, to.z), { count: 40, c1: '#a050ff', c2: '#e0c8ff', speed: 5, life: 0.7, size: 0.4, drag: 3 });
+    AU.cast('arcane'); st.shake = Math.max(st.shake, 0.08);
+    touchCd = 1.5;
+  }
   function enterSpot(s) {
     AU.click();
+    if (s.hdoor) { // 第48版: 隠し部屋の扉
+      const H = W.dun && W.dun.hidden; if (!H) return false;
+      if (s.hdoor === 'out' && hiddenLocked()) { popup(ahead(2.4, 0.2), 'モンスターを倒すまで出られない', 'pvp'); AU.blocked(ap(new V3(s.x, 1.5, s.z))); touchCd = 1.5; return true; }
+      warpPlayer(s.hdoor === 'in' ? H.inside : H.outside);
+      return true;
+    }
     if (s.door != null) { // 第37版: 重い扉を開ける・閉める
       const dd = W.dun && W.dun.doors && W.dun.doors[s.door];
       if (dd && dd.sealed) { popup(ahead(2.4, 0.2), '守護者を倒すまで開かない', 'pvp'); AU.blocked(ap(new V3(s.x, 1.5, s.z))); return true; } // 第43版
@@ -4992,6 +5020,7 @@
   function updateDungeon(dt) {
     if (!D.on) return;
     updateBossRoom(dt);
+    if (W.dun && W.dun.hidden) W.setHiddenLocked(hiddenLocked()); // 第48版: 中の扉の紋様（赤＝出られない）
     if (D.invul > 0) D.invul -= dt;
     updateChests(dt);
     updateEbolts(dt);
@@ -5523,7 +5552,8 @@
     cam() { return camera; }, // 第42版: 画面の揺れのテスト用
     hitStopT() { return hitStopT; }, // 第42版: ヒットストップのテスト用
     iv() { return player.iv ? player.iv.clone() : null; }, // 第43版: 氷の床で滑るテスト用
-    hiddenSeen() { return !!D.hiddenSeen; }, // 第43版: 隠し部屋のテスト用
+    hiddenSeen() { return !!D.hiddenSeen; },
+    hiddenLocked: () => hiddenLocked(), // 第48版: 隠し部屋のテスト用 // 第43版: 隠し部屋のテスト用
     hitT(id, d, crit) { const t = targets.find((q) => q.id === id); return t ? damage(t, d, "#ffffff", !!crit) : -1; }, // 第42版: 当たったときの光と弾みのテスト用
     popOf(id) { const t = targets.find((q) => q.id === id); return t ? { pop: t.pop || 0, flash: t.flash, sx: t.group.scale.x, sy: t.group.scale.y } : null; },
     step(sec) { const n = Math.round(sec * 60); realDt = 1 / 60; for (let i = 0; i < n; i++) step(1 / 60); camera.updateMatrixWorld(true); },

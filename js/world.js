@@ -1277,6 +1277,36 @@
     });
     return g;
   }
+  // 第48版: 隠し部屋の扉。古い石の板に、紫の紋様がゆっくり光る（紋様の絵は、光る部分だけを白で描いた絵）
+  let runeTex = null;
+  function runeTexture() {
+    if (runeTex) return runeTex;
+    const c = document.createElement('canvas'); c.width = 256; c.height = 384; const g = c.getContext('2d');
+    g.fillStyle = '#000'; g.fillRect(0, 0, 256, 384);
+    g.strokeStyle = '#fff'; g.lineCap = 'round'; g.lineJoin = 'round';
+    g.lineWidth = 4; g.strokeRect(16, 16, 224, 352); g.lineWidth = 2; g.strokeRect(26, 26, 204, 332);
+    g.lineWidth = 5; g.beginPath(); g.arc(128, 180, 80, 0, Math.PI * 2); g.stroke();
+    g.lineWidth = 3; g.beginPath(); g.arc(128, 180, 60, 0, Math.PI * 2); g.stroke();
+    g.beginPath(); for (let i = 0; i <= 7; i++) { const a = -Math.PI / 2 + i * 2 * Math.PI * 3 / 7, x = 128 + Math.cos(a) * 60, y = 180 + Math.sin(a) * 60; if (i) g.lineTo(x, y); else g.moveTo(x, y); } g.stroke();
+    g.beginPath(); g.arc(128, 180, 12, 0, Math.PI * 2); g.stroke();
+    let sd = 7; const rnd = () => ((sd = (sd * 16807) % 2147483647) / 2147483647);
+    const glyph = (x, y, w) => { g.beginPath(); let px = x + rnd() * w, py = y + rnd() * w; g.moveTo(px, py); for (let k = 0; k < 3; k++) { px = x + Math.round(rnd() * 2) * w / 2; py = y + Math.round(rnd() * 2) * w / 2; g.lineTo(px, py); } g.stroke(); };
+    g.lineWidth = 3;
+    for (let i = 0; i < 6; i++) { glyph(40 + i * 30, 44, 20); glyph(40 + i * 30, 300, 20); glyph(40 + i * 30, 330, 20); }
+    for (let i = 0; i < 12; i++) { const a = i / 12 * Math.PI * 2; glyph(128 + Math.cos(a) * 70 - 6, 180 + Math.sin(a) * 70 - 6, 12); }
+    runeTex = new THREE.CanvasTexture(c); return runeTex;
+  }
+  function makeRuneDoor(cx, cz, face) {
+    const g = new THREE.Group(); g.position.set(cx, 0, cz); g.rotation.y = Math.atan2(face[0], face[1]); // 正面（+z）を通路の側へ
+    const add = (geo, mat, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); g.add(m); return m; };
+    add(new THREE.BoxGeometry(0.7, 5.2, 0.8), dunStone.pillar, -1.8, 2.6, 0); add(new THREE.BoxGeometry(0.7, 5.2, 0.8), dunStone.pillar, 1.8, 2.6, 0);
+    add(new THREE.BoxGeometry(4.3, 0.8, 0.9), dunStone.pillar, 0, 5.1, 0); add(new THREE.BoxGeometry(1.0, 0.5, 1.0), dunStone.dark, 0, 5.55, 0.05);
+    add(new THREE.BoxGeometry(2.9, 4.7, 0.4), dunStone.dark, 0, 2.35, -0.1);
+    const mat = new THREE.MeshStandardMaterial({ color: 0x3e3a46, roughness: 0.85, emissive: 0xa050ff, emissiveMap: runeTexture(), emissiveIntensity: 1.15 });
+    add(new THREE.PlaneGeometry(2.8, 4.5), mat, 0, 2.3, 0.12);
+    const glow = FX.glowSprite('#a050ff', 3.4); glow.material = glow.material.clone(); glow.material.opacity = 0.32; glow.position.set(0, 2.4, 0.7); g.add(glow);
+    return { g, mat, glow };
+  }
   function makeDoor(cx, cz, out) {
     const M = doorMaterials(), g = new THREE.Group(), HS = DOOR_HS, R = DOOR_R;
     g.position.set(cx, 0, cz); g.rotation.y = Math.atan2(out[0], out[1]); // 扉の +z が部屋の中の向き
@@ -1617,17 +1647,17 @@
     // たいまつ: 壁の鉄の金具に、斜めに差した木の柄と炎。部屋のまわりと通路にも置く
     const torchMat = new THREE.MeshBasicMaterial({ color: theme.flameC }), torchWood = new THREE.MeshStandardMaterial({ color: 0x3a2414, roughness: 0.9 }), iron = new THREE.MeshStandardMaterial({ color: 0x2a2a2e, roughness: 0.5, metalness: 0.7 });
     dunLights.torches = [];
-    const torchAt = (tx, tzz, nx, nz) => {
+    const torchAt = (tx, tzz, nx, nz, col) => { // col: 炎と明かりの色（第48版。なければ地域の色）
       const [wx, wz] = R.tileToWorld(tx, tzz);
       if (dunLights.torches.some((q) => Math.hypot(q.x - wx, q.z - wz) < 5)) return;
       const p = new V3(wx + nx * 1.18, 3.0, wz + nz * 1.18);
       const plate = new THREE.Mesh(new THREE.BoxGeometry(nz ? 0.3 : 0.06, 0.4, nx ? 0.3 : 0.06), iron); plate.position.set(wx + nx * 1.03, 2.75, wz + nz * 1.03); dunGroup.add(plate);
       const arm = new THREE.Mesh(new THREE.BoxGeometry(nx ? 0.3 : 0.05, 0.05, nz ? 0.3 : 0.05), iron); arm.position.set(wx + nx * 1.15, 2.72, wz + nz * 1.15); dunGroup.add(arm);
       const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.035, 0.7, 6), torchWood); stick.position.copy(p).add(new V3(-nx * 0.05, -0.22, -nz * 0.05)); stick.rotation.set(nz ? Math.sign(nz) * 0.35 : 0, 0, nx ? -Math.sign(nx) * 0.35 : 0); dunGroup.add(stick);
-      const fl = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.3, 7), torchMat); fl.position.copy(p).add(new V3(nx * 0.06, 0.16, nz * 0.06)); dunGroup.add(fl);
-      const gl = FX.glowSprite(theme.flame, 1.0); gl.material = gl.material.clone(); gl.material.opacity = 0.75; gl.position.copy(p).add(new V3(nx * 0.06, 0.2, nz * 0.06)); dunGroup.add(gl);
+      const fl = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.3, 7), col ? new THREE.MeshBasicMaterial({ color: col }) : torchMat); fl.position.copy(p).add(new V3(nx * 0.06, 0.16, nz * 0.06)); dunGroup.add(fl);
+      const gl = FX.glowSprite(col || theme.flame, 1.0); gl.material = gl.material.clone(); gl.material.opacity = 0.75; gl.position.copy(p).add(new V3(nx * 0.06, 0.2, nz * 0.06)); dunGroup.add(gl);
       dunAnim.push({ torch: gl, ph: rand(0, 10) });
-      dunLights.torches.push({ x: p.x + nx * 0.4, y: p.y + 0.2, z: p.z + nz * 0.4, ph: rand(0, 10) });
+      dunLights.torches.push({ x: p.x + nx * 0.4, y: p.y + 0.2, z: p.z + nz * 0.4, ph: rand(0, 10), col: col || null });
     };
     d.rooms.forEach((r) => {
       [[r.x0 - 1, r.z0 + Math.floor(r.h / 2), 1, 0], [r.x0 + r.w, r.z0 + Math.floor(r.h / 2), -1, 0], [r.x0 + Math.floor(r.w / 2), r.z0 - 1, 0, 1], [r.x0 + Math.floor(r.w / 2), r.z0 + r.h, 0, -1]].forEach(([tx, tzz, nx, nz]) => {
@@ -1652,6 +1682,7 @@
       dunLights.player = new THREE.PointLight(0xffe2b8, 0.55, 9, 1.8);
     }
     dunLights.pool.forEach((l) => { l.color.set(theme.torch); dunGroup.add(l); }); dunGroup.add(dunLights.player);
+    dunLights.col = theme.torch;
     // (x, z) のまわりで、壁からいちばん離れた床（看板を立てる場所。2.4〜3m 離す）
     const clearance = (wx, wz) => { const [tx, tz2] = R.worldToTile(wx, wz); let best = 9; for (let dz = -3; dz <= 3; dz++) for (let dx = -3; dx <= 3; dx++) if (!isFloor(tx + dx, tz2 + dz)) best = Math.min(best, Math.hypot(dx, dz)); return best; };
     const openSpot = (x, z) => {
@@ -1711,11 +1742,74 @@
       const solid = addSolid(stageSolids.dungeon, sx, sz, alongX ? 2.0 : 0.55, alongX ? 0.55 : 2.0, WALL_H);
       return { x: cx, z: cz, out: dr.out, open: false, k: 0, leaves: m.leaves, solid, g: m.g };
     });
+    // 第48版: 隠し部屋（迷路の東どなりの別の空間）。迷路の行き止まりの扉と、中の扉（西の壁）。中身で明かりと飾りを変える
+    let hidden = null;
+    if (d.hidden && d.hidden.door) {
+      const H = d.hidden;
+      const faceAt = (dr) => { const [ax, az] = R.tileToWorld(dr.cells[0][0], dr.cells[0][1]), [bx, bz] = R.tileToWorld(dr.cells[1][0], dr.cells[1][1]); return { x: (ax + bx) / 2 + dr.out[0] * T / 2, z: (az + bz) / 2 + dr.out[1] * T / 2, out: dr.out }; };
+      const di = faceAt(H.door), de = faceAt(H.exit);
+      const D1 = makeRuneDoor(di.x, di.z, [-di.out[0], -di.out[1]]), D2 = makeRuneDoor(de.x, de.z, [-de.out[0], -de.out[1]]);
+      dunGroup.add(D1.g, D2.g); dunAnim.push({ rune: D1, ph: 0 }, { rune: D2, ph: 1.6 });
+      const yawOf = (dx, dz) => Math.atan2(-dx, -dz); // その向きを見るときの向き（カメラの yaw）
+      hidden = { kind: H.kind, doorIn: di, doorOut: de, exitRune: D2, locked: false,
+        inside: { x: de.x - de.out[0] * 3.4, z: de.z - de.out[1] * 3.4, yaw: yawOf(-de.out[0], -de.out[1]) },
+        outside: { x: di.x - di.out[0] * 2.8, z: di.z - di.out[1] * 2.8, yaw: yawOf(-di.out[0], -di.out[1]) } };
+      const gold = H.kind === 'treasure', col = gold ? '#ffcf5a' : '#ff3a2a';
+      const x0 = H.x0, z0 = H.z0, x1 = H.x0 + H.w - 1, z1 = H.z0 + H.h - 1, zMid = H.z0 + H.h / 2;
+      for (let x = x0 + 2; x <= x1 - 1; x += 4) { torchAt(x, z0 - 1, 0, 1, col); torchAt(x, z1 + 1, 0, -1, col); }
+      for (let z = z0 + 2; z <= z1 - 1; z += 4) { if (Math.abs(z + 0.5 - zMid) > 2.5) torchAt(x0 - 1, z, 1, 0, col); torchAt(x1 + 1, z, -1, 0, col); }
+      // 壁の柱（4 マスおき）
+      const wcols = [];
+      for (let x = x0 + 4; x < x1; x += 4) { [[z0 - 1, 1], [z1 + 1, -1]].forEach(([zz, nz]) => { const [wx, wz] = R.tileToWorld(x, zz); wcols.push([1.0, WALL_VIS, 1.0, wx, WALL_VIS / 2, wz + nz * 0.8]); }); }
+      for (let z = z0 + 4; z < z1; z += 4) { if (Math.abs(z + 0.5 - zMid) > 3) { const [wx, wz] = R.tileToWorld(x0 - 1, z); wcols.push([1.0, WALL_VIS, 1.0, wx + 0.8, WALL_VIS / 2, wz]); } const [wx2, wz2] = R.tileToWorld(x1 + 1, z); wcols.push([1.0, WALL_VIS, 1.0, wx2 - 0.8, WALL_VIS / 2, wz2]); }
+      dunGroup.add(stoneMesh(wcols, dunStone.pillar, 1.2));
+      const [cx, cz] = R.tileToWorld(x0 + H.w / 2 - 0.5, z0 + H.h / 2 - 0.5);
+      // 広い部屋なので、まん中の高いところにも明かり（見えない明かり。近くの明かりとして使われる）
+      [[-5, -4], [5, 4]].forEach(([ox, oz]) => dunLights.torches.push({ x: cx + ox, y: 5.2, z: cz + oz, ph: rand(0, 10), col }));
+      if (gold) {
+        // 宝物庫: 金貨の山、金の帯の柱、きらめき
+        const goldM = new THREE.MeshStandardMaterial({ color: 0xd8a640, roughness: 0.35, metalness: 0.35, emissive: 0x4a3000, emissiveIntensity: 0.7 });
+        for (let k = 0; k < 9; k++) {
+          const a = k / 9 * Math.PI * 2 + 0.3, r = 4 + (k % 3) * 2.2, px = cx + Math.cos(a) * r, pz = cz + Math.sin(a) * r, rr = rand(0.8, 1.6);
+          const pile = new THREE.Mesh(new THREE.ConeGeometry(rr, rr * 0.55, 14), goldM); pile.position.set(px, rr * 0.27, pz); dunGroup.add(pile);
+          for (let j = 0; j < 8; j++) { const cn = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 0.03, 10), goldM); cn.position.set(px + rand(-rr - 0.6, rr + 0.6), 0.03, pz + rand(-rr - 0.6, rr + 0.6)); cn.rotation.set(rand(-0.3, 0.3), 0, rand(-0.3, 0.3)); dunGroup.add(cn); }
+          const sp = FX.glowSprite('#ffd86a', 1.4); sp.material = sp.material.clone(); sp.position.set(px, rr * 0.6, pz); dunGroup.add(sp); dunAnim.push({ coin: sp, ph: rand(0, 10) });
+        }
+        const band = goldM;
+        [[-7, -7], [7, -7], [-7, 7], [7, 7]].forEach(([ox, oz]) => {
+          const px = cx + ox, pz = cz + oz;
+          const col2 = new THREE.Mesh(new THREE.CylinderGeometry(0.75, 0.85, WALL_VIS, 14), dunStone.pillar); col2.position.set(px, WALL_VIS / 2, pz); dunGroup.add(col2);
+          [0.6, 3.0, WALL_VIS - 0.7].forEach((y) => { const b2 = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.9, 0.25, 14), band); b2.position.set(px, y, pz); dunGroup.add(b2); });
+          addSolid(stageSolids.dungeon, px, pz, 0.8, 0.8, WALL_H);
+        });
+        flat(new V3(cx, 0, cz), 0xffc84a, 12, 0.25);
+      } else {
+        // 闘技場: 赤い魔法陣、崩れた柱、天井から下がる鎖
+        const ring = flat(new V3(cx, 0, cz), 0xff2a1a, 14, 0.55); dunAnim.push({ m: ring, spin: 0.15 });
+        const iron = new THREE.MeshStandardMaterial({ color: 0x2a2628, roughness: 0.55, metalness: 0.5 });
+        for (let k = 0; k < 7; k++) {
+          const a = Math.PI + 0.9 + k / 6 * (Math.PI * 2 - 1.8), r = rand(9, 11), px = cx + Math.cos(a) * r, pz = cz + Math.sin(a) * r, h = rand(1.2, 3.8); // 入口（西）の正面はあける
+          const pc = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.75, h, 10), dunStone.pillar); pc.position.set(px, h / 2, pz); pc.rotation.set(rand(-0.08, 0.08), rand(0, 6), rand(-0.08, 0.08)); dunGroup.add(pc);
+          const top = new THREE.Mesh(new THREE.DodecahedronGeometry(0.5, 0), dunStone.dark); top.position.set(px + rand(-1.2, 1.2), 0.35, pz + rand(-1.2, 1.2)); top.rotation.set(rand(0, 3), rand(0, 3), 0); dunGroup.add(top);
+          addSolid(stageSolids.dungeon, px, pz, 0.7, 0.7, h);
+        }
+        for (let k = 0; k < 10; k++) {
+          const a = rand(0, Math.PI * 2), r = rand(3, 13), px = cx + Math.cos(a) * r, pz = cz + Math.sin(a) * r, len = rand(1.2, 2.6);
+          const ch = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, len, 5), iron); ch.position.set(px, WALL_VIS - len / 2, pz); dunGroup.add(ch);
+          const hook = new THREE.Mesh(new THREE.TorusGeometry(0.16, 0.04, 5, 10), iron); hook.position.set(px, WALL_VIS - len - 0.15, pz); hook.rotation.y = rand(0, 3); dunGroup.add(hook);
+        }
+      }
+    }
     wardBoxes = [];
-    W.dun = { doors, signs: [], data: d, start, stairs, portal, stairsOpen: !d.boss, stairsParts, portalGroup: pg, torches: dunLights.torches.length, pillars: cols.length / 3, area: d.area || 0, theme };
+    W.dun = { doors, signs: [], data: d, hidden, start, stairs, portal, stairsOpen: !d.boss, stairsParts, portalGroup: pg, torches: dunLights.torches.length, pillars: cols.length / 3, area: d.area || 0, theme };
     W.setStairsOpen(!d.boss);
     if (W.stage === 'dungeon') { solids = stageSolids.dungeon; applyTime(timeK); } // 階ごとに霧の濃さが変わる（守護者の階）
     return W.dun;
+  };
+  // 第48版: 隠し部屋の中の扉。モンスターを倒すまでは紋様が赤く光る
+  W.setHiddenLocked = function (v) {
+    const H = W.dun && W.dun.hidden; if (!H || H.locked === v) return;
+    H.locked = v; H.exitRune.mat.emissive.set(v ? 0xff2a1a : 0xa050ff); H.exitRune.glow.material.color.set(v ? 0xff2a1a : 0xa050ff);
   };
   // ボスの階では、ボスを倒すまで階段が閉じている
   W.setStairsOpen = function (v) {
@@ -2302,12 +2396,14 @@
     if (W.stage === 'dungeon' && playerPos && dunLights.player) {
       dunLights.player.position.set(playerPos.x, playerPos.y + 1.6, playerPos.z);
       const near = dunLights.torches.map((t) => [t, (t.x - playerPos.x) ** 2 + (t.z - playerPos.z) ** 2]).sort((a, b) => a[1] - b[1]);
-      dunLights.pool.forEach((l, i) => { const e = near[i]; if (!e) { l.intensity = 0; return; } const t = e[0]; l.position.set(t.x, t.y, t.z); l.intensity = 1.05 * (1 + Math.sin(clock * 9 + t.ph) * 0.08 + Math.sin(clock * 23 + t.ph * 2) * 0.05); });
+      dunLights.pool.forEach((l, i) => { const e = near[i]; if (!e) { l.intensity = 0; return; } const t = e[0]; l.color.set(t.col || dunLights.col || 0xff8a3e); l.position.set(t.x, t.y, t.z); l.intensity = 1.05 * (1 + Math.sin(clock * 9 + t.ph) * 0.08 + Math.sin(clock * 23 + t.ph * 2) * 0.05); });
     }
     if (W.stage === 'dungeon') { updateDoors(dt); updateIce(dt); }
     if (W.stage === 'dungeon') for (const a of dunAnim) {
       if (a.torch) { a.torch.scale.setScalar(1.0 * (1 + Math.sin(clock * 9 + a.ph) * 0.1 + Math.sin(clock * 23 + a.ph) * 0.05)); continue; }
       if (a.face) { if (playerPos) a.face.rotation.y = Math.atan2(playerPos.x - a.face.position.x, playerPos.z - a.face.position.z); continue; }
+      if (a.rune) { const k = 1 + Math.sin(clock * 2.2 + a.ph) * 0.25; a.rune.mat.emissiveIntensity = 1.15 * k; a.rune.glow.material.opacity = 0.32 * k; continue; } // 第48版: 隠し部屋の扉の紋様
+      if (a.coin) { a.coin.material.opacity = 0.55 + Math.sin(clock * 3 + a.ph) * 0.35; continue; }
       a.m.rotation.z += dt * a.spin;
     }
     if (W.stage === 'arena') {

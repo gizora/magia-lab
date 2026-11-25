@@ -165,11 +165,13 @@
   };
 
   // 階の形を作る: 3×3 のマスに部屋を置き、迷路のようにつなぐ。1 タイル 2m、42×42 タイル（84m 四方）
+  R.BOSS_ROOM = 24; // 第48版: 守護者の部屋の一辺の最大（マス）。前は 18
+  R.HIDDEN_SIZE = 16; // 第48版: 隠し部屋（迷路の外の別の空間）の一辺（マス）
   R.TILE = 2; R.GRID = 42; R.CELLS = 3; R.CELL = 14; // 3×3 の部屋（84m 四方）
   // 第43版: 最後の氷の王の階（地下 25 階）は、守護者だけの階。
   // 入口の部屋 → まっすぐな一本道（18m）→ 扉 → 大きな氷のフィールド（46m × 72m。滑る氷の床・降る雪・氷の柱）。帰還ポータルは入口の部屋の北の小部屋
   R.iceFloor = (floor) => floor === R.LAST_FLOOR;
-  R.HIDDEN_CHANCE = 0.061; // 第43版: 隠し部屋のくじの確率（守護者の階をのぞく）。置ける場所がない階が 2 割ほどあるので、実際に出るのは約 5%
+  R.HIDDEN_CHANCE = 0.05; // 第43版: 隠し部屋のくじの確率（守護者の階をのぞく）。第48版: 通路と扉だけを迷路に置くので、ほぼ必ず置ける（前は 0.061）
   R.ELITE = { hp: 4, dmg: 1.6, xp: 6, gold: 10, size: 1.35 }; // 第43版: 隠し部屋の物凄く強いモンスター（ふつうの何倍か）
   R.BIG_CHEST = 10; // 第43版: 隠し部屋の大きな宝箱のお金（ふつうの宝箱の何倍か）
   function makeIceFloor(floor, seed) {
@@ -255,15 +257,17 @@
     const chests = [], spawns = [];
     const boss = R.isBossFloor(floor);
     if (boss) {
-      // 第33版: 守護者の部屋を広くする。1 マスずつ四方へ広げ、ほかの大事な部屋（入口・ポータル）に 2 マスより近づいたら止める
+      // 第33版: 守護者の部屋を広くする。1 マスずつ四方へ広げ、ほかの大事な部屋（入口・ポータル）に 2 マスより近づいたら止める（第48版: 最大 18 → 24 マス）
       const keep = [start, portal].filter((r) => r && r !== stairs);
-      const hits = (x0, z0, x1, z1) => keep.some((r) => x0 <= r.x0 + r.w + 1 && x1 >= r.x0 - 2 && z0 <= r.z0 + r.h + 1 && z1 >= r.z0 - 2);
+      // 第48版: 24 マスまで広げると、2 マス離すのではまれに行けない床ができたので、1 マス（壁 1 枚）離す
+      const hits = (x0, z0, x1, z1) => keep.some((r) => x0 <= r.x0 + r.w && x1 >= r.x0 - 1 && z0 <= r.z0 + r.h && z1 >= r.z0 - 1);
       let x0 = stairs.x0, z0 = stairs.z0, x1 = stairs.x0 + stairs.w - 1, z1 = stairs.z0 + stairs.h - 1;
-      for (let k = 0; k < 20; k++) {
-        if (x1 - x0 + 1 < 18 && x0 > 1 && !hits(x0 - 1, z0, x0 - 1, z1)) x0--;
-        if (x1 - x0 + 1 < 18 && x1 < N - 2 && !hits(x1 + 1, z0, x1 + 1, z1)) x1++;
-        if (z1 - z0 + 1 < 18 && z0 > 1 && !hits(x0, z0 - 1, x1, z0 - 1)) z0--;
-        if (z1 - z0 + 1 < 18 && z1 < N - 2 && !hits(x0, z1 + 1, x1, z1 + 1)) z1++;
+      const BR = R.BOSS_ROOM;
+      for (let k = 0; k < 30; k++) {
+        if (x1 - x0 + 1 < BR && x0 > 1 && !hits(x0 - 1, z0, x0 - 1, z1)) x0--;
+        if (x1 - x0 + 1 < BR && x1 < N - 2 && !hits(x1 + 1, z0, x1 + 1, z1)) x1++;
+        if (z1 - z0 + 1 < BR && z0 > 1 && !hits(x0, z0 - 1, x1, z0 - 1)) z0--;
+        if (z1 - z0 + 1 < BR && z1 < N - 2 && !hits(x0, z1 + 1, x1, z1 + 1)) z1++;
       }
       Object.assign(stairs, { x0, z0, w: x1 - x0 + 1, h: z1 - z0 + 1, small: false, bossRoom: true });
       for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) carve(x, z);
@@ -376,41 +380,49 @@
     });
     for (let i = spawns.length - 1; i >= 0; i--) { const t = spawns[i].t, inBoss = boss && stairs.bossRoom && !R.ENEMIES[spawns[i].type].boss && t[0] >= stairs.x0 - 1 && t[0] < stairs.x0 + stairs.w + 1 && t[1] >= stairs.z0 - 1 && t[1] < stairs.z0 + stairs.h + 1; if (!tiles[t[1] * N + t[0]] || inBoss) spawns.splice(i, 1); } // 守護者の部屋の中は守護者だけ
     for (let i = chests.length - 1; i >= 0; i--) if (!tiles[chests[i].t[1] * N + chests[i].t[0]]) chests.splice(i, 1);
-    // 第43版: 5% の確率で、地図に出ない隠し部屋（守護者の階には出さない）。ふつうの部屋の壁から 2 マス幅の短い通路でつながる。
-    // 中身は半々で、大きな宝箱（ふつうの 10 倍ほどのお金）か、物凄く強いモンスター（倒すと大金とたくさんの経験値）
-    let hidden = null;
+    // 第43版: 5% の確率で、地図に出ない隠し部屋（守護者の階には出さない）。中身は半々で、大きな宝箱（ふつうの 10 倍ほどのお金）か、物凄く強いモンスター。
+    // 第48版: 隠し部屋は迷路の外（東どなり）の別の空間（16×16 マス）にした。ふつうの部屋の壁から地図に出ない短い通路がのび、
+    // 行き止まりの「紋様の光る石の扉」に触れると中へワープする。中の扉に触れると戻る（モンスターの部屋は、倒すまで戻れない）
+    let hidden = null, NN = N, outTiles = tiles;
     if (!boss && rnd() < R.HIDDEN_CHANCE) {
       const wallAll = (x0, z0, x1, z1) => { for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) { if (x < 1 || z < 1 || x > N - 2 || z > N - 2 || tiles[z * N + x]) return false; } return true; };
       const order = rooms.filter((r) => r !== start && r !== stairs && r !== portal).sort(() => rnd() - 0.5);
       const cands = [];
       for (const r of order) for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
         const span = dx ? r.h : r.w;
-        for (let off = 0; off + 1 < span; off++) for (const L of [2, 3, 4, 5, 6]) for (const HS of [6, 5]) {
-          let px0, pz0, px1, pz1, hx0, hz0;
-          if (dx) { const zc = r.z0 + off, ex = dx > 0 ? r.x0 + r.w : r.x0 - 1; px0 = dx > 0 ? ex : ex - L + 1; px1 = px0 + L - 1; pz0 = zc; pz1 = zc + 1; hx0 = dx > 0 ? px1 + 1 : px0 - HS; hz0 = zc - Math.floor((HS - 2) / 2); }
-          else { const xc = r.x0 + off, ez = dz > 0 ? r.z0 + r.h : r.z0 - 1; pz0 = dz > 0 ? ez : ez - L + 1; pz1 = pz0 + L - 1; px0 = xc; px1 = xc + 1; hz0 = dz > 0 ? pz1 + 1 : pz0 - HS; hx0 = xc - Math.floor((HS - 2) / 2); }
-          // 通路のまわり（部屋に接する側をのぞく）と、隠し部屋のまわり 1 マスが、すべて壁であること
+        for (let off = 0; off + 1 < span; off++) for (const L of [3, 4, 2, 5]) {
+          let px0, pz0, px1, pz1;
+          if (dx) { const zc = r.z0 + off, ex = dx > 0 ? r.x0 + r.w : r.x0 - 1; px0 = dx > 0 ? ex : ex - L + 1; px1 = px0 + L - 1; pz0 = zc; pz1 = zc + 1; }
+          else { const xc = r.x0 + off, ez = dz > 0 ? r.z0 + r.h : r.z0 - 1; pz0 = dz > 0 ? ez : ez - L + 1; pz1 = pz0 + L - 1; px0 = xc; px1 = xc + 1; }
+          // 通路のまわり（部屋に接する側をのぞく）と、行き止まりの先 1 マスが、すべて壁であること
           const pa = dx ? [dx > 0 ? px0 + 1 : px0 - 1, pz0 - 1, dx > 0 ? px1 + 1 : px1 - 1, pz1 + 1] : [px0 - 1, dz > 0 ? pz0 + 1 : pz0 - 1, px1 + 1, dz > 0 ? pz1 + 1 : pz1 - 1];
-          if (!wallAll(Math.min(pa[0], pa[2]), Math.min(pa[1], pa[3]), Math.max(pa[0], pa[2]), Math.max(pa[1], pa[3])) || !wallAll(hx0 - 1, hz0 - 1, hx0 + HS, hz0 + HS)) continue;
-          cands.push({ dx, dz, px0, pz0, px1, pz1, hx0, hz0, HS });
-          break; // この位置・長さでは、いちばん大きい部屋だけ
+          if (!wallAll(Math.min(pa[0], pa[2]), Math.min(pa[1], pa[3]), Math.max(pa[0], pa[2]), Math.max(pa[1], pa[3]))) continue;
+          cands.push({ dx, dz, px0, pz0, px1, pz1 });
+          break;
         }
       }
       if (cands.length) {
-        const { dx, dz, px0, pz0, px1, pz1, hx0, hz0, HS } = cands[Math.floor(rnd() * cands.length)];
+        const { dx, dz, px0, pz0, px1, pz1 } = cands[Math.floor(rnd() * cands.length)];
         for (let z = pz0; z <= pz1; z++) for (let x = px0; x <= px1; x++) tiles[z * N + x] = 1;
-        for (let z = hz0; z < hz0 + HS; z++) for (let x = hx0; x < hx0 + HS; x++) tiles[z * N + x] = 1;
-        const c = [hx0 + Math.floor(HS / 2), hz0 + Math.floor(HS / 2)], face = [-dx, -dz]; // 宝箱・モンスターは入口の方を向く
+        // 行き止まりの 2 マス（扉はその先の壁の面にある）
+        const doorCells = dx ? [[dx > 0 ? px1 : px0, pz0], [dx > 0 ? px1 : px0, pz1]] : [[px0, dz > 0 ? pz1 : pz0], [px1, dz > 0 ? pz1 : pz0]];
+        // 迷路を東へ広げ、壁で隔てた別の空間を作る
+        const HS = R.HIDDEN_SIZE; NN = N + HS + 4; outTiles = new Uint8Array(NN * NN);
+        for (let z = 0; z < N; z++) for (let x = 0; x < N; x++) outTiles[z * NN + x] = tiles[z * N + x];
+        const hx0 = N + 2, hz0 = Math.floor((N - HS) / 2);
+        for (let z = hz0; z < hz0 + HS; z++) for (let x = hx0; x < hx0 + HS; x++) outTiles[z * NN + x] = 1;
+        const zc = hz0 + HS / 2, exitCells = [[hx0, zc - 1], [hx0, zc]]; // 中の扉は西の壁のまん中
+        const c = [hx0 + HS / 2, zc], face = [-1, 0]; // 宝箱・モンスターは、中の扉の方を向く
         const kind = rnd() < 0.5 ? 'treasure' : 'elite';
-        if (kind === 'treasure') chests.push({ room: -1, t: [c[0] + dx, c[1] + dz], face, big: true });
+        if (kind === 'treasure') chests.push({ room: -1, t: [c[0] - 1, c[1]], face, big: true });
         else {
           const strong = R.HIDDEN_MONSTERS[Math.floor(rnd() * R.HIDDEN_MONSTERS.length)]; // 第44版: 4 体からひとつ
           spawns.push({ type: strong, room: -1, t: c, face, elite: true });
         }
-        hidden = { kind, x0: hx0, z0: hz0, w: HS, h: HS, pass: [px0, pz0, px1, pz1] };
+        hidden = { kind, x0: hx0, z0: hz0, w: HS, h: HS, pass: [px0, pz0, px1, pz1], door: { cells: doorCells, out: [dx, dz] }, exit: { cells: exitCells, out: [-1, 0] } };
       }
     }
-    return { doors: boss ? stairs.doors || [] : [], area: R.areaOf(floor).id, floor, seed, N, tiles, rooms, start: start.id, stairs: stairs.id, portal: portal ? portal.id : stairs.id, chests, spawns, boss, center, hidden };
+    return { doors: boss ? stairs.doors || [] : [], area: R.areaOf(floor).id, floor, seed, N: NN, tiles: outTiles, rooms, start: start.id, stairs: stairs.id, portal: portal ? portal.id : stairs.id, chests, spawns, boss, center, hidden };
   };
   // タイル → 世界の座標（タイルの中心）
   R.tileToWorld = (x, z) => [(x + 0.5) * R.TILE - (R.GRID * R.TILE) / 2, (z + 0.5) * R.TILE - (R.GRID * R.TILE) / 2];

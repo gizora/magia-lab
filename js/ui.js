@@ -1174,12 +1174,17 @@
   function drawMinimap() {
     const cv = $('minimap'), D = G.dun;
     if (!D.on || !D.data || !D.explored) return;
-    const g = cv.getContext('2d'), N = D.data.N, k = cv.width / N;
+    const g = cv.getContext('2d'), N = D.data.N;
+    // 第48版: 隠し部屋の階は、迷路の東どなりに別の空間がある。地図はふだん迷路だけ（大きさを変えない）、空間の中にいるときは空間だけを描く
+    const H0 = D.data.hidden, pp = G.playerPos(), [ptx, ptz] = RP.worldToTile(pp.x, pp.z);
+    const inSpace = !!(H0 && H0.door && ptx >= H0.x0 - 1 && ptx <= H0.x0 + H0.w && ptz >= H0.z0 - 1 && ptz <= H0.z0 + H0.h);
+    const VX = inSpace ? H0.x0 - 1 : 0, VZ = inSpace ? H0.z0 - 1 : 0, VN = inSpace ? H0.w + 2 : RP.GRID, k = cv.width / VN;
     g.clearRect(0, 0, cv.width, cv.height);
+    g.save(); g.translate(-VX * k, -VZ * k);
     g.fillStyle = 'rgba(160,170,210,0.55)';
     const hd = D.data.hidden && !D.hiddenSeen ? D.data.hidden : null; // 第43版: 見つけるまで、隠し部屋と通路は地図に出ない
     const hid = (x, z) => !!hd && ((x >= hd.x0 && x < hd.x0 + hd.w && z >= hd.z0 && z < hd.z0 + hd.h) || (x >= hd.pass[0] && x <= hd.pass[2] && z >= hd.pass[1] && z <= hd.pass[3]));
-    for (let z = 0; z < N; z++) for (let x = 0; x < N; x++) if (D.explored[z * N + x] && D.data.tiles[z * N + x] && !hid(x, z)) g.fillRect(x * k, z * k, k + 0.4, k + 0.4);
+    for (let z = VZ; z < Math.min(N, VZ + VN); z++) for (let x = VX; x < Math.min(N, VX + VN); x++) if (D.explored[z * N + x] && D.data.tiles[z * N + x] && !hid(x, z)) g.fillRect(x * k, z * k, k + 0.4, k + 0.4);
     const dot = (wx, wz, col, r, need) => {
       const [tx, tz] = RP.worldToTile(wx, wz);
       if (need && !D.explored[tz * N + tx]) return;
@@ -1199,6 +1204,7 @@
     const [tx, tz] = RP.worldToTile(p.x, p.z), cx = (tx + 0.5) * k, cz = (tz + 0.5) * k;
     g.save(); g.translate(cx, cz); g.rotate(-yaw); g.fillStyle = '#ffffff';
     g.beginPath(); g.moveTo(0, -7); g.lineTo(5, 5); g.lineTo(-5, 5); g.closePath(); g.fill(); g.restore();
+    g.restore();
   }
   function updateRpgHud(dt) {
     updateLvBox();
