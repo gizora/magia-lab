@@ -119,11 +119,11 @@
     arachne: { scale: 1.0, idle: 'idle', move: 'run', moveRef: 4.0, glows: [{ bone: 'head', color: '#ff2a2a', size: 0.35, pos: [0, 2.15, 0.5] }] },
     starseer: { scale: 1.1, idle: 'idle', move: 'run', moveRef: 3.0, orbit: 0.9, glows: [{ bone: 'chest', color: '#a050ff', size: 0.8, pos: [0, 2.16, 0.18] }] },
     // 第49版: 守護者 5 体
-    boss: { scale: 2.2, idle: 'idle', move: 'run', moveRef: 2.6, glows: [{ bone: 'head', color: '#5ae0ff', size: 0.55, pos: [0, 2.3, 0.6] }] },
+    boss: { scale: 2.2, idle: 'idle', move: 'run', moveRef: 2.6, glows: [{ bone: 'head', color: '#5ae0ff', size: 0.4, pos: [0.12, 2.32, 0.63] }, { bone: 'head', color: '#5ae0ff', size: 0.4, pos: [-0.12, 2.32, 0.63] }, { bone: 'chest', color: '#5ae0ff', size: 0.9, pos: [0, 1.76, 0.52] }] }, // 第50版: 両目と胸の核
     minotaur: { scale: 1.4, idle: 'idle', move: 'run', moveRef: 3.0, glows: [{ bone: 'head', color: '#ff3020', size: 0.35, pos: [0, 2.42, 0.66] }] },
     lich: { scale: 1.05, idle: 'idle', move: 'run', moveRef: 2.6, glows: [{ bone: 'handL', color: '#4ac8ff', size: 0.9, pos: [0.76, 1.6, 0.48] }, { bone: 'handR', color: '#ff7a20', size: 0.9, pos: [-0.76, 1.6, 0.48] }, { bone: 'head', color: '#6ad0ff', size: 0.25, pos: [0, 2.29, 0.17] }] },
-    dragon: { scale: 2.0, idle: 'idle', move: 'run', moveRef: 2.4, glows: [{ bone: 'head', color: '#ff6a10', size: 0.6, pos: [0, 2.64, 1.2] }] },
-    iceking: { scale: 1.15, idle: 'idle', move: 'run', moveRef: 2.8, glows: [{ bone: 'head', color: '#8ae0ff', size: 0.35, pos: [0, 2.29, 0.2] }, { bone: 'handR', color: '#8ae0ff', size: 0.8, pos: [-0.53, 0.44, 0.42] }] },
+    dragon: { scale: 2.0, idle: 'idle', move: 'run', moveRef: 2.4, glows: [{ bone: 'head', color: '#ff6a10', size: 0.6, pos: [0, 2.66, 1.1] }, { bone: 'head', color: '#ff8a20', size: 0.22, pos: [0.175, 2.89, 1.0] }, { bone: 'head', color: '#ff8a20', size: 0.22, pos: [-0.175, 2.89, 1.0] }] }, // 第50版: 口と両目
+    iceking: { scale: 1.15, idle: 'idle', move: 'run', moveRef: 2.8, glows: [{ bone: 'head', color: '#8ae0ff', size: 0.3, pos: [0, 2.36, 0.21] }, { bone: 'head', color: '#8ae0ff', size: 0.9, pos: [0, 2.7, 0.1] }, { bone: 'handR', color: '#8ae0ff', size: 0.9, pos: [-0.56, 0.42, 0.39] }] }, // 第50版: 目・王冠・大剣
   };
   const GLB_PEAK = { attack: 0.65, cast: 0.75 }; // 攻撃のため（o.k 0→1）が終わる時点の、動きの中の時刻（振り下ろす・突き出す）
   function glbBuild(kind, std, g, P) {
