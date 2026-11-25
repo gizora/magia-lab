@@ -99,9 +99,12 @@
   };
 
   // ページを読み終わってから、形のデータを読み込む（index.html を開くだけでも動くよう、script を足す形にする）
+  // 第49版: 隠し部屋の 4 体（model-data.js）と守護者 5 体（model-data-boss.js）
   function loadData() {
-    if (MG.MODEL_DATA || document.getElementById('model-data')) return;
-    const s = document.createElement('script'); s.id = 'model-data'; s.src = 'js/model-data.js'; document.body.appendChild(s);
+    ['model-data', 'model-data-boss'].forEach((id) => {
+      if (document.getElementById(id)) return;
+      const s = document.createElement('script'); s.id = id; s.src = 'js/' + id + '.js'; document.body.appendChild(s);
+    });
   }
   if (document.readyState === 'complete') setTimeout(loadData, 200);
   else window.addEventListener('load', () => setTimeout(loadData, 200));

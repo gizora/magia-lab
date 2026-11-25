@@ -118,6 +118,12 @@
     frostbeast: { scale: 1.0, idle: 'idle', move: 'run', moveRef: 5.0, glows: [{ bone: 'head', color: '#6ad0ff', size: 0.5, pos: [0.15, 2.26, 1.3] }, { bone: 'head', color: '#6ad0ff', size: 0.5, pos: [-0.15, 2.26, 1.3] }] },
     arachne: { scale: 1.0, idle: 'idle', move: 'run', moveRef: 4.0, glows: [{ bone: 'head', color: '#ff2a2a', size: 0.35, pos: [0, 2.15, 0.5] }] },
     starseer: { scale: 1.1, idle: 'idle', move: 'run', moveRef: 3.0, orbit: 0.9, glows: [{ bone: 'chest', color: '#a050ff', size: 0.8, pos: [0, 2.16, 0.18] }] },
+    // 第49版: 守護者 5 体
+    boss: { scale: 2.2, idle: 'idle', move: 'run', moveRef: 2.6, glows: [{ bone: 'head', color: '#5ae0ff', size: 0.55, pos: [0, 2.3, 0.6] }] },
+    minotaur: { scale: 1.4, idle: 'idle', move: 'run', moveRef: 3.0, glows: [{ bone: 'head', color: '#ff3020', size: 0.35, pos: [0, 2.42, 0.66] }] },
+    lich: { scale: 1.05, idle: 'idle', move: 'run', moveRef: 2.6, glows: [{ bone: 'handL', color: '#4ac8ff', size: 0.9, pos: [0.76, 1.6, 0.48] }, { bone: 'handR', color: '#ff7a20', size: 0.9, pos: [-0.76, 1.6, 0.48] }, { bone: 'head', color: '#6ad0ff', size: 0.25, pos: [0, 2.29, 0.17] }] },
+    dragon: { scale: 2.0, idle: 'idle', move: 'run', moveRef: 2.4, glows: [{ bone: 'head', color: '#ff6a10', size: 0.6, pos: [0, 2.64, 1.2] }] },
+    iceking: { scale: 1.15, idle: 'idle', move: 'run', moveRef: 2.8, glows: [{ bone: 'head', color: '#8ae0ff', size: 0.35, pos: [0, 2.29, 0.2] }, { bone: 'handR', color: '#8ae0ff', size: 0.8, pos: [-0.53, 0.44, 0.42] }] },
   };
   const GLB_PEAK = { attack: 0.65, cast: 0.75 }; // 攻撃のため（o.k 0→1）が終わる時点の、動きの中の時刻（振り下ろす・突き出す）
   function glbBuild(kind, std, g, P) {
@@ -174,7 +180,7 @@
     // 第46版: 壁の向こう（ほかの部屋）にいるときは描かない。0.2 秒ごとに、カメラから形のまん中・左右・前後・上へ線を引き、全部が壁でさえぎられていたら隠す
     const cam = MG.Game && MG.Game.camera, root = P.keep[0];
     P.losT = (P.losT || 0) - dt;
-    if (cam && MG.World && MG.World.solidOnSegment && P.losT <= 0) {
+    if (t.isEnemy && cam && MG.World && MG.World.solidOnSegment && P.losT <= 0) { // 第49版: 実際の敵だけ（見た目を並べる確認用の道具は、1 回しか呼ばないので調べない）
       P.losT = 0.2; let vis = false;
       for (const q of P.los) { P.losMesh.localToWorld(_v.copy(q)); if (MG.World.solidOnSegment(cam.position, _v) == null) { vis = true; break; } }
       root.visible = vis; // 見えるようになったら、次に描かれたとき（onBeforeRender）から動き出す
@@ -378,7 +384,8 @@
   });
   // 第47版: 隠し部屋の 4 体は、Blender のモデル（js/model-data.js）があればそれを使い、なければ上の手作りの形にする
   for (const kind of Object.keys(GLB_CFG)) {
-    const proc = MON.extra[kind];
+    // 手作りの形: monsters2.js などで足したもの。石の守護者（boss）は monsters.js の表（MON.BUILD）と、その中の動き（P.builtin）
+    const proc = MON.extra[kind] || { build: (std, g, P) => { P.builtin = true; return MON.BUILD[kind](std, g, P, MON.util); }, anim: () => {} };
     MON.register(kind, function (std, g, P) {
       if (MG.ModelGLB && MG.ModelGLB.has(kind) && THREE.AnimationMixer) return glbBuild(kind, std, g, P);
       return proc.build(std, g, P);

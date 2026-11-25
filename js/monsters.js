@@ -467,13 +467,13 @@
     const g = new THREE.Group(), parts = {};
     // 第30版: 色の数値を画面で見える色として扱う（そのままだと白っぽく薄く出るので、計算用の色に直す）
     const std = (o) => { const m = new THREE.MeshStandardMaterial(o); m.color.convertSRGBToLinear(); m.emissive.convertSRGBToLinear(); m.userData.baseEmissive = m.emissive.clone(); m.userData.baseInt = o.emissiveIntensity == null ? 1 : o.emissiveIntensity; mats.push(m); return m; };
-    (BUILD[kind] || (MON.extra[kind] && MON.extra[kind].build) || slime)(std, g, parts, MON.util);
+    ((MON.extra[kind] && MON.extra[kind].build) || BUILD[kind] || slime)(std, g, parts, MON.util); // 第49版: 足した見た目を先に（石の守護者の Blender のモデル）
     bake(g, parts);
     return { g, parts };
   };
   // 動き: o = { sw（歩きの揺れ -1〜1）, k（攻撃のため 0〜1）, speed, time, dt, phase }
   MON.animate = function (t, o) {
-    if (MON.extra[t.kind]) return MON.extra[t.kind].anim(t, o); // 第36版: js/monsters2.js で足した敵
+    if (MON.extra[t.kind] && !t.parts.builtin) return MON.extra[t.kind].anim(t, o); // 第36版: js/monsters2.js で足した敵（第49版: builtin は下の手作りの動き）
     const P = t.parts, sw = o.sw, k = o.k, tm = o.time + o.phase;
     const strike = k > 0 ? Math.sin(k * Math.PI) : 0;
     if (t.kind === 'slime') {
@@ -538,5 +538,6 @@
   // 第36版: ほかのファイル（js/monsters2.js）から敵を足す仕組み。部品を作る道具も渡す
   MON.util = { add, pivot, bone, glow, jitter, tube, bake };
   MON.extra = {};
+  MON.BUILD = BUILD; // 第49版: Blender のモデルがないときの、手作りの形
   MON.register = function (kind, build, anim) { MON.extra[kind] = { build, anim }; if (!MON.KINDS.includes(kind)) MON.KINDS.push(kind); };
 })();
